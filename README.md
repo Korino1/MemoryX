@@ -84,6 +84,22 @@ cargo +nightly run --release --bin memoryx -- stats --base default
 cargo +nightly run --release --bin memoryx -- --help
 ```
 
+Практические команды:
+
+```bash
+# Инициализировать project-scoped базу
+cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
+
+# Импортировать atoms из JSON
+cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
+
+# Экспортировать atoms в CSV
+cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
+
+# Поднять production MCP по stdio
+cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
+```
+
 ### MCP через core runtime
 
 `memoryx serve --stdio` запускает store-backed MCP transport. Для этого нужен feature `mcp`.
@@ -92,10 +108,19 @@ cargo +nightly run --release --bin memoryx -- --help
 
 - `query`
 - `search_lex`
+- `search_graph`
 - `search_semantic`
+- `ingest`
+- `batch_ingest`
+- `update_atom`
+- `delete_atom`
 - `create_context`
+- `list_contexts`
+- `branch_context`
 - `list_conflicts`
+- `graph_neighbors`
 - `graph_walk`
+- `extract_subgraph`
 
 Пример:
 
@@ -105,7 +130,7 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 ### Полный MCP example
 
-`examples/mcp_server_full.rs` - полный stdio MCP example с 15 инструментами:
+`examples/mcp_server_full.rs` - полный stdio MCP example с тем же 15-tool surface, что и production `memoryx serve --stdio`:
 
 - `query`
 - `search_lex`
@@ -166,7 +191,9 @@ CLI и MCP открывают одну и ту же durable store layout, поэ
 - Версия crate сейчас `0.1.0`, то есть это ещё pre-1.0 проект.
 - Кодовая база рабочая и store-backed, но публичный API и wire formats проектно-специфичны.
 - `mcp` - опциональный feature. Без него `serve` не поднимет MCP surface.
-- Полный MCP example и core `serve --stdio` - это разные поверхности, их не нужно путать.
+- `memoryx serve --stdio` уже даёт полный production MCP surface для работы с базой.
+- `examples/mcp_server_full.rs` остаётся example-обвязкой вокруг того же набора возможностей.
+- Административные операции вроде `init`, `import`, `export`, `stats`, `compact` остаются CLI-командами, а не отдельными MCP tools.
 
 ## Для Дальнейшего Чтения
 
@@ -277,18 +304,43 @@ Example:
 cargo +nightly run --release --bin memoryx -- --help
 ```
 
+Practical commands:
+
+```bash
+# Initialize a project-scoped base
+cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
+
+# Import atoms from JSON
+cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
+
+# Export atoms to CSV
+cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
+
+# Start the production MCP server over stdio
+cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
+```
+
 ### MCP core surface
 
 `memoryx serve --stdio` is the core store-backed MCP transport. Build it with the `mcp` feature.
 
-It exposes 6 tools:
+It exposes the full 15-tool production surface:
 
 - `query`
 - `search_lex`
+- `search_graph`
 - `search_semantic`
+- `ingest`
+- `batch_ingest`
+- `update_atom`
+- `delete_atom`
 - `create_context`
+- `list_contexts`
+- `branch_context`
 - `list_conflicts`
+- `graph_neighbors`
 - `graph_walk`
+- `extract_subgraph`
 
 Example:
 
@@ -298,7 +350,7 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 ### Full MCP example
 
-`examples/mcp_server_full.rs` is the complete stdio MCP example with 15 tools:
+`examples/mcp_server_full.rs` is the complete stdio MCP example exposing the same 15-tool surface as production `memoryx serve --stdio`:
 
 - `query`
 - `search_lex`
@@ -404,7 +456,9 @@ examples/
 - The crate version is `0.1.0`, so treat this as pre-1.0 software.
 - The codebase is functional and store-backed, but the API and wire formats are project-specific.
 - `mcp` is an optional feature. Without it, `serve` will fail with a feature error.
-- The full MCP example and the core `serve --stdio` surface are different. Do not assume they expose the same tool set.
+- `memoryx serve --stdio` now exposes the full production MCP surface for working with the knowledge base.
+- `examples/mcp_server_full.rs` remains a complete example server around the same capability set.
+- Administrative operations such as `init`, `import`, `export`, `stats`, and `compact` remain CLI commands rather than standalone MCP tools.
 
 ## Native Rust API
 

@@ -39,7 +39,9 @@ use serde::{Deserialize, Serialize};
 use memoryx::prelude::*;
 use memoryx::cas::AtomBodyHeader;
 use memoryx::cas::claims::ClaimRecord;
-use memoryx::store::api::{BatchAtom, BranchReason, DeleteReason, EvidenceRef, MemoryX, StoreConfig};
+use memoryx::store::api::{BatchAtom, EvidenceRef, MemoryX, StoreConfig};
+#[cfg(feature = "mcp")]
+use memoryx::store::api::{BranchReason, DeleteReason};
 #[cfg(feature = "mcp")]
 use memoryx::store::api::QueryFilters;
 use memoryx::vm::ClaimData;
