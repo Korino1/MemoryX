@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
+use super::solver::{EntityRef, GoalSpec, OutputSchema, TimeMode, TimeRange};
+use crate::cas::hex_decode;
 use crate::store::{DomainMask, Intent};
 
 /// Public, serializable query request accepted by higher-level APIs.
@@ -126,6 +128,43 @@ impl QueryContract {
 
         Ok(())
     }
+
+    /// Lower the public contract into the internal fixed-point solver goal.
+    ///
+    /// Text labels stay in the contract layer until a resolver maps them to
+    /// concrete symbols/nodes. Only explicit `term:`, `sym:`, `node:`, and
+    /// `atom:<64 hex>` IDs are lowered here.
+    pub fn to_goal_spec(&self) -> Result<GoalSpec, QueryContractError> {
+        self.validate()?;
+
+        let mut goal = GoalSpec::new(self.intent.into())
+            .with_time(self.temporal_scope.to_time_range())
+            .with_domain(self.domain_mask())
+            .with_output_schema(self.output_contract.format.into());
+
+        if let Some(policy_id) = self.context_scope.policy_id {
+            goal = goal.with_ctx_policy(policy_id);
+        }
+
+        let entities = self
+            .targets
+            .iter()
+            .filter_map(EntityPattern::explicit_entity_ref)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !entities.is_empty() {
+            goal = goal.with_entities(entities);
+        }
+
+        Ok(goal)
+    }
+
+    pub fn domain_mask(&self) -> DomainMask {
+        self.targets
+            .iter()
+            .filter_map(|target| target.domain_mask)
+            .fold(0, |acc, mask| acc | mask)
+    }
 }
 
 /// Intent vocabulary used at API boundaries.
@@ -174,6 +213,14 @@ impl EntityPattern {
             aliases: Vec::new(),
             domain_mask: None,
         }
+    }
+
+    fn explicit_entity_ref(&self) -> Option<Result<EntityRef, QueryContractError>> {
+        self.id.as_deref().map(parse_entity_ref).or_else(|| {
+            self.label
+                .as_deref()
+                .and_then(|label| label.contains(':').then(|| parse_entity_ref(label)))
+        })
     }
 }
 
@@ -350,10 +397,29 @@ pub struct TemporalScope {
     pub require_current: bool,
 }
 
+impl TemporalScope {
+    fn to_time_range(&self) -> TimeRange {
+        match &self.time_range {
+            Some(range) => range.to_time_range(),
+            None => TimeRange::unbounded(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimeRangeSpec {
     pub from_unix_ns: Option<u64>,
     pub to_unix_ns: Option<u64>,
+}
+
+impl TimeRangeSpec {
+    fn to_time_range(&self) -> TimeRange {
+        TimeRange::new(
+            self.from_unix_ns.unwrap_or(0),
+            self.to_unix_ns.unwrap_or(u64::MAX),
+            TimeMode::Overlap,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,6 +581,17 @@ pub enum OutputFormat {
     MinimalGraph,
 }
 
+impl From<OutputFormat> for OutputSchema {
+    fn from(value: OutputFormat) -> Self {
+        match value {
+            OutputFormat::StructuredJson => OutputSchema::Graph,
+            OutputFormat::TextSummary => OutputSchema::Explanation,
+            OutputFormat::EvidenceTable => OutputSchema::Comparison,
+            OutputFormat::MinimalGraph => OutputSchema::Graph,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryBudgets {
     pub max_iterations: u32,
@@ -545,6 +622,7 @@ pub enum QueryContractError {
     UnknownConstraintReference(ConstraintId),
     InvalidShouldWeight { id: ConstraintId, weight: f32 },
     InvalidBudget(&'static str),
+    InvalidEntityReference(String),
 }
 
 impl fmt::Display for QueryContractError {
@@ -563,11 +641,41 @@ impl fmt::Display for QueryContractError {
                 id.0, weight
             ),
             QueryContractError::InvalidBudget(field) => write!(f, "invalid query budget: {field}"),
+            QueryContractError::InvalidEntityReference(value) => {
+                write!(f, "invalid entity reference: {value}")
+            }
         }
     }
 }
 
 impl std::error::Error for QueryContractError {}
+
+fn parse_entity_ref(value: &str) -> Result<EntityRef, QueryContractError> {
+    let (prefix, raw) = value
+        .split_once(':')
+        .ok_or_else(|| QueryContractError::InvalidEntityReference(value.to_owned()))?;
+
+    match prefix {
+        "term" => raw
+            .parse::<u32>()
+            .map(EntityRef::Term)
+            .map_err(|_| QueryContractError::InvalidEntityReference(value.to_owned())),
+        "sym" => raw
+            .parse::<u32>()
+            .map(EntityRef::Sym)
+            .map_err(|_| QueryContractError::InvalidEntityReference(value.to_owned())),
+        "node" => raw
+            .parse::<u64>()
+            .map(EntityRef::Node)
+            .map_err(|_| QueryContractError::InvalidEntityReference(value.to_owned())),
+        "atom" => {
+            let atom = hex_decode(raw)
+                .map_err(|_| QueryContractError::InvalidEntityReference(value.to_owned()))?;
+            Ok(EntityRef::Atom(atom))
+        }
+        _ => Err(QueryContractError::InvalidEntityReference(value.to_owned())),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -637,6 +745,41 @@ mod tests {
         assert!(matches!(
             contract.validate(),
             Err(QueryContractError::InvalidShouldWeight { id, .. }) if id.0 == "too_heavy"
+        ));
+    }
+
+    #[test]
+    fn lowers_explicit_ids_to_goal_spec() {
+        let mut target = EntityPattern::label("term:42");
+        target.domain_mask = Some(0b1010);
+
+        let contract = QueryContract::new(ContractIntent::Lookup).with_target(target);
+        let goal = contract.to_goal_spec().unwrap();
+
+        assert_eq!(goal.intent, Intent::LOOKUP);
+        assert_eq!(goal.domain_mask, 0b1010);
+        assert_eq!(goal.entities, vec![EntityRef::Term(42)]);
+        assert_eq!(goal.output_schema, OutputSchema::Graph);
+    }
+
+    #[test]
+    fn symbolic_labels_do_not_fabricate_entity_ids() {
+        let contract = QueryContract::new(ContractIntent::Explain)
+            .with_target(EntityPattern::label("MemoryX"));
+        let goal = contract.to_goal_spec().unwrap();
+
+        assert_eq!(goal.intent, Intent::EXPLAIN);
+        assert!(goal.entities.is_empty());
+    }
+
+    #[test]
+    fn invalid_explicit_entity_id_is_rejected() {
+        let contract =
+            QueryContract::new(ContractIntent::Lookup).with_target(EntityPattern::label("node:x"));
+
+        assert!(matches!(
+            contract.to_goal_spec(),
+            Err(QueryContractError::InvalidEntityReference(value)) if value == "node:x"
         ));
     }
 }

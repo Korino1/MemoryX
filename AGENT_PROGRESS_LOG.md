@@ -96,6 +96,25 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 
+## 2026-07-02: QueryContract to GoalSpec bridge
+
+Done:
+
+- Added `QueryContract::to_goal_spec()`.
+- Lowered stable contract fields into existing solver inputs:
+  intent, temporal scope, domain mask, output schema, context policy, and explicit entity IDs.
+- Supported explicit entity references:
+  `term:<u32>`, `sym:<u32>`, `node:<u64>`, `atom:<64 hex>`.
+- Preserved epistemic safety:
+  plain symbolic labels are not fabricated into internal IDs before a resolver/index stage exists.
+- Added tests for explicit ID lowering, symbolic labels, and invalid explicit IDs.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+
 ## Open State
 
 Known dirty working tree at hook creation time:
