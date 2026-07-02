@@ -1370,6 +1370,27 @@ fn print_warning(message: &str) {
     println!("{} {}", "⚠".yellow(), message);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticSink {
+    Stdout,
+    Stderr,
+}
+
+fn serve_diagnostic_sink(stdio: bool) -> DiagnosticSink {
+    if stdio {
+        DiagnosticSink::Stderr
+    } else {
+        DiagnosticSink::Stdout
+    }
+}
+
+fn print_info_to(sink: DiagnosticSink, message: &str) {
+    match sink {
+        DiagnosticSink::Stdout => print_info(message),
+        DiagnosticSink::Stderr => eprintln!("{} {}", "ℹ".blue(), message),
+    }
+}
+
 fn project_base_root() -> CliResult<PathBuf> {
     Ok(std::env::current_dir()?.join(".memoryx").join("bases"))
 }
@@ -2235,19 +2256,27 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     use tokio::runtime::Runtime;
 
-    print_info(&format!("Starting server for '{}'", base.display()));
-    print_info(&format!(
-        "Base directory: {}",
-        base.canonicalize()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| base.display().to_string())
-    ));
+    let diagnostic_sink = serve_diagnostic_sink(stdio);
+
+    print_info_to(
+        diagnostic_sink,
+        &format!("Starting server for '{}'", base.display()),
+    );
+    print_info_to(
+        diagnostic_sink,
+        &format!(
+            "Base directory: {}",
+            base.canonicalize()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| base.display().to_string())
+        ),
+    );
 
     if stdio {
-        print_info("Transport: stdio (MCP)");
+        print_info_to(diagnostic_sink, "Transport: stdio (MCP)");
     } else {
-        print_info("Transport: HTTP");
-        print_info(&format!("Listener: {}:{}", host, port));
+        print_info_to(diagnostic_sink, "Transport: HTTP");
+        print_info_to(diagnostic_sink, &format!("Listener: {}:{}", host, port));
     }
 
     let mut store = MemoryX::new(StoreConfig::new(base.to_path_buf()))
@@ -2263,7 +2292,10 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             let reader = tokio::io::BufReader::new(stdin);
             let mut lines = reader.lines();
 
-            print_info("Stdio MCP server running. Send JSON-RPC requests.");
+            print_info_to(
+                diagnostic_sink,
+                "Stdio MCP server running. Send JSON-RPC requests.",
+            );
 
             loop {
                 match lines.next_line().await {
@@ -2298,14 +2330,17 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
 
             // Parse socket address
             let addr_str = format!("{}:{}", host, port);
-            let sock_addr: std::net::SocketAddr = addr_str
-                .parse()
-                .map_err(|e| CliError::Store(format!("Invalid listen address '{}': {}", addr_str, e)))?;
+            let sock_addr: std::net::SocketAddr = addr_str.parse().map_err(|e| {
+                CliError::Store(format!("Invalid listen address '{}': {}", addr_str, e))
+            })?;
 
             let mut server = FederationServer::new(gateway, sock_addr);
 
-            print_info("HTTP Federation server starting...");
-            print_info("Routes: /fetch, /negotiate, /sync, /discover, /health");
+            print_info_to(diagnostic_sink, "HTTP Federation server starting...");
+            print_info_to(
+                diagnostic_sink,
+                "Routes: /fetch, /negotiate, /sync, /discover, /health",
+            );
 
             server
                 .start()
@@ -3887,6 +3922,12 @@ mod tests {
         assert_eq!(parse_atom_type("FACT").unwrap(), AtomType::FACT);
         assert_eq!(parse_atom_type("rule").unwrap(), AtomType::RULE);
         assert!(parse_atom_type("unknown").is_err());
+    }
+
+    #[test]
+    fn test_stdio_serve_uses_stderr_for_diagnostics() {
+        assert_eq!(serve_diagnostic_sink(true), DiagnosticSink::Stderr);
+        assert_eq!(serve_diagnostic_sink(false), DiagnosticSink::Stdout);
     }
 
     #[test]
