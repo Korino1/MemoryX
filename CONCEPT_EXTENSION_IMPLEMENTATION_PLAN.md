@@ -644,6 +644,17 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### G1. Автоматический ingestion pipeline
 
+Статус: реализовано, safe dry-run extractor.
+
+Факт реализации:
+
+- Добавлен `src/ingest/`.
+- Pipeline выдаёт `segments`, `candidate_claims`, `entity_mentions`, `suggested_relations`.
+- Каждое предложение содержит extractor identity, model/tool, confidence и source span.
+- Auto-extracted claims имеют статус `extracted_unverified`; verified facts не создаются автоматически.
+- CLI поддерживает `memoryx ingest --extract-claims --dry-run <file>`.
+- Без `--dry-run` extractor возвращает ошибку и требует подтверждать proposals через authoring APIs/MCP.
+
 Файлы:
 
 - добавить `src/ingest/`

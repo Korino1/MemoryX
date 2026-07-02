@@ -9,6 +9,7 @@ pub mod crdt;
 pub mod federation;
 pub mod graph;
 pub mod index;
+pub mod ingest;
 pub mod prelude;
 pub mod store;
 pub mod utils;

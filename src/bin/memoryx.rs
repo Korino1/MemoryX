@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 // MemoryX imports
 use memoryx::cas::AtomBodyHeader;
 use memoryx::cas::claims::ClaimRecord;
+use memoryx::ingest::{ExtractorIdentity, IngestExtractor};
 use memoryx::prelude::*;
 #[cfg(feature = "mcp")]
 use memoryx::store::api::QueryFilters;
@@ -128,6 +129,18 @@ enum Commands {
         /// Batch size for bulk ingestion
         #[arg(short, long, default_value = "100")]
         batch_size: usize,
+
+        /// Extract candidate claims from plain text instead of ingesting atom JSON/YAML
+        #[arg(long)]
+        extract_claims: bool,
+
+        /// Preview extracted candidate claims without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Extractor identity for provenance in dry-run extraction output
+        #[arg(long, default_value = "memoryx-deterministic-text-extractor")]
+        extractor: String,
     },
 
     /// Execute query and return results
@@ -1642,20 +1655,47 @@ fn cmd_init(base: &Path, force: bool) -> CliResult<()> {
     Ok(())
 }
 
-/// Ingest atoms from files
-fn cmd_ingest(
-    base: &Path,
-    files: &[PathBuf],
-    atom_type_str: &str,
-    _batch_size: usize,
+struct IngestCliOptions<'a> {
+    base: &'a Path,
+    files: &'a [PathBuf],
+    atom_type: &'a str,
+    batch_size: usize,
+    extract_claims: bool,
+    dry_run: bool,
+    extractor_name: &'a str,
+    output_format: OutputFormat,
     verbose: bool,
-) -> CliResult<()> {
+}
+
+/// Ingest atoms from files
+fn cmd_ingest(options: IngestCliOptions<'_>) -> CliResult<()> {
+    let IngestCliOptions {
+        base,
+        files,
+        atom_type,
+        batch_size: _batch_size,
+        extract_claims,
+        dry_run,
+        extractor_name,
+        output_format,
+        verbose,
+    } = options;
+
+    if extract_claims {
+        if !dry_run {
+            return Err(CliError::Validation(
+                "--extract-claims currently requires --dry-run; confirm proposals through authoring APIs/MCP before writing facts".to_owned(),
+            ));
+        }
+        return cmd_ingest_extract_claims(files, extractor_name, output_format, verbose);
+    }
+
     // Open store
     let config = StoreConfig::new(base.to_path_buf());
     let mut store = MemoryX::new(config)
         .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
 
-    let atom_type = parse_atom_type(atom_type_str)?;
+    let atom_type = parse_atom_type(atom_type)?;
 
     let total_files = files.len();
     let pb = create_progress_bar(total_files as u64, "Ingesting files");
@@ -1732,6 +1772,61 @@ fn cmd_ingest(
         "Ingested {} atoms ({} errors)",
         total_atoms, total_errors
     ));
+
+    Ok(())
+}
+
+fn cmd_ingest_extract_claims(
+    files: &[PathBuf],
+    extractor_name: &str,
+    output_format: OutputFormat,
+    verbose: bool,
+) -> CliResult<()> {
+    let extractor = ExtractorIdentity {
+        extractor: extractor_name.to_owned(),
+        ..Default::default()
+    };
+
+    let mut plans = Vec::with_capacity(files.len());
+    for file in files {
+        if verbose {
+            print_info(&format!("Extracting candidate claims: {}", file.display()));
+        }
+        let content = std::fs::read_to_string(file)?;
+        plans.push(IngestExtractor::dry_run_extract(
+            file.display().to_string(),
+            &content,
+            extractor.clone(),
+        ));
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&plans)?);
+        }
+        OutputFormat::Yaml => {
+            println!("{}", serde_yaml::to_string(&plans)?);
+        }
+        OutputFormat::Table => {
+            for plan in &plans {
+                println!("Source: {}", plan.source);
+                println!("Candidate claims: {}", plan.candidate_claims.len());
+                println!("Entity mentions: {}", plan.entity_mentions.len());
+                println!("Suggested relations: {}", plan.suggested_relations.len());
+                println!("Confirmation required: {}", plan.confirmation_required);
+                for claim in &plan.candidate_claims {
+                    println!(
+                        "  - [{}] {} --{}--> {} (confidence {:.2})",
+                        serde_json::to_string(&claim.status)?,
+                        claim.subject,
+                        claim.predicate,
+                        claim.object,
+                        claim.confidence
+                    );
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -4856,6 +4951,9 @@ fn main() {
             files,
             atom_type,
             batch_size,
+            extract_claims,
+            dry_run,
+            extractor,
         } => resolve_base_path(
             base.as_ref(),
             cli.base_scope,
@@ -4863,13 +4961,17 @@ fn main() {
             &config,
         )
         .and_then(|resolved| {
-            cmd_ingest(
-                &resolved,
-                files.as_slice(),
-                atom_type.as_str(),
-                *batch_size,
-                cli.verbose,
-            )
+            cmd_ingest(IngestCliOptions {
+                base: &resolved,
+                files: files.as_slice(),
+                atom_type: atom_type.as_str(),
+                batch_size: *batch_size,
+                extract_claims: *extract_claims,
+                dry_run: *dry_run,
+                extractor_name: extractor.as_str(),
+                output_format: cli.format,
+                verbose: cli.verbose,
+            })
         }),
         Commands::Query {
             base,

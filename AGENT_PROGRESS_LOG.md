@@ -464,3 +464,28 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Safe automatic ingestion dry-run
+
+Done:
+
+- Added `src/ingest/` with deterministic dry-run extraction pipeline.
+- Pipeline outputs:
+  document segments, candidate claims, entity mentions, evidence/source spans,
+  suggested relations, extractor identity, confidence, and confirmation hints.
+- Extracted claims are explicitly `extracted_unverified`; no verified facts are
+  written by automatic extraction.
+- Added CLI flags:
+  `memoryx ingest --extract-claims --dry-run <file>`,
+  `--extractor`, and table/json/yaml output through the global format flag.
+- Non-dry-run extraction is blocked with a validation error; confirmation must
+  go through authoring APIs/MCP.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
+- `cargo run --quiet -- ingest --help`
+- `cargo run --quiet -- --format json ingest --extract-claims --dry-run <temp-text-file>`
