@@ -28,6 +28,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // Re-export main types
+pub use crate::query::planner::{
+    FederatedPayloadContract, ShardDescriptor, ShardId, ShardRetrievalAction,
+};
 pub use crate::store::api::EvidenceRef;
 
 // Import proof-grade provenance types (SKF-1.1 Section 10.1)

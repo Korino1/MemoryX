@@ -597,3 +597,23 @@ Verification:
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
 - `cargo run --quiet -- rebuild-index --help`
+
+## 2026-07-02: Federated shard planning
+
+Done:
+
+- Added neutral shard planning types:
+  `ShardId`, `ShardDescriptor`, `ShardRetrievalAction`.
+- Added `FederatedPayloadContract` to enforce claims/provenance/metadata payloads
+  and reject ready-made text-answer shards.
+- Added `RetrievalPlanner::plan_federated` for deterministic gap-to-shard
+  planning by utility, trust, domain, gap kind support, and payload contract.
+- Re-exported shard planning types from the federation module.
+- Added regression coverage for best-shard ordering and ready-text rejection.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

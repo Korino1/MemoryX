@@ -835,6 +835,20 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### I3. Sharding/federated planning
 
+Статус: реализовано.
+
+Результат:
+
+- Добавлены `ShardDescriptor`, `ShardId`, `ShardRetrievalAction`.
+- Добавлен `FederatedPayloadContract`, который допускает только MemoryX-style
+  source payload: claims + provenance + metadata, без ready-made text answer.
+- `RetrievalPlanner::plan_federated` выбирает shard для gap по trust, domain,
+  supported gap kind и payload contract.
+- Federation module re-export-ит shard/payload planning types как единый
+  публичный контракт.
+- Добавлены тесты на выбор лучшего совместимого shard и отклонение RAG-like
+  ready-text shard.
+
 Файлы:
 
 - `src/federation/mod.rs`
