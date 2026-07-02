@@ -2985,6 +2985,42 @@ impl Conflict {
     }
 }
 
+/// Public conflict summary exposed in AnswerPack/MCP without requiring callers
+/// to understand internal TMS structures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictSummary {
+    pub conflict_id: u32,
+    pub atom_a: AtomId,
+    pub atom_b: AtomId,
+    pub conflict_type: String,
+    pub severity: String,
+    pub pattern_hash: u64,
+    pub policy_ids: Vec<CtxPolicyId>,
+}
+
+impl From<&Conflict> for ConflictSummary {
+    fn from(conflict: &Conflict) -> Self {
+        Self {
+            conflict_id: conflict.c_id,
+            atom_a: conflict.atom_a,
+            atom_b: conflict.atom_b,
+            conflict_type: format!("{:?}", conflict.conflict_type),
+            severity: format!("{:?}", conflict.severity),
+            pattern_hash: conflict.pattern_hash,
+            policy_ids: conflict.conditions.policy_ids.clone(),
+        }
+    }
+}
+
+/// Conflict group with explicit branch alternatives and policy applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictSet {
+    pub pattern_hash: u64,
+    pub policy: String,
+    pub branches: Vec<CtxId>,
+    pub conflicts: Vec<ConflictSummary>,
+}
+
 /// Type of conflict
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictType {
@@ -3142,6 +3178,10 @@ pub struct AnswerPack {
     pub limitations: Vec<Limitation>,
     /// Alternative answer packs
     pub alternates: Vec<AnswerPack>,
+    /// Conflicts visible in the selected answer context.
+    pub conflicts: Vec<ConflictSummary>,
+    /// Conflict groups with branch alternatives and applied policy.
+    pub conflict_sets: Vec<ConflictSet>,
 }
 
 impl AnswerPack {
@@ -3161,6 +3201,8 @@ impl AnswerPack {
             confidence: 0.0,
             limitations: Vec::new(),
             alternates: Vec::new(),
+            conflicts: Vec::new(),
+            conflict_sets: Vec::new(),
         }
     }
 

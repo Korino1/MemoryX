@@ -23,9 +23,9 @@ use std::sync::Arc;
 // Re-export API types for convenience
 pub use crate::store::api::{
     ActiveClaim, AgEdge, AgEdgeType, AgNode, AnswerGraph, AnswerStatus, AtomRef, ClaimStatus,
-    ClaimView, Conflict, ConflictConditions, ConflictSeverity, ConflictType, CostWeights,
-    EntityRef, EvidenceRef, Gap, GapId, GapPriority, Limitation, LimitationCode,
-    LimitationSeverity, ObjTag, RejectedCandidateSummary, ResolutionOption,
+    ClaimView, Conflict, ConflictConditions, ConflictSet, ConflictSeverity, ConflictSummary,
+    ConflictType, CostWeights, EntityRef, EvidenceRef, Gap, GapId, GapPriority, Limitation,
+    LimitationCode, LimitationSeverity, ObjTag, RejectedCandidateSummary, ResolutionOption,
 };
 
 // ============================================================================
@@ -367,6 +367,8 @@ pub struct GoalSpec {
     pub constraints: Vec<crate::query::contract::Constraint>,
     /// Context selectors and branch policy lowered from the public QueryContract.
     pub context_scope: crate::query::contract::ContextScope,
+    /// Conflict resolution/exposure policy lowered from the public QueryContract.
+    pub conflict_policy: crate::query::contract::ConflictPolicy,
     /// Comparison axes
     pub axes: Vec<SymId>,
     /// Allowed atom types bitmask
@@ -393,6 +395,7 @@ impl GoalSpec {
             semantic_vectors: Vec::new(),
             constraints: Vec::new(),
             context_scope: crate::query::contract::ContextScope::default(),
+            conflict_policy: crate::query::contract::ConflictPolicy::default(),
             axes: Vec::new(),
             want: 0xFFFF,
             output_schema: OutputSchema::Flat,
@@ -452,6 +455,16 @@ impl GoalSpec {
         context_scope: crate::query::contract::ContextScope,
     ) -> Self {
         self.context_scope = context_scope;
+        self
+    }
+
+    /// Set conflict handling policy for branch selection and AnswerPack exposure.
+    #[inline]
+    pub fn with_conflict_policy(
+        mut self,
+        conflict_policy: crate::query::contract::ConflictPolicy,
+    ) -> Self {
+        self.conflict_policy = conflict_policy;
         self
     }
 
@@ -1752,7 +1765,97 @@ impl FixedPointSolver {
             );
         }
 
+        self.apply_conflict_policy_to_pack(&mut pack, &state);
+
         Ok(pack)
+    }
+
+    fn apply_conflict_policy_to_pack(&self, pack: &mut AnswerPack, state: &SolverState) {
+        use crate::query::contract::ConflictPolicyMode;
+
+        let conflict_contexts = {
+            let mut ctx_ids = state.answer_graph.branch_lineage.clone();
+            if !ctx_ids.contains(&state.ctx_id) {
+                ctx_ids.push(state.ctx_id);
+            }
+            ctx_ids
+        };
+        let conflicts = {
+            let ctx_manager = self.ctx_manager.lock();
+            conflict_contexts
+                .iter()
+                .flat_map(|ctx_id| ctx_manager.list_conflicts(*ctx_id))
+                .collect::<Vec<_>>()
+        };
+        if conflicts.is_empty() {
+            return;
+        }
+
+        if state.goal.conflict_policy.include_conflicts {
+            pack.conflicts = conflicts.iter().map(ConflictSummary::from).collect();
+        }
+
+        let branches = conflict_contexts;
+
+        pack.conflict_sets = conflicts
+            .iter()
+            .fold(
+                HashMap::<u64, Vec<ConflictSummary>>::new(),
+                |mut acc, conflict| {
+                    acc.entry(conflict.pattern_hash)
+                        .or_default()
+                        .push(ConflictSummary::from(conflict));
+                    acc
+                },
+            )
+            .into_iter()
+            .map(|(pattern_hash, conflicts)| ConflictSet {
+                pattern_hash,
+                policy: format!("{:?}", state.goal.conflict_policy.mode),
+                branches: branches.clone(),
+                conflicts,
+            })
+            .collect();
+
+        let hard_conflict = conflicts
+            .iter()
+            .any(|conflict| conflict.severity == ConflictSeverity::Hard);
+
+        pack.status = AnswerStatus::Conflicted;
+
+        if hard_conflict {
+            pack.limitations.push(Limitation::critical(
+                LimitationCode::ConflictsPresent,
+                "hard conflict is present in the selected answer context".to_owned(),
+            ));
+        } else {
+            pack.limitations.push(Limitation::warning(
+                LimitationCode::ConflictsPresent,
+                "conflict branch is present and exposed in the answer pack".to_owned(),
+            ));
+        }
+
+        if state.goal.conflict_policy.fail_on_hard_conflict
+            || matches!(state.goal.conflict_policy.mode, ConflictPolicyMode::Fail)
+        {
+            pack.status = AnswerStatus::PolicyBlocked;
+            pack.limitations.push(Limitation::critical(
+                LimitationCode::ConflictsPresent,
+                "conflict policy failed the answer instead of hiding the conflict".to_owned(),
+            ));
+        }
+
+        if matches!(
+            state.goal.conflict_policy.mode,
+            ConflictPolicyMode::IncludeAlternatives
+        ) && pack.alternates.is_empty()
+        {
+            pack.limitations.push(Limitation::warning(
+                LimitationCode::ConflictsPresent,
+                "conflict policy requested alternatives, but no alternate proof graph was available"
+                    .to_owned(),
+            ));
+        }
     }
 
     /// Collect all candidates that were considered during solving.
@@ -3383,6 +3486,41 @@ mod tests {
             rejected[0].constraint_results[0].status,
             crate::query::contract::ConstraintStatus::BlockedByPolicy
         );
+    }
+
+    #[test]
+    fn test_conflict_policy_exposes_conflict_sets_and_fail_status() {
+        let solver = FixedPointSolver::new();
+        let parent_ctx = solver.ctx_manager.lock().create_context(0);
+        let conflict = Conflict::new(
+            [1u8; 32],
+            [2u8; 32],
+            ConflictType::Contradiction,
+            ConflictSeverity::Hard,
+            0xABCD,
+        );
+        let branch_ctx = solver
+            .ctx_manager
+            .lock()
+            .branch_ctx(parent_ctx, &conflict)
+            .expect("branch should be created");
+
+        let conflict_policy = crate::query::contract::ConflictPolicy {
+            mode: crate::query::contract::ConflictPolicyMode::Fail,
+            ..Default::default()
+        };
+        let goal = GoalSpec::new(Intent::LOOKUP).with_conflict_policy(conflict_policy);
+        let mut state = SolverState::new(parent_ctx, goal, Vec::new());
+        state.answer_graph.branch_lineage.push(branch_ctx);
+
+        let mut pack = AnswerPack::new(parent_ctx);
+        solver.apply_conflict_policy_to_pack(&mut pack, &state);
+
+        assert_eq!(pack.status, AnswerStatus::PolicyBlocked);
+        assert_eq!(pack.conflicts.len(), 1);
+        assert_eq!(pack.conflict_sets.len(), 1);
+        assert_eq!(pack.conflict_sets[0].pattern_hash, 0xABCD);
+        assert!(pack.conflict_sets[0].branches.contains(&branch_ctx));
     }
 
     #[test]

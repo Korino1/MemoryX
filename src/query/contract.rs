@@ -187,7 +187,8 @@ impl QueryContract {
 
         Ok(goal
             .with_constraints(constraints)
-            .with_context_scope(self.context_scope.clone()))
+            .with_context_scope(self.context_scope.clone())
+            .with_conflict_policy(self.conflict_policy.clone()))
     }
 
     pub fn domain_mask(&self) -> DomainMask {
@@ -695,6 +696,7 @@ impl Default for AmbiguityPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictPolicy {
+    pub mode: ConflictPolicyMode,
     pub include_conflicts: bool,
     pub fail_on_hard_conflict: bool,
     pub prefer_latest_branch: bool,
@@ -703,11 +705,22 @@ pub struct ConflictPolicy {
 impl Default for ConflictPolicy {
     fn default() -> Self {
         Self {
+            mode: ConflictPolicyMode::Branch,
             include_conflicts: true,
             fail_on_hard_conflict: false,
             prefer_latest_branch: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictPolicyMode {
+    Fail,
+    Branch,
+    IncludeAlternatives,
+    PreferTrusted,
+    PreferRecent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

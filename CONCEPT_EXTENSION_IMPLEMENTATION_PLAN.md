@@ -372,6 +372,17 @@ pub struct QueryContract {
 
 ### C3. Conflict policy
 
+Статус: реализовано, public conflict output.
+
+Факт реализации:
+
+- `ConflictPolicy` получил explicit mode: `fail`, `branch`, `include_alternatives`, `prefer_trusted`, `prefer_recent`.
+- `AnswerPack` содержит `conflicts` и `conflict_sets`.
+- `ConflictSummary` и `ConflictSet` дают MCP/API-видимый conflict output без раскрытия нестабильных внутренних TMS структур.
+- Solver собирает конфликты из selected context и branch lineage.
+- `fail`/`fail_on_hard_conflict` выставляет `AnswerStatus::PolicyBlocked`; обычный конфликт выставляет `AnswerStatus::Conflicted`.
+- Regression test проверяет, что conflict branch попадает в `AnswerPack.conflict_sets` и не скрывается.
+
 Файлы:
 
 - `src/query/constraints.rs`

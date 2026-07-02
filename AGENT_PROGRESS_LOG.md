@@ -397,3 +397,24 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Conflict policy and public conflict sets
+
+Done:
+
+- Extended `ConflictPolicy` with explicit modes:
+  `Fail`, `Branch`, `IncludeAlternatives`, `PreferTrusted`, `PreferRecent`.
+- Added public `ConflictSummary` and `ConflictSet` output structures.
+- Extended `AnswerPack` with `conflicts` and `conflict_sets`.
+- Solver now collects conflicts from selected context plus branch lineage and
+  exposes them instead of hiding conflict branches.
+- `Fail`/`fail_on_hard_conflict` policy sets `AnswerStatus::PolicyBlocked`;
+  visible non-failing conflicts set `AnswerStatus::Conflicted`.
+- Added regression coverage for branch conflict exposure and fail policy status.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
