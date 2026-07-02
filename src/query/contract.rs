@@ -85,6 +85,13 @@ impl QueryContract {
             .filter(|constraint| matches!(constraint.strength, ConstraintStrength::Should { .. }))
     }
 
+    pub fn constraint_result_skeletons(&self) -> Vec<ConstraintResult> {
+        self.constraints
+            .iter()
+            .map(|constraint| ConstraintResult::unknown(constraint.id.clone()))
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<(), QueryContractError> {
         if self.targets.is_empty() && self.relations.is_empty() && self.constraints.is_empty() {
             return Err(QueryContractError::EmptyContract);
@@ -240,6 +247,72 @@ pub struct Constraint {
     pub operator: ConstraintOperator,
     pub value: ConstraintValue,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConstraintResult {
+    pub constraint_id: ConstraintId,
+    pub status: ConstraintStatus,
+    pub reason: Option<String>,
+    pub candidate_ref: Option<String>,
+    pub evidence_refs: Vec<String>,
+}
+
+impl ConstraintResult {
+    pub fn satisfied(constraint_id: ConstraintId) -> Self {
+        Self::new(constraint_id, ConstraintStatus::Satisfied)
+    }
+
+    pub fn violated(constraint_id: ConstraintId, reason: impl Into<String>) -> Self {
+        Self::new(constraint_id, ConstraintStatus::Violated).with_reason(reason)
+    }
+
+    pub fn unknown(constraint_id: ConstraintId) -> Self {
+        Self::new(constraint_id, ConstraintStatus::Unknown)
+    }
+
+    pub fn not_applicable(constraint_id: ConstraintId, reason: impl Into<String>) -> Self {
+        Self::new(constraint_id, ConstraintStatus::NotApplicable).with_reason(reason)
+    }
+
+    pub fn blocked_by_policy(constraint_id: ConstraintId, reason: impl Into<String>) -> Self {
+        Self::new(constraint_id, ConstraintStatus::BlockedByPolicy).with_reason(reason)
+    }
+
+    pub fn with_candidate_ref(mut self, candidate_ref: impl Into<String>) -> Self {
+        self.candidate_ref = Some(candidate_ref.into());
+        self
+    }
+
+    pub fn with_evidence_ref(mut self, evidence_ref: impl Into<String>) -> Self {
+        self.evidence_refs.push(evidence_ref.into());
+        self
+    }
+
+    fn new(constraint_id: ConstraintId, status: ConstraintStatus) -> Self {
+        Self {
+            constraint_id,
+            status,
+            reason: None,
+            candidate_ref: None,
+            evidence_refs: Vec::new(),
+        }
+    }
+
+    fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintStatus {
+    Satisfied,
+    Violated,
+    Unknown,
+    NotApplicable,
+    BlockedByPolicy,
 }
 
 impl Constraint {
@@ -781,5 +854,49 @@ mod tests {
             contract.to_goal_spec(),
             Err(QueryContractError::InvalidEntityReference(value)) if value == "node:x"
         ));
+    }
+
+    #[test]
+    fn constraint_results_roundtrip_through_json() {
+        let result = ConstraintResult::violated(
+            ConstraintId::from("requires_postgresql"),
+            "candidate requires PostgreSQL",
+        )
+        .with_candidate_ref("atom:01")
+        .with_evidence_ref("evidence:02");
+
+        let encoded = serde_json::to_string(&result).unwrap();
+        let decoded: ConstraintResult = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, result);
+        assert_eq!(decoded.status, ConstraintStatus::Violated);
+    }
+
+    #[test]
+    fn contract_creates_unknown_result_skeletons() {
+        let contract = QueryContract::new(ContractIntent::Lookup)
+            .with_constraint(Constraint::must(
+                "supports_mcp",
+                ConstraintTarget::Custom("supports".to_owned()),
+                ConstraintOperator::Contains,
+                ConstraintValue::Text("mcp".to_owned()),
+            ))
+            .with_constraint(Constraint::must_not(
+                "requires_postgresql",
+                ConstraintTarget::Custom("requires".to_owned()),
+                ConstraintOperator::Eq,
+                ConstraintValue::Text("postgresql".to_owned()),
+            ));
+
+        let skeletons = contract.constraint_result_skeletons();
+
+        assert_eq!(skeletons.len(), 2);
+        assert!(
+            skeletons
+                .iter()
+                .all(|result| result.status == ConstraintStatus::Unknown)
+        );
+        assert_eq!(skeletons[0].constraint_id.0, "supports_mcp");
+        assert_eq!(skeletons[1].constraint_id.0, "requires_postgresql");
     }
 }

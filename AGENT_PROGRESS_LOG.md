@@ -134,6 +134,22 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 
+## 2026-07-02: Constraint result status model
+
+Done:
+
+- Added `ConstraintResult`.
+- Added `ConstraintStatus`:
+  `satisfied`, `violated`, `unknown`, `not_applicable`, `blocked_by_policy`.
+- Added `QueryContract::constraint_result_skeletons()` to preserve traceability from requested constraints to future evaluator/AnswerPack output.
+- Added JSON roundtrip and skeleton tests.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+
 ## Open State
 
 Known dirty working tree at hook creation time:
