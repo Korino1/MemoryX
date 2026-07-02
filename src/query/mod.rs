@@ -16,6 +16,10 @@
 
 #![allow(dead_code)]
 
+// Stable public query contract for MCP and external API calls
+pub mod contract;
+pub use contract::*;
+
 // Re-export all types from solver module
 pub use solver::*;
 

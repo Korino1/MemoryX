@@ -80,6 +80,22 @@ Important caveat:
 - The current index can return duplicate results under `MemoryX_as knoladge base/`.
   Treat that folder as a copied project unless the task explicitly targets it.
 
+## 2026-07-02: QueryContract API layer
+
+Done:
+
+- Added `src/query/contract.rs`.
+- Added a serializable `QueryContract` for MCP/external API callers.
+- Covered intent, entity targets, relations, hard/soft/forbidden constraints, quantifiers, temporal/context scope, source/evidence/freshness/ambiguity/conflict/completeness policies, output contract, and execution budgets.
+- Added validation for empty contracts, duplicate constraints, unknown quantifier references, invalid soft weights, and zero critical budgets.
+- Exported the contract through `src/query/mod.rs`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+
 ## Open State
 
 Known dirty working tree at hook creation time:
