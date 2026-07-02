@@ -705,6 +705,18 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### G3. MCP tools для knowledge authoring
 
+Статус: реализовано.
+
+Факт реализации:
+
+- MCP authoring surface содержит:
+  `create_entity`, `add_claim`, `assert_relation`, `merge_entities`,
+  `split_entity`, `supersede_claim`, `correct_claim`.
+- Также доступны `list_entities`, `alias_entity`, `correct_relation`.
+- Все новые tools имеют description и examples в `tools/list`.
+- `add_claim`, `assert_relation`, `merge_entities`, `split_entity` используют реальные store-backed APIs.
+- `supersede_claim` и `correct_claim` являются claim-level aliases на безопасный `update_atom` superseding path; старый atom не удаляется.
+
 Файлы:
 
 - `src/bin/memoryx.rs`

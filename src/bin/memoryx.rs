@@ -3184,6 +3184,72 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                         }
                                     },
                                     {
+                                        "name": "supersede_claim",
+                                        "description": "Supersede a claim-bearing atom by writing a new atom version; this is the claim-level MCP alias for update_atom and preserves provenance.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_id": { "type": "string" },
+                                                "atom_type": { "type": "string" },
+                                                "claims": { "type": "array" },
+                                                "symbols": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                }
+                                            },
+                                            "required": ["atom_id", "atom_type", "claims"],
+                                            "examples": [
+                                                {
+                                                    "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                                    "atom_type": "FACT",
+                                                    "claims": [
+                                                        {
+                                                            "subj": 1,
+                                                            "pred": 2,
+                                                            "obj_tag": 0,
+                                                            "obj_val": 8,
+                                                            "qualifiers_mask": 0
+                                                        }
+                                                    ],
+                                                    "symbols": ["corrected", "claim"]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "correct_claim",
+                                        "description": "Correct a claim-bearing atom by writing a superseding atom version; no old content is erased.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_id": { "type": "string" },
+                                                "atom_type": { "type": "string" },
+                                                "claims": { "type": "array" },
+                                                "symbols": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                }
+                                            },
+                                            "required": ["atom_id", "atom_type", "claims"],
+                                            "examples": [
+                                                {
+                                                    "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                                    "atom_type": "FACT",
+                                                    "claims": [
+                                                        {
+                                                            "subj": 1,
+                                                            "pred": 2,
+                                                            "obj_tag": 0,
+                                                            "obj_val": 9,
+                                                            "qualifiers_mask": 0
+                                                        }
+                                                    ],
+                                                    "symbols": ["corrected", "claim"]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
                                         "name": "delete_atom",
                                         "description": "Create a tombstone for the given atom id and preserve deletion provenance instead of physically erasing the atom.",
                                         "inputSchema": {
@@ -3316,6 +3382,68 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                                 {
                                                     "entity_id": 1,
                                                     "alias": "memoryx-db"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "merge_entities",
+                                        "description": "Merge a source entity into a target entity, preserving aliases, claims, and merge lineage.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "target_entity": { "type": "integer" },
+                                                "source_entity": { "type": "integer" }
+                                            },
+                                            "required": ["target_entity", "source_entity"],
+                                            "examples": [
+                                                {
+                                                    "target_entity": 1,
+                                                    "source_entity": 2
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "split_entity",
+                                        "description": "Create a new entity split from an existing source entity while preserving split lineage.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "source_entity": { "type": "integer" },
+                                                "canonical_name": { "type": "string" },
+                                                "entity_type": { "type": "string" }
+                                            },
+                                            "required": ["source_entity", "canonical_name", "entity_type"],
+                                            "examples": [
+                                                {
+                                                    "source_entity": 1,
+                                                    "canonical_name": "MemoryX CLI",
+                                                    "entity_type": "component"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "add_claim",
+                                        "description": "Add a semi-structured atom-backed claim to an existing high-level entity; this writes an atom and asserts it in the selected context.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "entity_id": { "type": "integer" },
+                                                "predicate": { "type": "integer" },
+                                                "object": { "type": "integer" },
+                                                "object_tag": { "type": "string" },
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "required": ["entity_id", "predicate", "object"],
+                                            "examples": [
+                                                {
+                                                    "entity_id": 1,
+                                                    "predicate": 7,
+                                                    "object": 4090,
+                                                    "object_tag": "U64",
+                                                    "ctx_id": 0
                                                 }
                                             ]
                                         }
@@ -3516,6 +3644,8 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                         "ingest" => mcp_ingest_response(store, id, arguments),
                         "batch_ingest" => mcp_batch_ingest_response(store, id, arguments),
                         "update_atom" => mcp_update_atom_response(store, id, arguments),
+                        "supersede_claim" => mcp_update_atom_response(store, id, arguments),
+                        "correct_claim" => mcp_update_atom_response(store, id, arguments),
                         "delete_atom" => mcp_delete_atom_response(store, id, arguments),
                         "history" => mcp_history_response(store, id, arguments),
                         "register_source" => mcp_register_source_response(store, id, arguments),
@@ -3526,6 +3656,9 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                         "create_entity" => mcp_create_entity_response(store, id, arguments),
                         "list_entities" => mcp_list_entities_response(store, id, arguments),
                         "alias_entity" => mcp_alias_entity_response(store, id, arguments),
+                        "merge_entities" => mcp_merge_entities_response(store, id, arguments),
+                        "split_entity" => mcp_split_entity_response(store, id, arguments),
+                        "add_claim" => mcp_add_claim_response(store, id, arguments),
                         "assert_relation" => mcp_assert_relation_response(store, id, arguments),
                         "correct_relation" => mcp_correct_relation_response(store, id, arguments),
                         "create_context" => mcp_create_context_response(store, id, arguments),
@@ -4482,6 +4615,122 @@ fn mcp_alias_entity_response(
             ),
         ),
         Err(e) => mcp_error(id, -32603, format!("Alias entity failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_merge_entities_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(target_entity) = args.get("target_entity").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'target_entity'");
+    };
+    let Some(source_entity) = args.get("source_entity").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'source_entity'");
+    };
+
+    match store.merge_entities(target_entity, source_entity) {
+        Ok(entity) => mcp_text_result(
+            id,
+            format!(
+                "Merged entities\nTarget Entity ID: {}\nMerged from: {:?}\nAliases: {}",
+                entity.entity_id,
+                entity.merged_from,
+                entity.aliases.join(", ")
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Merge entities failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_split_entity_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(source_entity) = args.get("source_entity").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'source_entity'");
+    };
+    let Some(canonical_name) = args.get("canonical_name").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'canonical_name'");
+    };
+    let Some(entity_type) = args.get("entity_type").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'entity_type'");
+    };
+
+    match store.split_entity(source_entity, canonical_name, entity_type) {
+        Ok(entity) => mcp_text_result(
+            id,
+            format!(
+                "Split entity\nNew Entity ID: {}\nName: {}\nSplit from: {:?}",
+                entity.entity_id, entity.canonical_name, entity.split_from
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Split entity failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_add_claim_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(entity_id) = args.get("entity_id").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'entity_id'");
+    };
+    let Some(predicate) = args
+        .get("predicate")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| SymId::try_from(value).ok())
+    else {
+        return mcp_error(id, -32602, "Missing or invalid integer field 'predicate'");
+    };
+    let Some(object) = args.get("object").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'object'");
+    };
+    let object_tag = match args.get("object_tag").and_then(|value| value.as_str()) {
+        Some(raw) => match parse_object_tag(Some(raw)).and_then(|tag| {
+            ObjTag::from_u8(tag)
+                .ok_or_else(|| CliError::Validation(format!("Unsupported object tag: {}", raw)))
+        }) {
+            Ok(tag) => tag,
+            Err(err) => return mcp_error(id, -32602, err.to_string()),
+        },
+        None => ObjTag::U64,
+    };
+    let ctx_id = args
+        .get("ctx_id")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| CtxId::try_from(value).ok())
+        .unwrap_or_else(|| store.active_context());
+
+    match store.add_entity_claim(entity_id, predicate, object_tag, object, ctx_id, Vec::new()) {
+        Ok(result) => mcp_text_result(
+            id,
+            format!(
+                "Added entity claim\nEntity ID: {}\nAtom ID: {}\nContext: {}",
+                entity_id,
+                hex::encode(result.atom_id),
+                result.ctx_id
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Add claim failed: {}", e)),
     }
 }
 
@@ -5533,6 +5782,8 @@ mod tests {
         assert!(names.contains(&"ingest"));
         assert!(names.contains(&"batch_ingest"));
         assert!(names.contains(&"update_atom"));
+        assert!(names.contains(&"supersede_claim"));
+        assert!(names.contains(&"correct_claim"));
         assert!(names.contains(&"delete_atom"));
         assert!(names.contains(&"history"));
         assert!(names.contains(&"register_source"));
@@ -5541,6 +5792,9 @@ mod tests {
         assert!(names.contains(&"create_entity"));
         assert!(names.contains(&"list_entities"));
         assert!(names.contains(&"alias_entity"));
+        assert!(names.contains(&"merge_entities"));
+        assert!(names.contains(&"split_entity"));
+        assert!(names.contains(&"add_claim"));
         assert!(names.contains(&"assert_relation"));
         assert!(names.contains(&"correct_relation"));
         assert!(names.contains(&"create_context"));
@@ -5550,7 +5804,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 24);
+        assert_eq!(names.len(), 29);
     }
 
     #[cfg(feature = "mcp")]
@@ -5718,6 +5972,62 @@ mod tests {
         .to_string();
         let alias_entity_response = process_mcp_request(&mut store, &alias_entity_request).await;
         assert!(alias_entity_response.contains("rust-lang"));
+
+        let add_claim_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": {
+                "name": "add_claim",
+                "arguments": {
+                    "entity_id": 1,
+                    "predicate": 7,
+                    "object": 2026,
+                    "object_tag": "U64",
+                    "ctx_id": 0
+                }
+            }
+        })
+        .to_string();
+        let add_claim_response = process_mcp_request(&mut store, &add_claim_request).await;
+        assert!(add_claim_response.contains("Added entity claim"));
+        assert!(add_claim_response.contains("Atom ID:"));
+
+        let split_entity_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 24,
+            "method": "tools/call",
+            "params": {
+                "name": "split_entity",
+                "arguments": {
+                    "source_entity": 1,
+                    "canonical_name": "Rust ownership",
+                    "entity_type": "topic"
+                }
+            }
+        })
+        .to_string();
+        let split_entity_response = process_mcp_request(&mut store, &split_entity_request).await;
+        assert!(split_entity_response.contains("Split entity"));
+        assert!(split_entity_response.contains("New Entity ID: 3"));
+
+        let merge_entities_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 25,
+            "method": "tools/call",
+            "params": {
+                "name": "merge_entities",
+                "arguments": {
+                    "target_entity": 1,
+                    "source_entity": 3
+                }
+            }
+        })
+        .to_string();
+        let merge_entities_response =
+            process_mcp_request(&mut store, &merge_entities_request).await;
+        assert!(merge_entities_response.contains("Merged entities"));
+        assert!(merge_entities_response.contains("Merged from"));
 
         let assert_relation_request = serde_json::json!({
             "jsonrpc": "2.0",

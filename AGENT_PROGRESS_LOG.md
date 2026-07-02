@@ -515,3 +515,25 @@ Verification:
 - `cargo run --quiet -- --base-scope project --base-name g2-cli-test --format json create-entity --name GPU --entity-type hardware`
 - `cargo run --quiet -- --base-scope project --base-name g2-cli-test --format json add-entity-claim --entity 1 --predicate 7 --object 4090`
 - `cargo run --quiet -- --base-scope project --base-name g2-cli-test --format json create-relation --subject 1 --predicate 8 --object 2`
+
+## 2026-07-02: MCP authoring surface completion
+
+Done:
+
+- Expanded MCP authoring surface to 29 tools.
+- Added MCP tools:
+  `add_claim`, `merge_entities`, `split_entity`, `supersede_claim`,
+  `correct_claim`.
+- `add_claim`, `merge_entities`, and `split_entity` are store-backed.
+- `supersede_claim` and `correct_claim` are semantic aliases for the existing
+  safe `update_atom` superseding path, preserving old content.
+- Updated `tools/list` descriptions/examples and MCP surface tests.
+- Extended MCP integration test to call `add_claim`, `split_entity`,
+  and `merge_entities` through real MCP requests.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
