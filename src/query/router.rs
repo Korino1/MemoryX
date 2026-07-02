@@ -818,6 +818,9 @@ impl ConstraintSubject for Candidate {
             ConstraintTarget::Source => Some(ConstraintValue::Text(
                 self.source_backend.as_str().to_owned(),
             )),
+            ConstraintTarget::Time => {
+                (self.age_ns > 0).then_some(ConstraintValue::Number(self.age_ns as f64))
+            }
             ConstraintTarget::Evidence => Some(ConstraintValue::List(
                 self.evidence_refs
                     .iter()
@@ -851,7 +854,6 @@ impl ConstraintSubject for Candidate {
             ConstraintTarget::EntityType
             | ConstraintTarget::Predicate
             | ConstraintTarget::Relation
-            | ConstraintTarget::Time
             | ConstraintTarget::Context
             | ConstraintTarget::Text => None,
         }

@@ -22,10 +22,10 @@ use std::sync::Arc;
 
 // Re-export API types for convenience
 pub use crate::store::api::{
-    ActiveClaim, AgEdge, AgEdgeType, AgNode, AnswerGraph, AtomRef, ClaimStatus, ClaimView,
-    Conflict, ConflictConditions, ConflictSeverity, ConflictType, CostWeights, EntityRef,
-    EvidenceRef, Gap, GapId, GapPriority, Limitation, LimitationCode, LimitationSeverity, ObjTag,
-    RejectedCandidateSummary, ResolutionOption,
+    ActiveClaim, AgEdge, AgEdgeType, AgNode, AnswerGraph, AnswerStatus, AtomRef, ClaimStatus,
+    ClaimView, Conflict, ConflictConditions, ConflictSeverity, ConflictType, CostWeights,
+    EntityRef, EvidenceRef, Gap, GapId, GapPriority, Limitation, LimitationCode,
+    LimitationSeverity, ObjTag, RejectedCandidateSummary, ResolutionOption,
 };
 
 // ============================================================================
@@ -365,6 +365,8 @@ pub struct GoalSpec {
     pub semantic_vectors: Vec<Vec<f32>>,
     /// Hard/soft/negative constraints lowered from the public QueryContract.
     pub constraints: Vec<crate::query::contract::Constraint>,
+    /// Context selectors and branch policy lowered from the public QueryContract.
+    pub context_scope: crate::query::contract::ContextScope,
     /// Comparison axes
     pub axes: Vec<SymId>,
     /// Allowed atom types bitmask
@@ -390,6 +392,7 @@ impl GoalSpec {
             entities: Vec::new(),
             semantic_vectors: Vec::new(),
             constraints: Vec::new(),
+            context_scope: crate::query::contract::ContextScope::default(),
             axes: Vec::new(),
             want: 0xFFFF,
             output_schema: OutputSchema::Flat,
@@ -439,6 +442,16 @@ impl GoalSpec {
         constraints: Vec<crate::query::contract::Constraint>,
     ) -> Self {
         self.constraints = constraints;
+        self
+    }
+
+    /// Set context selector policy for pre-ranking candidate validation.
+    #[inline]
+    pub fn with_context_scope(
+        mut self,
+        context_scope: crate::query::contract::ContextScope,
+    ) -> Self {
+        self.context_scope = context_scope;
         self
     }
 
@@ -1722,6 +1735,9 @@ impl FixedPointSolver {
                     pack.rejected_candidates.len()
                 ),
             ));
+            if pack.graph.nodes.is_empty() {
+                pack.status = AnswerStatus::PolicyBlocked;
+            }
         }
 
         // Generate alternative answer paths for comparison
@@ -1874,6 +1890,11 @@ impl FixedPointSolver {
             }
         }
 
+        let (context_admissible, context_rejections) =
+            self.filter_by_context_scope(admissible, state);
+        state.rejected_candidates.extend(context_rejections);
+        let admissible = context_admissible;
+
         // Step 3: Update context (branch on conflicts)
         // Simplified: just track conflicts in candidates
         let ctx_updated = self.update_context(&admissible, state)?;
@@ -1974,13 +1995,18 @@ impl FixedPointSolver {
         use crate::query::contract::{ConstraintStatus, ConstraintStrength};
 
         if state.goal.constraints.is_empty() {
-            return (candidates, Vec::new());
+            return self.filter_by_context_scope(candidates, state);
         }
 
         let mut admitted = Vec::with_capacity(candidates.len());
         let mut rejected = Vec::new();
 
         for candidate in candidates {
+            if let Some(rejection) = self.context_scope_rejection(&candidate, state) {
+                rejected.push(rejection);
+                continue;
+            }
+
             let results: Vec<_> = state
                 .goal
                 .constraints
@@ -2015,6 +2041,64 @@ impl FixedPointSolver {
         }
 
         (admitted, rejected)
+    }
+
+    fn filter_by_context_scope(
+        &self,
+        candidates: Vec<Candidate>,
+        state: &SolverState,
+    ) -> (Vec<Candidate>, Vec<RejectedCandidateSummary>) {
+        let mut admitted = Vec::with_capacity(candidates.len());
+        let mut rejected = Vec::new();
+
+        for candidate in candidates {
+            if let Some(rejection) = self.context_scope_rejection(&candidate, state) {
+                rejected.push(rejection);
+            } else {
+                admitted.push(candidate);
+            }
+        }
+
+        (admitted, rejected)
+    }
+
+    fn context_scope_rejection(
+        &self,
+        candidate: &Candidate,
+        state: &SolverState,
+    ) -> Option<RejectedCandidateSummary> {
+        use crate::query::contract::{ConstraintId, ConstraintResult, ConstraintStatus};
+
+        if state.goal.context_scope.include_conflicting_branches {
+            return None;
+        }
+
+        let branch_ctx_id = candidate.branch_ctx_id?;
+        let allowed = state.goal.context_scope.branch_ids.iter().any(|branch| {
+            branch
+                .strip_prefix("ctx:")
+                .and_then(|value| value.parse::<CtxId>().ok())
+                .is_some_and(|ctx_id| ctx_id == branch_ctx_id)
+        });
+
+        if allowed {
+            return None;
+        }
+
+        Some(RejectedCandidateSummary {
+            candidate_ref: Some(crate::cas::hex_encode(&candidate.atom_id)),
+            atom_id: Some(candidate.atom_id),
+            node_num: Some(candidate.node_num),
+            source_backend: candidate.source_backend.as_str().to_owned(),
+            reason: format!("context branch ctx:{branch_ctx_id} is blocked by context scope"),
+            constraint_results: vec![ConstraintResult {
+                constraint_id: ConstraintId("__context_branch_policy".to_owned()),
+                status: ConstraintStatus::BlockedByPolicy,
+                reason: Some("conflicting branches are disabled for this query".to_owned()),
+                candidate_ref: Some(crate::cas::hex_encode(&candidate.atom_id)),
+                evidence_refs: Vec::new(),
+            }],
+        })
     }
 
     /// Filter candidates by invariant checks using real INVARIANTS section from atoms.
@@ -3257,6 +3341,48 @@ mod tests {
         let weights = CostWeights::default();
         let ratio = candidate.benefit_cost_ratio(&gaps, &weights);
         assert!(ratio > 0.0);
+    }
+
+    #[test]
+    fn test_context_scope_blocks_unlisted_branch_candidate() {
+        let context_scope = crate::query::contract::ContextScope {
+            include_conflicting_branches: false,
+            ..Default::default()
+        };
+
+        let goal = GoalSpec::new(Intent::LOOKUP).with_context_scope(context_scope);
+        let state = SolverState::new(0, goal, Vec::new());
+        let solver = FixedPointSolver::new();
+        let candidate = Candidate {
+            atom_id: [9u8; 32],
+            node_num: 9,
+            seg_id: 0,
+            offset: 0,
+            atom_type: AtomType::FACT,
+            trust: 5000,
+            estimated_io_bytes: 128,
+            source_priority: SourcePriority::CasExact,
+            source_backend: crate::query::router::BackendKind::Cas,
+            covers_gaps: vec![0],
+            hard_conflicts: 0,
+            soft_conflicts: 0,
+            age_ns: 0,
+            domain_mask: 0xFFFF,
+            evidence_refs: Vec::new(),
+            derived_claims: Vec::new(),
+            requires_invariant_check: true,
+            ann_candidate_requires_filtering: false,
+            branch_ctx_id: Some(42),
+        };
+
+        let (admitted, rejected) = solver.filter_by_context_scope(vec![candidate], &state);
+
+        assert!(admitted.is_empty());
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(
+            rejected[0].constraint_results[0].status,
+            crate::query::contract::ConstraintStatus::BlockedByPolicy
+        );
     }
 
     #[test]

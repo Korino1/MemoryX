@@ -3072,6 +3072,40 @@ pub struct RejectedCandidateSummary {
     pub constraint_results: Vec<crate::query::contract::ConstraintResult>,
 }
 
+/// Deterministic status of a query answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerStatus {
+    Complete,
+    Partial,
+    Conflicted,
+    Ambiguous,
+    InsufficientEvidence,
+    NoMatch,
+    BudgetExhausted,
+    PolicyBlocked,
+}
+
+fn derive_answer_status(graph: &AnswerGraph, coverage: &CoverageReport) -> AnswerStatus {
+    if graph.nodes.iter().any(|node| node.hard_conflicts > 0) {
+        return AnswerStatus::Conflicted;
+    }
+
+    if graph.nodes.is_empty() {
+        return if coverage.total_gaps > 0 {
+            AnswerStatus::InsufficientEvidence
+        } else {
+            AnswerStatus::NoMatch
+        };
+    }
+
+    if coverage.total_gaps > 0 && coverage.covered_gaps < coverage.total_gaps {
+        return AnswerStatus::Partial;
+    }
+
+    AnswerStatus::Complete
+}
+
 /// Answer pack containing query results
 ///
 /// # Fields
@@ -3100,6 +3134,8 @@ pub struct AnswerPack {
     pub coverage_report: CoverageReport,
     /// Candidates rejected before ranking because hard/MUST_NOT constraints failed.
     pub rejected_candidates: Vec<RejectedCandidateSummary>,
+    /// Deterministic answer status for clients that must not infer it from confidence.
+    pub status: AnswerStatus,
     /// Overall confidence (0.0 - 1.0)
     pub confidence: f32,
     /// Known limitations
@@ -3121,6 +3157,7 @@ impl AnswerPack {
             evidence_records: Vec::new(),
             coverage_report: CoverageReport::empty(),
             rejected_candidates: Vec::new(),
+            status: AnswerStatus::NoMatch,
             confidence: 0.0,
             limitations: Vec::new(),
             alternates: Vec::new(),
@@ -3253,6 +3290,7 @@ impl AnswerPack {
             evidence_record_count: 0,
             source_link_count: 0,
         };
+        pack.status = derive_answer_status(&pack.graph, &pack.coverage_report);
 
         // === Generate limitations ===
 
@@ -9407,6 +9445,11 @@ mod tests {
                 .iter()
                 .any(|limitation| limitation.code == LimitationCode::ConstraintRejected),
             "AnswerPack should expose constraint rejection as a limitation"
+        );
+        assert_eq!(
+            answer.status,
+            AnswerStatus::PolicyBlocked,
+            "AnswerPack should distinguish policy-blocked answers from ordinary no-match"
         );
     }
 

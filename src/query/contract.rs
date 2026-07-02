@@ -159,6 +159,8 @@ impl QueryContract {
     /// `atom:<64 hex>` IDs are lowered here.
     pub fn to_goal_spec(&self) -> Result<GoalSpec, QueryContractError> {
         self.validate()?;
+        let mut constraints = self.constraints.clone();
+        constraints.extend(self.temporal_scope.to_constraints());
 
         let mut goal = GoalSpec::new(self.intent.into())
             .with_time(self.temporal_scope.to_time_range())
@@ -183,7 +185,9 @@ impl QueryContract {
             goal = goal.with_semantic_vectors(self.semantic_vectors.clone());
         }
 
-        Ok(goal.with_constraints(self.constraints.clone()))
+        Ok(goal
+            .with_constraints(constraints)
+            .with_context_scope(self.context_scope.clone()))
     }
 
     pub fn domain_mask(&self) -> DomainMask {
@@ -487,15 +491,82 @@ pub enum Quantifier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TemporalScope {
     pub time_range: Option<TimeRangeSpec>,
+    #[serde(default)]
+    pub before_unix_ns: Option<u64>,
+    #[serde(default)]
+    pub after_unix_ns: Option<u64>,
+    #[serde(default)]
+    pub valid_at_unix_ns: Option<u64>,
+    #[serde(default)]
+    pub observed_at_unix_ns: Option<u64>,
+    #[serde(default)]
+    pub latest_count: Option<u32>,
     pub require_current: bool,
 }
 
 impl TemporalScope {
     fn to_time_range(&self) -> TimeRange {
+        if let Some(count) = self.latest_count {
+            return TimeRange::new(count as u64, u64::MAX, TimeMode::Latest);
+        }
+        if let Some(valid_at) = self.valid_at_unix_ns.or(self.observed_at_unix_ns) {
+            return TimeRange::new(valid_at, valid_at.saturating_add(1), TimeMode::Exact);
+        }
+        if let Some(before) = self.before_unix_ns {
+            return TimeRange::new(0, before, TimeMode::Contained);
+        }
+        if let Some(after) = self.after_unix_ns {
+            return TimeRange::new(after, u64::MAX, TimeMode::Contained);
+        }
         match &self.time_range {
             Some(range) => range.to_time_range(),
             None => TimeRange::unbounded(),
         }
+    }
+
+    fn to_constraints(&self) -> Vec<Constraint> {
+        let mut constraints = Vec::new();
+
+        if let Some(before) = self.before_unix_ns {
+            constraints.push(Constraint::must(
+                "__temporal_before",
+                ConstraintTarget::Time,
+                ConstraintOperator::Before,
+                ConstraintValue::Number(before as f64),
+            ));
+        }
+
+        if let Some(after) = self.after_unix_ns {
+            constraints.push(Constraint::must(
+                "__temporal_after",
+                ConstraintTarget::Time,
+                ConstraintOperator::After,
+                ConstraintValue::Number(after as f64),
+            ));
+        }
+
+        if let Some(range) = &self.time_range {
+            constraints.push(Constraint::must(
+                "__temporal_during",
+                ConstraintTarget::Time,
+                ConstraintOperator::During,
+                ConstraintValue::TimeRange(range.clone()),
+            ));
+        }
+
+        if let Some(valid_at) = self.valid_at_unix_ns.or(self.observed_at_unix_ns) {
+            constraints.push(Constraint::must(
+                "__temporal_valid_at",
+                ConstraintTarget::Time,
+                ConstraintOperator::Within,
+                ConstraintValue::TimeRange(TimeRangeSpec {
+                    from_unix_ns: Some(valid_at),
+                    to_unix_ns: Some(valid_at.saturating_add(1)),
+                }),
+            ));
+        }
+
+        constraints
     }
 }
 
@@ -518,6 +589,8 @@ impl TimeRangeSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextScope {
     pub policy_id: Option<u32>,
+    #[serde(default)]
+    pub selectors: Vec<ContextSelector>,
     pub branch_ids: Vec<String>,
     pub include_conflicting_branches: bool,
 }
@@ -526,10 +599,22 @@ impl Default for ContextScope {
     fn default() -> Self {
         Self {
             policy_id: None,
+            selectors: vec![ContextSelector::Active],
             branch_ids: Vec::new(),
             include_conflicting_branches: true,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSelector {
+    Active,
+    Named(String),
+    Branch(String),
+    Project(String),
+    UserGlobal,
+    AssumptionSet(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -843,6 +928,56 @@ mod tests {
             contract.validate(),
             Err(QueryContractError::InvalidShouldWeight { id, .. }) if id.0 == "too_heavy"
         ));
+    }
+
+    #[test]
+    fn temporal_scope_lowers_to_goal_constraints() {
+        let mut contract =
+            QueryContract::new(ContractIntent::Lookup).with_target(EntityPattern::label("term:1"));
+        contract.temporal_scope.before_unix_ns = Some(2_000);
+        contract.temporal_scope.after_unix_ns = Some(1_000);
+        contract.temporal_scope.time_range = Some(TimeRangeSpec {
+            from_unix_ns: Some(1_100),
+            to_unix_ns: Some(1_900),
+        });
+        contract.temporal_scope.valid_at_unix_ns = Some(1_500);
+
+        let goal = contract.to_goal_spec().unwrap();
+
+        assert_eq!(goal.time_q.from_ns, 1_500);
+        assert_eq!(goal.time_q.to_ns, 1_501);
+        assert!(
+            goal.constraints
+                .iter()
+                .any(|constraint| constraint.id.0 == "__temporal_before")
+        );
+        assert!(
+            goal.constraints
+                .iter()
+                .any(|constraint| constraint.id.0 == "__temporal_after")
+        );
+        assert!(
+            goal.constraints
+                .iter()
+                .any(|constraint| constraint.id.0 == "__temporal_during")
+        );
+        assert!(
+            goal.constraints
+                .iter()
+                .any(|constraint| constraint.id.0 == "__temporal_valid_at")
+        );
+    }
+
+    #[test]
+    fn latest_temporal_scope_lowers_to_latest_time_mode() {
+        let mut contract =
+            QueryContract::new(ContractIntent::Lookup).with_target(EntityPattern::label("term:1"));
+        contract.temporal_scope.latest_count = Some(3);
+
+        let goal = contract.to_goal_spec().unwrap();
+
+        assert_eq!(goal.time_q.from_ns, 3);
+        assert_eq!(goal.time_q.mode, TimeMode::Latest);
     }
 
     #[test]

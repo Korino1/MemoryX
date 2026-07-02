@@ -341,6 +341,17 @@ pub struct QueryContract {
 
 ### C2. Temporal/context semantics
 
+Статус: реализовано, deterministic core.
+
+Факт реализации:
+
+- `TemporalScope` поддерживает `before_unix_ns`, `after_unix_ns`, `time_range/during`, `valid_at_unix_ns`, `observed_at_unix_ns`, `latest_count`.
+- Temporal scope lowering добавляет hard constraints в `GoalSpec` и настраивает `TimeRange`.
+- `ConstraintEvaluator` поддерживает `Before`, `After`, `During`, `Within` для известных candidate timestamps.
+- `ContextScope` получил explicit selectors: active, named, branch, project, user/global, assumption set.
+- Context branch policy применяется до ranking, включая post-`NeedBranch` кандидаты.
+- Добавлен `AnswerStatus`, включая `PolicyBlocked`; blocked hard/context candidates не маскируются как обычный no-match.
+
 Файлы:
 
 - `src/store/api.rs`

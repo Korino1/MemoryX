@@ -161,10 +161,11 @@ fn compare_values(
         ConstraintOperator::Matches => contains_value(actual, expected),
         ConstraintOperator::Gte => numeric_pair(actual, expected).is_some_and(|(a, b)| a >= b),
         ConstraintOperator::Lte => numeric_pair(actual, expected).is_some_and(|(a, b)| a <= b),
-        ConstraintOperator::Before
-        | ConstraintOperator::After
-        | ConstraintOperator::During
-        | ConstraintOperator::Within => false,
+        ConstraintOperator::Before => temporal_before(actual, expected),
+        ConstraintOperator::After => temporal_after(actual, expected),
+        ConstraintOperator::During | ConstraintOperator::Within => {
+            temporal_within(actual, expected)
+        }
     }
 }
 
@@ -198,6 +199,25 @@ fn numeric_pair(actual: &ConstraintValue, expected: &ConstraintValue) -> Option<
     match (actual, expected) {
         (ConstraintValue::Number(a), ConstraintValue::Number(b)) => Some((*a, *b)),
         _ => None,
+    }
+}
+
+fn temporal_before(actual: &ConstraintValue, expected: &ConstraintValue) -> bool {
+    numeric_pair(actual, expected).is_some_and(|(timestamp, boundary)| timestamp < boundary)
+}
+
+fn temporal_after(actual: &ConstraintValue, expected: &ConstraintValue) -> bool {
+    numeric_pair(actual, expected).is_some_and(|(timestamp, boundary)| timestamp >= boundary)
+}
+
+fn temporal_within(actual: &ConstraintValue, expected: &ConstraintValue) -> bool {
+    match (actual, expected) {
+        (ConstraintValue::Number(timestamp), ConstraintValue::TimeRange(range)) => {
+            let from = range.from_unix_ns.unwrap_or(0) as f64;
+            let to = range.to_unix_ns.unwrap_or(u64::MAX) as f64;
+            *timestamp >= from && *timestamp < to
+        }
+        _ => false,
     }
 }
 
@@ -292,5 +312,48 @@ mod tests {
         let result = ConstraintEvaluator::evaluate_constraint(&constraint, &facts);
 
         assert_eq!(result.status, ConstraintStatus::Satisfied);
+    }
+
+    #[test]
+    fn temporal_operators_are_deterministic() {
+        let facts = ConstraintFacts::new().with_value(
+            ConstraintTarget::Time,
+            ConstraintValue::Number(1_700_000_000.0),
+        );
+
+        let before = Constraint::must(
+            "before_cutoff",
+            ConstraintTarget::Time,
+            ConstraintOperator::Before,
+            ConstraintValue::Number(1_800_000_000.0),
+        );
+        let after = Constraint::must(
+            "after_cutoff",
+            ConstraintTarget::Time,
+            ConstraintOperator::After,
+            ConstraintValue::Number(1_600_000_000.0),
+        );
+        let during = Constraint::must(
+            "during_window",
+            ConstraintTarget::Time,
+            ConstraintOperator::During,
+            ConstraintValue::TimeRange(crate::query::contract::TimeRangeSpec {
+                from_unix_ns: Some(1_600_000_000),
+                to_unix_ns: Some(1_800_000_000),
+            }),
+        );
+
+        assert_eq!(
+            ConstraintEvaluator::evaluate_constraint(&before, &facts).status,
+            ConstraintStatus::Satisfied
+        );
+        assert_eq!(
+            ConstraintEvaluator::evaluate_constraint(&after, &facts).status,
+            ConstraintStatus::Satisfied
+        );
+        assert_eq!(
+            ConstraintEvaluator::evaluate_constraint(&during, &facts).status,
+            ConstraintStatus::Satisfied
+        );
     }
 }

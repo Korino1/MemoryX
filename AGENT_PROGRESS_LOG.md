@@ -373,3 +373,27 @@ Verification:
 - `cargo test test_answer_contract_must_not_rejects_candidate_before_graph --quiet`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Temporal and context policy gate
+
+Done:
+
+- Extended `TemporalScope` with deterministic fields:
+  `before_unix_ns`, `after_unix_ns`, `valid_at_unix_ns`,
+  `observed_at_unix_ns`, and `latest_count`.
+- Lowered temporal scope into `GoalSpec` as hard constraints plus `TimeRange`.
+- Added temporal operator evaluation for `Before`, `After`, `During`, and `Within`.
+- Added `ContextSelector` and kept branch IDs explicit in `ContextScope`.
+- Applied context branch policy before ranking, including a second gate after
+  `NeedBranch` has assigned `branch_ctx_id`.
+- Added `AnswerStatus`, including `PolicyBlocked`, so clients do not infer
+  answer state from confidence/limitations.
+- Added regression coverage for temporal evaluation, temporal lowering,
+  latest mode, context branch blocking, and policy-blocked answers.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
