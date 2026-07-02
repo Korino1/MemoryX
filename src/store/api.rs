@@ -3198,6 +3198,8 @@ pub struct AnswerPack {
     pub conflict_sets: Vec<ConflictSet>,
     /// Bounded execution trace for contract/planner decisions.
     pub query_trace: QueryTrace,
+    /// Renderer/LLM-proposed text that is not a verified factual claim.
+    pub proposed_text: Vec<crate::query::llm_boundary::Proposal<String>>,
 }
 
 impl AnswerPack {
@@ -3220,6 +3222,7 @@ impl AnswerPack {
             conflicts: Vec::new(),
             conflict_sets: Vec::new(),
             query_trace: QueryTrace::default(),
+            proposed_text: Vec::new(),
         }
     }
 

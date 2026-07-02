@@ -740,6 +740,16 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### H1. Контракт внешней LLM
 
+Статус: реализовано.
+
+Факт реализации:
+
+- Добавлен `docs/LLM_BOUNDARY.md`.
+- Добавлен `src/query/llm_boundary.rs`.
+- Введён `Proposal<T>` с `proposed_by`, `model`, `timestamp_unix_ns`, `confidence`, `validation_status`.
+- Описаны allowed/forbidden LLM operations.
+- `AnswerPack.proposed_text` отделяет renderer/LLM text от validated claims.
+
 Файлы:
 
 - добавить `docs/LLM_BOUNDARY.md`

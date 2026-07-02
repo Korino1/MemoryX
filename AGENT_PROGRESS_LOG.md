@@ -537,3 +537,21 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: LLM boundary contract
+
+Done:
+
+- Added `docs/LLM_BOUNDARY.md`.
+- Added `src/query/llm_boundary.rs`.
+- Added `Proposal<T>` with proposer/model/timestamp/confidence and validation status.
+- Added explicit allowed and forbidden LLM operation enums.
+- Extended `AnswerPack` with `proposed_text`, keeping renderer/LLM wording separate from validated claim surfaces.
+- Added regression coverage that proposals are not validated by default.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

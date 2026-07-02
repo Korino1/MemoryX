@@ -28,6 +28,12 @@ pub use compiler::QueryContractCompiler;
 pub mod constraints;
 pub use constraints::{ConstraintEvaluator, ConstraintFacts, ConstraintSubject};
 
+// External LLM proposal boundary
+pub mod llm_boundary;
+pub use llm_boundary::{
+    LlmAllowedOperation, LlmForbiddenOperation, Proposal, ProposalValidationStatus,
+};
+
 // Common retriever contracts for candidate-producing channels
 pub mod retrieval;
 pub use retrieval::{
