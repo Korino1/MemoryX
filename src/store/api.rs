@@ -65,6 +65,93 @@ fn current_unix_ns() -> u64 {
         .unwrap_or(0)
 }
 
+fn build_authoring_payload(atom_type: AtomType, claims: &[ClaimData]) -> Vec<u8> {
+    let symbols_bytes = SymbolsSection::new().to_bytes();
+    let refs_bytes = Vec::new();
+
+    let mut claims_section = ClaimsSection::new();
+    for claim in claims {
+        claims_section.add_claim(crate::cas::claims::ClaimRecord::new_u64(
+            claim.subj.min(u64::from(u16::MAX)) as u16,
+            claim.pred.min(u64::from(u16::MAX)) as u16,
+            claim.obj_val,
+        ));
+    }
+    let claims_bytes = claims_section.to_bytes();
+    let invariants_bytes = crate::cas::invariants::InvariantsSection::new().to_bytes();
+    let edges_bytes = Vec::new();
+    let evidence_bytes = crate::cas::evidence::EvidenceSection::new().to_bytes();
+
+    let mut meta_section = crate::cas::meta::MetaSection::new();
+    meta_section.add_field(crate::cas::meta::MetaField::new(
+        crate::cas::meta::MetaFieldKind::TRUST_SCORE,
+        crate::cas::meta::MetaValue::F32(0.5),
+    ));
+    meta_section.add_field(crate::cas::meta::MetaField::new(
+        crate::cas::meta::MetaFieldKind::DOMAIN_MASK,
+        crate::cas::meta::MetaValue::U32(0xFFFF),
+    ));
+    let meta_bytes = meta_section.to_bytes();
+
+    let sections_data_start: usize = AtomBodyHeader::SIZE + 7 * SectionDesc::SIZE;
+    let mut current_off = sections_data_start;
+    let symbols_off = current_off;
+    current_off += symbols_bytes.len();
+    let refs_off = current_off;
+    current_off += refs_bytes.len();
+    let claims_off = current_off;
+    current_off += claims_bytes.len();
+    let invariants_off = current_off;
+    current_off += invariants_bytes.len();
+    let edges_off = current_off;
+    current_off += edges_bytes.len();
+    let evidence_off = current_off;
+    current_off += evidence_bytes.len();
+    let meta_off = current_off;
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&0x41544F4Du32.to_le_bytes());
+    payload.extend_from_slice(&0x0001u16.to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload.extend_from_slice(&current_unix_ns().to_le_bytes());
+    payload.extend_from_slice(&0u64.to_le_bytes());
+    payload.extend_from_slice(&u64::MAX.to_le_bytes());
+    payload.extend_from_slice(&atom_type.to_u32().to_le_bytes());
+    payload.extend_from_slice(&7u32.to_le_bytes());
+    payload.extend_from_slice(&(AtomBodyHeader::SIZE as u64).to_le_bytes());
+
+    let mut add_section_desc = |kind: u32, off: usize, data: &[u8]| {
+        let crc = crate::utils::crc32(data);
+        payload.extend_from_slice(&kind.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&(off as u64).to_le_bytes());
+        payload.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        payload.extend_from_slice(&crc.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+    };
+
+    add_section_desc(SectionKind::SYMBOLS as u32, symbols_off, &symbols_bytes);
+    add_section_desc(SectionKind::REFS as u32, refs_off, &refs_bytes);
+    add_section_desc(SectionKind::CLAIMS as u32, claims_off, &claims_bytes);
+    add_section_desc(
+        SectionKind::INVARIANTS as u32,
+        invariants_off,
+        &invariants_bytes,
+    );
+    add_section_desc(SectionKind::EDGES as u32, edges_off, &edges_bytes);
+    add_section_desc(SectionKind::EVIDENCE as u32, evidence_off, &evidence_bytes);
+    add_section_desc(SectionKind::META as u32, meta_off, &meta_bytes);
+
+    payload.extend_from_slice(&symbols_bytes);
+    payload.extend_from_slice(&refs_bytes);
+    payload.extend_from_slice(&claims_bytes);
+    payload.extend_from_slice(&invariants_bytes);
+    payload.extend_from_slice(&edges_bytes);
+    payload.extend_from_slice(&evidence_bytes);
+    payload.extend_from_slice(&meta_bytes);
+    payload
+}
+
 /// Extract terms from atom payload for lexical indexing.
 ///
 /// **Purpose:** Replace surrogate term keys with actual lexical content from atom.
@@ -1414,6 +1501,68 @@ impl HistoryEntry {
     }
 }
 
+/// Durable entity identity in the authoring layer.
+pub type EntityId = u64;
+
+/// High-level entity record for authoring knowledge without manually building atoms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityRecord {
+    pub entity_id: EntityId,
+    pub canonical_name: String,
+    pub aliases: Vec<String>,
+    pub entity_type: String,
+    pub claims: Vec<AtomId>,
+    pub merged_from: Vec<EntityId>,
+    pub split_from: Option<EntityId>,
+    pub deprecated: bool,
+    pub updated_at_unix_ns: u64,
+}
+
+impl EntityRecord {
+    pub fn new(
+        entity_id: EntityId,
+        canonical_name: impl Into<String>,
+        entity_type: impl Into<String>,
+    ) -> Self {
+        EntityRecord {
+            entity_id,
+            canonical_name: canonical_name.into(),
+            aliases: Vec::new(),
+            entity_type: entity_type.into(),
+            claims: Vec::new(),
+            merged_from: Vec::new(),
+            split_from: None,
+            deprecated: false,
+            updated_at_unix_ns: current_unix_ns(),
+        }
+    }
+}
+
+/// High-level relation record backed by a real atom claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationRecord {
+    pub relation_id: u64,
+    pub subject: EntityId,
+    pub predicate: SymId,
+    pub object: EntityId,
+    pub atom_id: AtomId,
+    pub evidence: Vec<EvidenceRef>,
+    pub valid_time: Option<TimeInterval>,
+    pub context: CtxId,
+    pub confidence: TrustLevel,
+    pub supersedes: Option<u64>,
+    pub deprecated: bool,
+    pub updated_at_unix_ns: u64,
+}
+
+/// Result of a relation authoring operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoringResult {
+    pub atom_id: AtomId,
+    pub relation_id: Option<u64>,
+    pub ctx_id: CtxId,
+}
+
 // ============================================================================
 // Claim View
 // ============================================================================
@@ -2130,6 +2279,18 @@ impl StoreConfig {
     #[inline]
     pub fn sources_path(&self) -> PathBuf {
         self.meta_dir().join("sources.jsonl")
+    }
+
+    /// Get append-only entity authoring registry path.
+    #[inline]
+    pub fn entities_path(&self) -> PathBuf {
+        self.meta_dir().join("entities.jsonl")
+    }
+
+    /// Get append-only relation authoring registry path.
+    #[inline]
+    pub fn relations_path(&self) -> PathBuf {
+        self.meta_dir().join("relations.jsonl")
     }
 }
 
@@ -4956,6 +5117,331 @@ impl MemoryX {
         Ok(())
     }
 
+    fn read_entities(&self) -> Result<Vec<EntityRecord>, StoreError> {
+        let path = self.config.entities_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(path).map_err(StoreError::from)?;
+        let reader = BufReader::new(file);
+        let mut entities = Vec::new();
+        for line in reader.lines() {
+            let line = line.map_err(StoreError::from)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entity: EntityRecord =
+                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
+            entities.push(entity);
+        }
+        Ok(entities)
+    }
+
+    fn append_entity(&self, entity: &EntityRecord) -> Result<(), StoreError> {
+        let path = self.config.entities_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(StoreError::from)?;
+        serde_json::to_writer(&mut file, entity).map_err(|err| StoreError::Io(err.to_string()))?;
+        file.write_all(b"\n").map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_data().map_err(StoreError::from)?;
+        Ok(())
+    }
+
+    fn read_relations(&self) -> Result<Vec<RelationRecord>, StoreError> {
+        let path = self.config.relations_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(path).map_err(StoreError::from)?;
+        let reader = BufReader::new(file);
+        let mut relations = Vec::new();
+        for line in reader.lines() {
+            let line = line.map_err(StoreError::from)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let relation: RelationRecord =
+                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
+            relations.push(relation);
+        }
+        Ok(relations)
+    }
+
+    fn append_relation(&self, relation: &RelationRecord) -> Result<(), StoreError> {
+        let path = self.config.relations_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(StoreError::from)?;
+        serde_json::to_writer(&mut file, relation)
+            .map_err(|err| StoreError::Io(err.to_string()))?;
+        file.write_all(b"\n").map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_data().map_err(StoreError::from)?;
+        Ok(())
+    }
+
+    /// Create a high-level entity record.
+    pub fn create_entity(
+        &mut self,
+        canonical_name: impl Into<String>,
+        entity_type: impl Into<String>,
+    ) -> Result<EntityRecord, StoreError> {
+        let next_id = self
+            .read_entities()?
+            .iter()
+            .map(|entity| entity.entity_id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let entity = EntityRecord::new(next_id, canonical_name, entity_type);
+        self.append_entity(&entity)?;
+        Ok(entity)
+    }
+
+    /// Return latest state for each entity id.
+    pub fn list_entities(&self) -> Result<Vec<EntityRecord>, StoreError> {
+        let mut latest: HashMap<EntityId, EntityRecord> = HashMap::new();
+        for entity in self.read_entities()? {
+            latest.insert(entity.entity_id, entity);
+        }
+        let mut entities: Vec<_> = latest.into_values().collect();
+        entities.sort_by_key(|entity| entity.entity_id);
+        Ok(entities)
+    }
+
+    pub fn get_entity(&self, entity_id: EntityId) -> Result<Option<EntityRecord>, StoreError> {
+        Ok(self
+            .read_entities()?
+            .into_iter()
+            .rev()
+            .find(|entity| entity.entity_id == entity_id))
+    }
+
+    pub fn alias_entity(
+        &mut self,
+        entity_id: EntityId,
+        alias: impl Into<String>,
+    ) -> Result<EntityRecord, StoreError> {
+        let mut entity = self
+            .get_entity(entity_id)?
+            .ok_or_else(|| StoreError::Io(format!("entity {} not found", entity_id)))?;
+        let alias = alias.into();
+        if !entity.aliases.contains(&alias) {
+            entity.aliases.push(alias);
+        }
+        entity.updated_at_unix_ns = current_unix_ns();
+        self.append_entity(&entity)?;
+        Ok(entity)
+    }
+
+    pub fn rename_entity(
+        &mut self,
+        entity_id: EntityId,
+        canonical_name: impl Into<String>,
+    ) -> Result<EntityRecord, StoreError> {
+        let mut entity = self
+            .get_entity(entity_id)?
+            .ok_or_else(|| StoreError::Io(format!("entity {} not found", entity_id)))?;
+        entity.canonical_name = canonical_name.into();
+        entity.updated_at_unix_ns = current_unix_ns();
+        self.append_entity(&entity)?;
+        Ok(entity)
+    }
+
+    pub fn merge_entities(
+        &mut self,
+        target_entity: EntityId,
+        source_entity: EntityId,
+    ) -> Result<EntityRecord, StoreError> {
+        let source = self
+            .get_entity(source_entity)?
+            .ok_or_else(|| StoreError::Io(format!("entity {} not found", source_entity)))?;
+        let mut target = self
+            .get_entity(target_entity)?
+            .ok_or_else(|| StoreError::Io(format!("entity {} not found", target_entity)))?;
+
+        for alias in source.aliases.into_iter().chain([source.canonical_name]) {
+            if !target.aliases.contains(&alias) && alias != target.canonical_name {
+                target.aliases.push(alias);
+            }
+        }
+        target.claims.extend(source.claims);
+        target.claims.sort_unstable();
+        target.claims.dedup();
+        if !target.merged_from.contains(&source_entity) {
+            target.merged_from.push(source_entity);
+        }
+        target.updated_at_unix_ns = current_unix_ns();
+        self.append_entity(&target)?;
+        Ok(target)
+    }
+
+    pub fn split_entity(
+        &mut self,
+        source_entity: EntityId,
+        canonical_name: impl Into<String>,
+        entity_type: impl Into<String>,
+    ) -> Result<EntityRecord, StoreError> {
+        if self.get_entity(source_entity)?.is_none() {
+            return Err(StoreError::Io(format!(
+                "entity {} not found",
+                source_entity
+            )));
+        }
+        let mut entity = self.create_entity(canonical_name, entity_type)?;
+        entity.split_from = Some(source_entity);
+        entity.updated_at_unix_ns = current_unix_ns();
+        self.append_entity(&entity)?;
+        Ok(entity)
+    }
+
+    /// Assert a high-level relation as a real atom claim and activate it in context.
+    pub fn assert_relation(
+        &mut self,
+        subject: EntityId,
+        predicate: SymId,
+        object: EntityId,
+        ctx_id: CtxId,
+        evidence: Vec<EvidenceRef>,
+    ) -> Result<AuthoringResult, StoreError> {
+        if self.get_entity(subject)?.is_none() {
+            return Err(StoreError::Io(format!("entity {} not found", subject)));
+        }
+        if self.get_entity(object)?.is_none() {
+            return Err(StoreError::Io(format!("entity {} not found", object)));
+        }
+
+        let claim = ClaimData {
+            subj: subject,
+            pred: u64::from(predicate),
+            obj_tag: ObjTag::REF.to_u8(),
+            obj_val: object,
+            qualifiers_mask: 0,
+        };
+        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim));
+        let atom_id = self.ingest(
+            &payload,
+            AtomType::FACT,
+            std::slice::from_ref(&claim),
+            &evidence,
+        )?;
+        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, atom_id)?;
+        let relation_id = self
+            .read_relations()?
+            .iter()
+            .map(|relation| relation.relation_id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let relation = RelationRecord {
+            relation_id,
+            subject,
+            predicate,
+            object,
+            atom_id,
+            evidence,
+            valid_time: None,
+            context: actual_ctx,
+            confidence: 5000,
+            supersedes: None,
+            deprecated: false,
+            updated_at_unix_ns: current_unix_ns(),
+        };
+        self.append_relation(&relation)?;
+        Ok(AuthoringResult {
+            atom_id,
+            relation_id: Some(relation_id),
+            ctx_id: actual_ctx,
+        })
+    }
+
+    /// Correct an existing relation by writing a superseding atom-backed relation.
+    pub fn correct_relation(
+        &mut self,
+        old_relation_id: u64,
+        subject: EntityId,
+        predicate: SymId,
+        object: EntityId,
+        ctx_id: CtxId,
+        evidence: Vec<EvidenceRef>,
+    ) -> Result<AuthoringResult, StoreError> {
+        let old_relation = self
+            .read_relations()?
+            .into_iter()
+            .rev()
+            .find(|relation| relation.relation_id == old_relation_id)
+            .ok_or_else(|| StoreError::Io(format!("relation {} not found", old_relation_id)))?;
+
+        let claim = ClaimData {
+            subj: subject,
+            pred: u64::from(predicate),
+            obj_tag: ObjTag::REF.to_u8(),
+            obj_val: object,
+            qualifiers_mask: 0,
+        };
+        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim));
+        let update = self.update_atom(
+            old_relation.atom_id,
+            payload,
+            AtomType::FACT,
+            vec![claim.clone()],
+            evidence.clone(),
+        )?;
+        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, update.new_atom_id)?;
+        let relation_id = self
+            .read_relations()?
+            .iter()
+            .map(|relation| relation.relation_id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let relation = RelationRecord {
+            relation_id,
+            subject,
+            predicate,
+            object,
+            atom_id: update.new_atom_id,
+            evidence,
+            valid_time: None,
+            context: actual_ctx,
+            confidence: 5000,
+            supersedes: Some(old_relation_id),
+            deprecated: false,
+            updated_at_unix_ns: current_unix_ns(),
+        };
+        self.append_relation(&relation)?;
+        Ok(AuthoringResult {
+            atom_id: update.new_atom_id,
+            relation_id: Some(relation_id),
+            ctx_id: actual_ctx,
+        })
+    }
+
+    /// High-level context fork wrapper for authoring workflows.
+    pub fn fork_context(
+        &mut self,
+        parent_ctx: CtxId,
+        reason: BranchReason,
+        policy_id: CtxPolicyId,
+    ) -> Result<CtxId, StoreError> {
+        self.branch_ctx(parent_ctx, reason, policy_id)
+            .ok_or(StoreError::ContextBranchFailed)
+    }
+
     /// Ingest a new atom into the store
     ///
     /// # Arguments
@@ -7698,6 +8184,66 @@ mod tests {
         assert_eq!(claim_v2.polarity, Polarity::Positive);
         assert_eq!(claim_v2.evidence_refs.len(), 1);
         assert!(claim_v2.confidence.overall > 0.0);
+    }
+
+    #[test]
+    fn test_entity_relation_authoring_creates_atom_backed_relation() {
+        let test_dir = PathBuf::from("./test_authoring");
+        let _ = std::fs::remove_dir_all(&test_dir);
+        let config = StoreConfig::new(test_dir);
+        let mut store = MemoryX::new(config.clone()).unwrap();
+        let ctx = store.create_context(0);
+
+        let rust = store.create_entity("Rust", "language").unwrap();
+        let ownership = store.create_entity("Ownership", "concept").unwrap();
+        let aliased = store.alias_entity(rust.entity_id, "rust-lang").unwrap();
+        assert!(aliased.aliases.contains(&"rust-lang".to_string()));
+
+        let result = store
+            .assert_relation(rust.entity_id, 42, ownership.entity_id, ctx, Vec::new())
+            .unwrap();
+        assert!(store.get_atom(&result.atom_id).is_ok());
+        assert_eq!(result.ctx_id, ctx);
+
+        let relations = store.read_relations().unwrap();
+        assert_eq!(relations.len(), 1);
+        assert_eq!(relations[0].subject, rust.entity_id);
+        assert_eq!(relations[0].object, ownership.entity_id);
+
+        let reopened = MemoryX::new(config).unwrap();
+        assert_eq!(reopened.list_entities().unwrap().len(), 2);
+        assert_eq!(reopened.read_relations().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_correct_relation_writes_superseding_relation() {
+        let test_dir = PathBuf::from("./test_correct_relation");
+        let _ = std::fs::remove_dir_all(&test_dir);
+        let config = StoreConfig::new(test_dir);
+        let mut store = MemoryX::new(config).unwrap();
+        let ctx = store.create_context(0);
+
+        let a = store.create_entity("A", "node").unwrap();
+        let b = store.create_entity("B", "node").unwrap();
+        let c = store.create_entity("C", "node").unwrap();
+        let first = store
+            .assert_relation(a.entity_id, 5, b.entity_id, ctx, Vec::new())
+            .unwrap();
+        let corrected = store
+            .correct_relation(
+                first.relation_id.unwrap(),
+                a.entity_id,
+                5,
+                c.entity_id,
+                ctx,
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_ne!(first.atom_id, corrected.atom_id);
+        let relations = store.read_relations().unwrap();
+        assert_eq!(relations.len(), 2);
+        assert_eq!(relations[1].supersedes, first.relation_id);
     }
 
     #[test]

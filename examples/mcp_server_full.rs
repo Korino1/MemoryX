@@ -1,6 +1,6 @@
 //! MemoryX Full MCP Server v0.2.0
 //!
-//! Complete MCP (Model Context Protocol) server with all 19 tools:
+//! Complete MCP (Model Context Protocol) server with all 24 tools:
 //! - query: Natural language query
 //! - search_lex: Lexical search
 //! - search_graph: Graph search
@@ -13,6 +13,11 @@
 //! - register_source: Register provenance source
 //! - list_sources: List provenance sources
 //! - attach_atom_source: Attach source to atom
+//! - create_entity: Create authoring entity
+//! - list_entities: List authoring entities
+//! - alias_entity: Add entity alias
+//! - assert_relation: Assert atom-backed relation
+//! - correct_relation: Correct relation with superseding atom
 //! - create_context: Create context
 //! - list_contexts: List contexts
 //! - branch_context: Branch context
@@ -452,7 +457,73 @@ impl MemoryXMcpServer {
                     "required": ["atom_id", "source_id"]
                 }),
             },
-            // 13. create_context - Create context
+            // 13. create_entity - Create authoring entity
+            Tool {
+                name: "create_entity".to_string(),
+                description: "Create a high-level entity record.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "canonical_name": { "type": "string" },
+                        "entity_type": { "type": "string" }
+                    },
+                    "required": ["canonical_name", "entity_type"]
+                }),
+            },
+            // 14. list_entities - List authoring entities
+            Tool {
+                name: "list_entities".to_string(),
+                description: "List high-level entity records.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            // 15. alias_entity - Add entity alias
+            Tool {
+                name: "alias_entity".to_string(),
+                description: "Add an alias to an entity.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "entity_id": { "type": "integer" },
+                        "alias": { "type": "string" }
+                    },
+                    "required": ["entity_id", "alias"]
+                }),
+            },
+            // 16. assert_relation - Assert atom-backed relation
+            Tool {
+                name: "assert_relation".to_string(),
+                description: "Create an atom-backed relation claim between two entities.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "integer" },
+                        "predicate": { "type": "integer" },
+                        "object": { "type": "integer" },
+                        "ctx_id": { "type": "integer" }
+                    },
+                    "required": ["subject", "predicate", "object"]
+                }),
+            },
+            // 17. correct_relation - Correct relation
+            Tool {
+                name: "correct_relation".to_string(),
+                description: "Correct an existing relation with a superseding atom-backed relation.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "relation_id": { "type": "integer" },
+                        "subject": { "type": "integer" },
+                        "predicate": { "type": "integer" },
+                        "object": { "type": "integer" },
+                        "ctx_id": { "type": "integer" }
+                    },
+                    "required": ["relation_id", "subject", "predicate", "object"]
+                }),
+            },
+            // 18. create_context - Create context
             Tool {
                 name: "create_context".to_string(),
                 description: "Create a new context branch for hypothesis exploration.".to_string(),
@@ -467,7 +538,7 @@ impl MemoryXMcpServer {
                     "required": []
                 }),
             },
-            // 14. list_contexts - List contexts
+            // 19. list_contexts - List contexts
             Tool {
                 name: "list_contexts".to_string(),
                 description: "List all contexts with status and parent relationships.".to_string(),
@@ -476,7 +547,7 @@ impl MemoryXMcpServer {
                     "properties": {}
                 }),
             },
-            // 15. branch_context - Branch context
+            // 20. branch_context - Branch context
             Tool {
                 name: "branch_context".to_string(),
                 description: "Create a branch from an existing context.".to_string(),
@@ -499,7 +570,7 @@ impl MemoryXMcpServer {
                     "required": ["parent_ctx"]
                 }),
             },
-            // 16. list_conflicts - List conflicts
+            // 21. list_conflicts - List conflicts
             Tool {
                 name: "list_conflicts".to_string(),
                 description: "List conflicts in a context with severity and resolution options.".to_string(),
@@ -980,7 +1051,124 @@ impl MemoryXMcpServer {
         })
     }
 
-    /// 13. create_context - Create context
+    /// 13. create_entity - Create authoring entity
+    async fn create_entity(
+        &self,
+        canonical_name: String,
+        entity_type: String,
+    ) -> Result<ToolResult, String> {
+        let mut store = self.store.write().await;
+        let entity = store
+            .create_entity(canonical_name, entity_type)
+            .map_err(|e| format!("Create entity failed: {}", e))?;
+        Ok(ToolResult {
+            content: vec![ToolContent::text(format!(
+                "Created entity\nEntity ID: {}\nName: {}\nType: {}",
+                entity.entity_id, entity.canonical_name, entity.entity_type
+            ))],
+            is_error: None,
+        })
+    }
+
+    /// 14. list_entities - List authoring entities
+    async fn list_entities(&self) -> Result<ToolResult, String> {
+        let store = self.store.read().await;
+        let entities = store
+            .list_entities()
+            .map_err(|e| format!("List entities failed: {}", e))?;
+        let mut output = format!("Entities\nTotal: {}", entities.len());
+        for entity in &entities {
+            output.push_str(&format!(
+                "\n\nEntity ID: {}\nName: {}\nType: {}",
+                entity.entity_id, entity.canonical_name, entity.entity_type
+            ));
+            if !entity.aliases.is_empty() {
+                output.push_str(&format!("\nAliases: {}", entity.aliases.join(", ")));
+            }
+        }
+        Ok(ToolResult {
+            content: vec![ToolContent::text(output)],
+            is_error: None,
+        })
+    }
+
+    /// 15. alias_entity - Add entity alias
+    async fn alias_entity(&self, entity_id: u64, alias: String) -> Result<ToolResult, String> {
+        let mut store = self.store.write().await;
+        let entity = store
+            .alias_entity(entity_id, alias)
+            .map_err(|e| format!("Alias entity failed: {}", e))?;
+        Ok(ToolResult {
+            content: vec![ToolContent::text(format!(
+                "Aliased entity\nEntity ID: {}\nAliases: {}",
+                entity.entity_id,
+                entity.aliases.join(", ")
+            ))],
+            is_error: None,
+        })
+    }
+
+    /// 16. assert_relation - Assert atom-backed relation
+    async fn assert_relation(
+        &self,
+        subject: u64,
+        predicate: u32,
+        object: u64,
+        ctx_id: Option<u64>,
+    ) -> Result<ToolResult, String> {
+        let mut store = self.store.write().await;
+        let selected_ctx = ctx_id
+            .and_then(|value| CtxId::try_from(value).ok())
+            .unwrap_or_else(|| store.active_context());
+        let result = store
+            .assert_relation(subject, predicate, object, selected_ctx, Vec::new())
+            .map_err(|e| format!("Assert relation failed: {}", e))?;
+        Ok(ToolResult {
+            content: vec![ToolContent::text(format!(
+                "Asserted relation\nRelation ID: {}\nAtom ID: {}\nContext: {}",
+                result.relation_id.unwrap_or(0),
+                hex_encode(&result.atom_id),
+                result.ctx_id
+            ))],
+            is_error: None,
+        })
+    }
+
+    /// 17. correct_relation - Correct relation
+    async fn correct_relation(
+        &self,
+        relation_id: u64,
+        subject: u64,
+        predicate: u32,
+        object: u64,
+        ctx_id: Option<u64>,
+    ) -> Result<ToolResult, String> {
+        let mut store = self.store.write().await;
+        let selected_ctx = ctx_id
+            .and_then(|value| CtxId::try_from(value).ok())
+            .unwrap_or_else(|| store.active_context());
+        let result = store
+            .correct_relation(
+                relation_id,
+                subject,
+                predicate,
+                object,
+                selected_ctx,
+                Vec::new(),
+            )
+            .map_err(|e| format!("Correct relation failed: {}", e))?;
+        Ok(ToolResult {
+            content: vec![ToolContent::text(format!(
+                "Corrected relation\nNew Relation ID: {}\nNew Atom ID: {}\nContext: {}",
+                result.relation_id.unwrap_or(0),
+                hex_encode(&result.atom_id),
+                result.ctx_id
+            ))],
+            is_error: None,
+        })
+    }
+
+    /// 18. create_context - Create context
     async fn create_context(&self, policy_id: Option<u64>) -> Result<ToolResult, String> {
         let mut store = self.store.write().await;
         let new_ctx = store.create_context(policy_id.unwrap_or(0) as CtxPolicyId);
@@ -1341,6 +1529,34 @@ impl MemoryXMcpServer {
                 let atom_id: String = extract_arg(&args, "atom_id")?;
                 let source_id: u32 = extract_arg(&args, "source_id")?;
                 self.attach_atom_source(atom_id, source_id).await
+            }
+            "create_entity" => {
+                let canonical_name: String = extract_arg(&args, "canonical_name")?;
+                let entity_type: String = extract_arg(&args, "entity_type")?;
+                self.create_entity(canonical_name, entity_type).await
+            }
+            "list_entities" => self.list_entities().await,
+            "alias_entity" => {
+                let entity_id: u64 = extract_arg(&args, "entity_id")?;
+                let alias: String = extract_arg(&args, "alias")?;
+                self.alias_entity(entity_id, alias).await
+            }
+            "assert_relation" => {
+                let subject: u64 = extract_arg(&args, "subject")?;
+                let predicate: u32 = extract_arg(&args, "predicate")?;
+                let object: u64 = extract_arg(&args, "object")?;
+                let ctx_id: Option<u64> = extract_arg_opt(&args, "ctx_id");
+                self.assert_relation(subject, predicate, object, ctx_id)
+                    .await
+            }
+            "correct_relation" => {
+                let relation_id: u64 = extract_arg(&args, "relation_id")?;
+                let subject: u64 = extract_arg(&args, "subject")?;
+                let predicate: u32 = extract_arg(&args, "predicate")?;
+                let object: u64 = extract_arg(&args, "object")?;
+                let ctx_id: Option<u64> = extract_arg_opt(&args, "ctx_id");
+                self.correct_relation(relation_id, subject, predicate, object, ctx_id)
+                    .await
             }
             "create_context" => {
                 let policy_id: Option<u64> = extract_arg_opt(&args, "policy_id");
@@ -1799,7 +2015,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  project -> <cwd>/.memoryx/bases/default");
                 println!("  user    -> <home>/.memoryx/bases/default");
                 println!();
-                println!("MCP Tools (19 total):");
+                println!("MCP Tools (24 total):");
                 println!("  1. query           - Natural language query");
                 println!("  2. search_lex      - Lexical search");
                 println!("  3. search_graph    - Graph search");
@@ -1812,13 +2028,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  10. register_source - Register provenance source");
                 println!("  11. list_sources    - List provenance sources");
                 println!("  12. attach_atom_source - Attach source to atom");
-                println!("  13. create_context  - Create context");
-                println!("  14. list_contexts   - List contexts");
-                println!("  15. branch_context  - Branch context");
-                println!("  16. list_conflicts  - List conflicts");
-                println!("  17. graph_neighbors - Graph neighbors");
-                println!("  18. graph_walk      - Graph walk");
-                println!("  19. extract_subgraph- Extract subgraph");
+                println!("  13. create_entity   - Create authoring entity");
+                println!("  14. list_entities   - List authoring entities");
+                println!("  15. alias_entity    - Add entity alias");
+                println!("  16. assert_relation - Assert atom-backed relation");
+                println!("  17. correct_relation- Correct relation");
+                println!("  18. create_context  - Create context");
+                println!("  19. list_contexts   - List contexts");
+                println!("  20. branch_context  - Branch context");
+                println!("  21. list_conflicts  - List conflicts");
+                println!("  22. graph_neighbors - Graph neighbors");
+                println!("  23. graph_walk      - Graph walk");
+                println!("  24. extract_subgraph- Extract subgraph");
                 return Ok(());
             }
             _ => {

@@ -323,3 +323,35 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Entity and relation authoring model
+
+Done:
+
+- Added high-level authoring records:
+  `EntityId`, `EntityRecord`, `RelationRecord`, `AuthoringResult`.
+- Added durable authoring registries:
+  `meta/entities.jsonl` and `meta/relations.jsonl`.
+- Added store authoring API:
+  `create_entity`, `list_entities`, `get_entity`, `alias_entity`,
+  `rename_entity`, `merge_entities`, `split_entity`, `assert_relation`,
+  `correct_relation`, and `fork_context`.
+- Relation authoring is atom-backed:
+  `assert_relation` builds a real atom body, calls `ingest`, then asserts the
+  claim into the selected context.
+- Relation correction preserves history:
+  `correct_relation` writes a new atom through `update_atom` and records
+  `supersedes` in the relation registry.
+- Added production MCP tools:
+  `create_entity`, `list_entities`, `alias_entity`, `assert_relation`,
+  `correct_relation`.
+- Updated the full MCP example and README to the 24-tool surface.
+- Added regression coverage for entity/relation persistence and relation
+  correction through superseding atoms.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

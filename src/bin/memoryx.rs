@@ -24,6 +24,8 @@
 //! memoryx serve --base /path/to/base --port 8080
 //! ```
 
+#![recursion_limit = "256"]
+
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
@@ -3008,6 +3010,99 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                         }
                                     },
                                     {
+                                        "name": "create_entity",
+                                        "description": "Create a high-level entity record for authoring knowledge without manually constructing atoms.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "canonical_name": { "type": "string" },
+                                                "entity_type": { "type": "string" }
+                                            },
+                                            "required": ["canonical_name", "entity_type"],
+                                            "examples": [
+                                                {
+                                                    "canonical_name": "MemoryX",
+                                                    "entity_type": "project"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "list_entities",
+                                        "description": "List latest high-level entity records with canonical names, aliases, type, and merge/split lineage.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "alias_entity",
+                                        "description": "Add an alias to an existing high-level entity record.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "entity_id": { "type": "integer" },
+                                                "alias": { "type": "string" }
+                                            },
+                                            "required": ["entity_id", "alias"],
+                                            "examples": [
+                                                {
+                                                    "entity_id": 1,
+                                                    "alias": "memoryx-db"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "assert_relation",
+                                        "description": "Create an atom-backed relation claim between two high-level entities and assert it in a context.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "subject": { "type": "integer" },
+                                                "predicate": { "type": "integer" },
+                                                "object": { "type": "integer" },
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "required": ["subject", "predicate", "object"],
+                                            "examples": [
+                                                {
+                                                    "subject": 1,
+                                                    "predicate": 42,
+                                                    "object": 2,
+                                                    "ctx_id": 0
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "correct_relation",
+                                        "description": "Correct an existing relation by writing a superseding atom-backed relation.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "relation_id": { "type": "integer" },
+                                                "subject": { "type": "integer" },
+                                                "predicate": { "type": "integer" },
+                                                "object": { "type": "integer" },
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "required": ["relation_id", "subject", "predicate", "object"],
+                                            "examples": [
+                                                {
+                                                    "relation_id": 1,
+                                                    "subject": 1,
+                                                    "predicate": 42,
+                                                    "object": 3,
+                                                    "ctx_id": 0
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
                                         "name": "create_context",
                                         "description": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
                                         "inputSchema": {
@@ -3164,6 +3259,11 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                         "attach_atom_source" => {
                             mcp_attach_atom_source_response(store, id, arguments)
                         }
+                        "create_entity" => mcp_create_entity_response(store, id, arguments),
+                        "list_entities" => mcp_list_entities_response(store, id, arguments),
+                        "alias_entity" => mcp_alias_entity_response(store, id, arguments),
+                        "assert_relation" => mcp_assert_relation_response(store, id, arguments),
+                        "correct_relation" => mcp_correct_relation_response(store, id, arguments),
                         "create_context" => mcp_create_context_response(store, id, arguments),
                         "list_contexts" => mcp_list_contexts_response(store, id, arguments),
                         "branch_context" => mcp_branch_context_response(store, id, arguments),
@@ -4029,6 +4129,184 @@ fn mcp_attach_atom_source_response(
             ),
         ),
         Err(e) => mcp_error(id, -32603, format!("Attach source failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_create_entity_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(canonical_name) = args.get("canonical_name").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'canonical_name'");
+    };
+    let Some(entity_type) = args.get("entity_type").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'entity_type'");
+    };
+
+    match store.create_entity(canonical_name, entity_type) {
+        Ok(entity) => mcp_text_result(
+            id,
+            format!(
+                "Created entity\nEntity ID: {}\nName: {}\nType: {}",
+                entity.entity_id, entity.canonical_name, entity.entity_type
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Create entity failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_list_entities_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.list_entities() {
+        Ok(entities) => {
+            let mut output = format!("Entities\nTotal: {}", entities.len());
+            for entity in &entities {
+                output.push_str(&format!(
+                    "\n\nEntity ID: {}\nName: {}\nType: {}",
+                    entity.entity_id, entity.canonical_name, entity.entity_type
+                ));
+                if !entity.aliases.is_empty() {
+                    output.push_str(&format!("\nAliases: {}", entity.aliases.join(", ")));
+                }
+                if let Some(split_from) = entity.split_from {
+                    output.push_str(&format!("\nSplit from: {}", split_from));
+                }
+                if !entity.merged_from.is_empty() {
+                    output.push_str(&format!("\nMerged from: {:?}", entity.merged_from));
+                }
+            }
+            mcp_text_result(id, output)
+        }
+        Err(e) => mcp_error(id, -32603, format!("List entities failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_alias_entity_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(entity_id) = args.get("entity_id").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'entity_id'");
+    };
+    let Some(alias) = args.get("alias").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'alias'");
+    };
+
+    match store.alias_entity(entity_id, alias) {
+        Ok(entity) => mcp_text_result(
+            id,
+            format!(
+                "Aliased entity\nEntity ID: {}\nAliases: {}",
+                entity.entity_id,
+                entity.aliases.join(", ")
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Alias entity failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_assert_relation_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(subject) = args.get("subject").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'subject'");
+    };
+    let Some(predicate) = args
+        .get("predicate")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| SymId::try_from(value).ok())
+    else {
+        return mcp_error(id, -32602, "Missing or invalid integer field 'predicate'");
+    };
+    let Some(object) = args.get("object").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'object'");
+    };
+    let ctx_id = args
+        .get("ctx_id")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| CtxId::try_from(value).ok())
+        .unwrap_or_else(|| store.active_context());
+
+    match store.assert_relation(subject, predicate, object, ctx_id, Vec::new()) {
+        Ok(result) => mcp_text_result(
+            id,
+            format!(
+                "Asserted relation\nRelation ID: {}\nAtom ID: {}\nContext: {}",
+                result.relation_id.unwrap_or(0),
+                hex::encode(result.atom_id),
+                result.ctx_id
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Assert relation failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_correct_relation_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(relation_id) = args.get("relation_id").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'relation_id'");
+    };
+    let Some(subject) = args.get("subject").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'subject'");
+    };
+    let Some(predicate) = args
+        .get("predicate")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| SymId::try_from(value).ok())
+    else {
+        return mcp_error(id, -32602, "Missing or invalid integer field 'predicate'");
+    };
+    let Some(object) = args.get("object").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'object'");
+    };
+    let ctx_id = args
+        .get("ctx_id")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| CtxId::try_from(value).ok())
+        .unwrap_or_else(|| store.active_context());
+
+    match store.correct_relation(relation_id, subject, predicate, object, ctx_id, Vec::new()) {
+        Ok(result) => mcp_text_result(
+            id,
+            format!(
+                "Corrected relation\nNew Relation ID: {}\nNew Atom ID: {}\nContext: {}",
+                result.relation_id.unwrap_or(0),
+                hex::encode(result.atom_id),
+                result.ctx_id
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Correct relation failed: {}", e)),
     }
 }
 
@@ -4930,6 +5208,11 @@ mod tests {
         assert!(names.contains(&"register_source"));
         assert!(names.contains(&"list_sources"));
         assert!(names.contains(&"attach_atom_source"));
+        assert!(names.contains(&"create_entity"));
+        assert!(names.contains(&"list_entities"));
+        assert!(names.contains(&"alias_entity"));
+        assert!(names.contains(&"assert_relation"));
+        assert!(names.contains(&"correct_relation"));
         assert!(names.contains(&"create_context"));
         assert!(names.contains(&"list_contexts"));
         assert!(names.contains(&"branch_context"));
@@ -4937,7 +5220,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 24);
     }
 
     #[cfg(feature = "mcp")]
@@ -5055,6 +5338,76 @@ mod tests {
         .to_string();
         let list_sources_response = process_mcp_request(&mut store, &list_sources_request).await;
         assert!(list_sources_response.contains("test source"));
+
+        let create_entity_a_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 16,
+            "method": "tools/call",
+            "params": {
+                "name": "create_entity",
+                "arguments": {
+                    "canonical_name": "Rust",
+                    "entity_type": "language"
+                }
+            }
+        })
+        .to_string();
+        let create_entity_a_response =
+            process_mcp_request(&mut store, &create_entity_a_request).await;
+        assert!(create_entity_a_response.contains("Entity ID: 1"));
+
+        let create_entity_b_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 17,
+            "method": "tools/call",
+            "params": {
+                "name": "create_entity",
+                "arguments": {
+                    "canonical_name": "Ownership",
+                    "entity_type": "concept"
+                }
+            }
+        })
+        .to_string();
+        let create_entity_b_response =
+            process_mcp_request(&mut store, &create_entity_b_request).await;
+        assert!(create_entity_b_response.contains("Entity ID: 2"));
+
+        let alias_entity_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 18,
+            "method": "tools/call",
+            "params": {
+                "name": "alias_entity",
+                "arguments": {
+                    "entity_id": 1,
+                    "alias": "rust-lang"
+                }
+            }
+        })
+        .to_string();
+        let alias_entity_response = process_mcp_request(&mut store, &alias_entity_request).await;
+        assert!(alias_entity_response.contains("rust-lang"));
+
+        let assert_relation_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 19,
+            "method": "tools/call",
+            "params": {
+                "name": "assert_relation",
+                "arguments": {
+                    "subject": 1,
+                    "predicate": 42,
+                    "object": 2,
+                    "ctx_id": 0
+                }
+            }
+        })
+        .to_string();
+        let assert_relation_response =
+            process_mcp_request(&mut store, &assert_relation_request).await;
+        assert!(assert_relation_response.contains("Asserted relation"));
+        assert!(assert_relation_response.contains("Relation ID: 1"));
 
         let search_graph_request = serde_json::json!({
             "jsonrpc": "2.0",
