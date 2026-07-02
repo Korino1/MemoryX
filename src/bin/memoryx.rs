@@ -3133,18 +3133,102 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                 "tools": [
                                     {
                                         "name": "query",
-                                        "description": "Run the fixed-point solver against the active or selected context and return the answer graph for one natural-language question.",
+                                        "description": "Run the fixed-point solver against the active or selected context. Input must provide either query_text/question for natural-language compilation or contract for strict QueryContract execution. Returns an AnswerPack-shaped JSON payload, not a free-form text answer.",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
+                                                "query_text": { "type": "string" },
                                                 "question": { "type": "string" },
+                                                "contract": { "type": "object" },
                                                 "ctx_id": { "type": "integer" }
                                             },
-                                            "required": ["question"],
                                             "examples": [
                                                 {
-                                                    "question": "What decisions mention MemoryX persistence?",
+                                                    "query_text": "What decisions mention MemoryX persistence?",
                                                     "ctx_id": 0
+                                                },
+                                                {
+                                                    "contract": {
+                                                        "intent": "lookup",
+                                                        "targets": [
+                                                            { "label": "term:1" }
+                                                        ],
+                                                        "relations": [],
+                                                        "constraints": []
+                                                    },
+                                                    "ctx_id": 0
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "compile_query_contract",
+                                        "description": "Compile natural-language query_text into the explicit QueryContract JSON that an agent can inspect, edit, validate, and pass back to query.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query_text": { "type": "string" }
+                                            },
+                                            "required": ["query_text"],
+                                            "examples": [
+                                                {
+                                                    "query_text": "Explain MemoryX MCP and require provenance"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "validate_query_contract",
+                                        "description": "Validate a QueryContract object without executing it. Returns valid=true or a concrete validation error.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "contract": { "type": "object" }
+                                            },
+                                            "required": ["contract"],
+                                            "examples": [
+                                                {
+                                                    "contract": {
+                                                        "intent": "lookup",
+                                                        "targets": [{ "label": "term:1" }],
+                                                        "relations": [],
+                                                        "constraints": [],
+                                                        "quantifiers": []
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "explain_answer_graph",
+                                        "description": "Execute query_text or contract and return only the answer graph explanation fields: status, snapshot, graph counts, branch lineage, coverage, retrieval trace, and rejected candidates.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query_text": { "type": "string" },
+                                                "contract": { "type": "object" },
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "examples": [
+                                                {
+                                                    "query_text": "Find facts about MemoryX persistence",
+                                                    "ctx_id": 0
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "get_provenance_path",
+                                        "description": "Return the proof-grade ProvenanceChain for one atom_id, including derivation nodes, DERIVED_FROM edges, direct evidence links, confidence, and trust.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_id": { "type": "string" }
+                                            },
+                                            "required": ["atom_id"],
+                                            "examples": [
+                                                {
+                                                    "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                                                 }
                                             ]
                                         }
@@ -3776,6 +3860,18 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
 
                     match tool_name {
                         "query" => mcp_query_response(store, id, arguments),
+                        "compile_query_contract" => {
+                            mcp_compile_query_contract_response(store, id, arguments)
+                        }
+                        "validate_query_contract" => {
+                            mcp_validate_query_contract_response(store, id, arguments)
+                        }
+                        "explain_answer_graph" => {
+                            mcp_explain_answer_graph_response(store, id, arguments)
+                        }
+                        "get_provenance_path" => {
+                            mcp_get_provenance_path_response(store, id, arguments)
+                        }
                         "search_lex" => mcp_search_lex_response(store, id, arguments),
                         "search_graph" => mcp_search_graph_response(store, id, arguments),
                         "search_semantic" => mcp_search_semantic_response(store, id, arguments),
@@ -3993,6 +4089,31 @@ fn mcp_parse_graph_pattern(pattern: &str) -> Result<McpGraphPattern, String> {
 }
 
 #[cfg(feature = "mcp")]
+fn mcp_contract_from_args(
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(QueryContract, String), String> {
+    if let Some(contract_value) = args.get("contract") {
+        let contract: QueryContract = serde_json::from_value(contract_value.clone())
+            .map_err(|err| format!("Invalid contract: {}", err))?;
+        contract
+            .validate()
+            .map_err(|err| format!("Invalid contract: {}", err))?;
+        Ok((contract, "contract".to_string()))
+    } else if let Some(query_text) = args
+        .get("query_text")
+        .or_else(|| args.get("question"))
+        .and_then(|value| value.as_str())
+    {
+        Ok((
+            QueryContractCompiler::compile_contract(query_text),
+            query_text.to_string(),
+        ))
+    } else {
+        Err("Missing required field 'query_text' or 'contract'".to_string())
+    }
+}
+
+#[cfg(feature = "mcp")]
 fn mcp_query_response(
     store: &mut MemoryX,
     id: serde_json::Value,
@@ -4002,29 +4123,130 @@ fn mcp_query_response(
         Ok(args) => args,
         Err(err) => return err,
     };
-    let Some(question) = args.get("question").and_then(|value| value.as_str()) else {
-        return mcp_error(id, -32602, "Missing required string field 'question'");
+    let (contract, _label) = match mcp_contract_from_args(args) {
+        Ok(contract) => contract,
+        Err(err) => return mcp_error(id, -32602, err),
     };
     let ctx_id = args
         .get("ctx_id")
         .and_then(|value| value.as_u64())
         .unwrap_or(store.active_context().into()) as u32;
 
-    match store.answer(question, ctx_id) {
+    match store.answer_contract(contract, ctx_id) {
+        Ok(answer) => mcp_text_result(id, answer_pack_json(&answer).to_string()),
+        Err(err) => mcp_error(id, -32000, format!("Query failed: {}", err)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_compile_query_contract_response(
+    _store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(query_text) = args.get("query_text").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'query_text'");
+    };
+    let contract = QueryContractCompiler::compile_contract(query_text);
+    mcp_text_result(
+        id,
+        serde_json::to_string_pretty(&contract).unwrap_or_default(),
+    )
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_validate_query_contract_response(
+    _store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(contract_value) = args.get("contract") else {
+        return mcp_error(id, -32602, "Missing required object field 'contract'");
+    };
+    let contract: QueryContract = match serde_json::from_value(contract_value.clone()) {
+        Ok(contract) => contract,
+        Err(err) => return mcp_error(id, -32602, format!("Invalid contract JSON: {}", err)),
+    };
+    match contract.validate() {
+        Ok(()) => mcp_text_result(id, serde_json::json!({"valid": true}).to_string()),
+        Err(err) => mcp_text_result(
+            id,
+            serde_json::json!({"valid": false, "error": err.to_string()}).to_string(),
+        ),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_explain_answer_graph_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let (contract, label) = match mcp_contract_from_args(args) {
+        Ok(contract) => contract,
+        Err(err) => return mcp_error(id, -32602, err),
+    };
+    let ctx_id = args
+        .get("ctx_id")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(store.active_context().into()) as u32;
+
+    match store.answer_contract(contract, ctx_id) {
         Ok(answer) => mcp_text_result(
             id,
-            format!(
-                "selected_ctx={}\nconfidence={:.3}\nclaims={}\nevidence={}\ngraph_nodes={}\ngraph_edges={}\nlimitations={}",
-                answer.selected_ctx,
-                answer.confidence,
-                answer.claims.len(),
-                answer.evidence.len(),
-                answer.graph.node_count(),
-                answer.graph.edge_count(),
-                answer.limitations.len()
-            ),
+            serde_json::json!({
+                "query": label,
+                "status": format!("{:?}", answer.status),
+                "snapshot": answer.snapshot,
+                "selected_ctx": answer.selected_ctx,
+                "graph": {
+                    "ctx_id": answer.graph.ctx_id,
+                    "node_count": answer.graph.node_count(),
+                    "edge_count": answer.graph.edge_count(),
+                    "branch_lineage": answer.graph.branch_lineage,
+                },
+                "coverage_report": answer.coverage_report,
+                "query_trace": answer.query_trace,
+                "rejected_candidates": answer.rejected_candidates,
+            })
+            .to_string(),
         ),
-        Err(err) => mcp_error(id, -32000, format!("Query failed: {}", err)),
+        Err(err) => mcp_error(id, -32000, format!("Explain failed: {}", err)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_get_provenance_path_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(atom_id_str) = args.get("atom_id").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'atom_id'");
+    };
+    let Some(atom_id) = mcp_parse_atom_id(atom_id_str) else {
+        return mcp_error(id, -32602, format!("Invalid atom ID: {}", atom_id_str));
+    };
+
+    match store.get_provenance(&atom_id) {
+        Ok(chain) => mcp_text_result(id, serde_json::to_string_pretty(&chain).unwrap_or_default()),
+        Err(err) => mcp_error(id, -32000, format!("Provenance lookup failed: {}", err)),
     }
 }
 
@@ -5740,6 +5962,14 @@ mod tests {
         (store, atom_id)
     }
 
+    fn mcp_text(response: &str) -> String {
+        let value: serde_json::Value = serde_json::from_str(response).unwrap();
+        value["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
     #[test]
     fn test_atom_type_parsing() {
         assert_eq!(parse_atom_type("fact").unwrap(), AtomType::FACT);
@@ -5929,6 +6159,10 @@ mod tests {
         }
 
         assert!(names.contains(&"query"));
+        assert!(names.contains(&"compile_query_contract"));
+        assert!(names.contains(&"validate_query_contract"));
+        assert!(names.contains(&"explain_answer_graph"));
+        assert!(names.contains(&"get_provenance_path"));
         assert!(names.contains(&"search_lex"));
         assert!(names.contains(&"search_graph"));
         assert!(names.contains(&"search_semantic"));
@@ -5957,7 +6191,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 29);
+        assert_eq!(names.len(), 33);
     }
 
     #[cfg(feature = "mcp")]
@@ -5991,9 +6225,55 @@ mod tests {
         })
         .to_string();
         let query_response = process_mcp_request(&mut store, &query_request).await;
-        assert!(query_response.contains("selected_ctx="));
-        assert!(query_response.contains("graph_nodes="));
+        let query_text = mcp_text(&query_response);
+        let query_value: serde_json::Value = serde_json::from_str(&query_text).unwrap();
+        assert!(query_value.get("selected_ctx").is_some());
+        assert!(query_value.get("graph").is_some());
         assert!(!query_response.contains("Query executed"));
+
+        let compile_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "compile_query_contract",
+                "arguments": {"query_text": "Explain MemoryX MCP"}
+            }
+        })
+        .to_string();
+        let compile_response = process_mcp_request(&mut store, &compile_request).await;
+        let contract_text = mcp_text(&compile_response);
+        assert!(contract_text.contains("\"intent\": \"explain\""));
+
+        let contract_value: serde_json::Value = serde_json::from_str(&contract_text).unwrap();
+
+        let validate_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "validate_query_contract",
+                "arguments": {"contract": contract_value}
+            }
+        })
+        .to_string();
+        let validate_response = process_mcp_request(&mut store, &validate_request).await;
+        assert!(mcp_text(&validate_response).contains("\"valid\":true"));
+
+        let explain_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "explain_answer_graph",
+                "arguments": {"query_text": "Explain MemoryX MCP", "ctx_id": 0}
+            }
+        })
+        .to_string();
+        let explain_response = process_mcp_request(&mut store, &explain_request).await;
+        let explain_text = mcp_text(&explain_response);
+        assert!(explain_text.contains("\"coverage_report\""));
+        assert!(explain_text.contains("\"snapshot\""));
     }
 
     #[cfg(feature = "mcp")]
@@ -6025,6 +6305,23 @@ mod tests {
 
         let atom_id = store.list_atom_ids().into_iter().next().unwrap();
         let atom_node = store.get_node_num(&atom_id).unwrap();
+
+        let provenance_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "get_provenance_path",
+                "arguments": {
+                    "atom_id": atom_id_to_hex(&atom_id)
+                }
+            }
+        })
+        .to_string();
+        let provenance_response = process_mcp_request(&mut store, &provenance_request).await;
+        let provenance_text = mcp_text(&provenance_response);
+        assert!(provenance_text.contains("\"root_atom_id\""));
+        assert!(provenance_text.contains("\"overall_trust\""));
 
         let register_source_request = serde_json::json!({
             "jsonrpc": "2.0",

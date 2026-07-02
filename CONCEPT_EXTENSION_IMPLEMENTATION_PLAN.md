@@ -903,6 +903,23 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### J2. MCP для QueryContract и AnswerPack
 
+Статус: реализовано.
+
+Результат:
+
+- MCP `query` теперь принимает `query_text`/legacy `question` или строгий
+  `contract` object и возвращает AnswerPack-shaped JSON payload.
+- Добавлены MCP tools:
+  `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`,
+  `get_provenance_path`.
+- `compile_query_contract` отдаёт редактируемый `QueryContract`.
+- `validate_query_contract` проверяет contract без выполнения.
+- `explain_answer_graph` возвращает status, snapshot, graph summary, coverage,
+  trace и rejected candidates.
+- `get_provenance_path` возвращает сериализованный proof-grade
+  `ProvenanceChain` для atom id.
+- `tools/list` содержит однозначные descriptions и examples для новых tools.
+
 Файлы:
 
 - `src/bin/memoryx.rs`

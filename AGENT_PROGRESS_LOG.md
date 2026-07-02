@@ -641,3 +641,23 @@ Verification:
 - `cargo run --quiet -- query --help`
 - `cargo run --quiet -- --format json query --emit-contract "Explain MemoryX MCP"`
 - `cargo run --quiet -- --base-scope project --base-name j1-contract-test --format json query --contract <temp-contract.json>`
+
+## 2026-07-02: QueryContract MCP surface
+
+Done:
+
+- Updated MCP `query` to accept `query_text`/legacy `question` or strict
+  `contract` input and return an AnswerPack-shaped JSON payload.
+- Added MCP tools:
+  `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`,
+  `get_provenance_path`.
+- Added descriptions and examples for all new MCP tools.
+- Added MCP regression coverage for tool list, compile/validate/explain flow,
+  and provenance lookup on a real atom.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
