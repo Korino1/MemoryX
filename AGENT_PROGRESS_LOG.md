@@ -185,6 +185,19 @@ Verification reported by auditor:
 - `cargo +nightly test --all-targets --all-features --quiet`
 - `cargo +nightly clippy --all-targets --all-features -- -D warnings`
 
+## 2026-07-02: Audit remediation gate added to plans
+
+Done:
+
+- Updated `CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md`.
+- Added Phase 0 / Milestone 0:
+  audit remediation baseline before further feature development.
+- Updated `ORCHESTRATION_PLAN.md`.
+- Added stop rule:
+  no feature work depending on unresolved P0/P1 baseline findings.
+- P0 blockers now explicitly precede extension work:
+  MCP stdio stdout pollution and hardcoded federation `BaseId`.
+
 ## Open State
 
 Known dirty working tree at hook creation time:

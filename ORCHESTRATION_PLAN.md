@@ -91,6 +91,43 @@
 - Local-first storage: project scope или user scope.
 - Portable CPU build по умолчанию, native/Zen4 только явный локальный режим.
 
+## 2.1 Audit remediation gate
+
+Источник gate: `SKF_README_CONFORMANCE_AUDIT_2026-07-02.md`.
+
+До дальнейшего развития расширенного концепта все агенты обязаны считать audit findings приоритетом выше feature work.
+
+Блокеры P0:
+
+- MCP stdio stdout pollution.
+- Hardcoded federation `BaseId`.
+
+P1 baseline tasks:
+
+- Per-claim proof provenance/status in `AnswerPack` or explicit README limitation.
+- `QueryContractCompiler`/`ConstraintEvaluator` integration through public `MemoryX::answer_contract`.
+- ANN/semantic solver path either implemented or README-scoped honestly.
+- Federation discovery upgraded or README-scoped honestly.
+- `examples/mcp_server_full.rs` parity claim fixed by code or README wording.
+
+P2 operational tasks:
+
+- Public check/repair/rebuild direction in CLI/docs.
+
+Правило остановки:
+
+```text
+Если задача не закрывает audit finding и зависит от ещё неисправленного P0/P1 baseline,
+её нельзя брать в работу до закрытия соответствующего finding.
+```
+
+Модельная маршрутизация:
+
+- P0 fixes: `gpt-5.4` high или `gpt-5.5` review gate после реализации.
+- P1 integration: `gpt-5.4` medium/high.
+- README limitation wording и простые tests: `gpt-5.4-mini` medium.
+- Финальный audit повторить через auditor subagent после закрытия P0/P1.
+
 ## 3. Роли агентов
 
 ### CodeGraph Context Rule

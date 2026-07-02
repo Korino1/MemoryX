@@ -79,7 +79,68 @@ renderer explains
 ```text
 если новая возможность конфликтует с этим списком, менять надо новую возможность, а не ядро MemoryX.
 ```
-## 3. Фаза A: QueryContract и алгебра условий
+## 3. Фаза 0: Audit Remediation Gate
+
+Источник: `SKF_README_CONFORMANCE_AUDIT_2026-07-02.md`
+
+Эта фаза имеет приоритет выше всех последующих фаз расширения. Дальнейшая разработка `QueryContract`, AnswerPack V2, MCP authoring, federation discovery и Codex extension должна идти только поверх исправленного baseline.
+
+Правило:
+
+```text
+сначала закрыть найденные несоответствия SKF/README,
+потом развивать новые возможности поверх исправленного ядра.
+```
+
+### 0.1 P0 fixes
+
+Обязательные блокеры перед продолжением feature development:
+
+- Исправить MCP stdio transport:
+  stdout должен содержать только JSON-RPC/MCP frames; human-readable output только stderr или suppressed.
+- Исправить federation `BaseId`:
+  убрать hardcoded id, добавить stable per-base identity, persist/reopen semantics и tests.
+
+Критерий готовности:
+
+- Есть regression tests на чистый stdio MCP output.
+- Две разные базы получают разные `BaseId`.
+- Повторное открытие одной базы сохраняет тот же `BaseId`.
+- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features --quiet`.
+
+### 0.2 P1 baseline correctness fixes
+
+Исправить или честно сузить README claims:
+
+- `AnswerPack` должен иметь per-claim proof provenance/status или README должен явно говорить, что это ещё partial.
+- `QueryContractCompiler`/`ConstraintEvaluator` должны быть подключены к публичному `MemoryX::answer_contract`, а затем к MCP query path.
+- ANN/semantic retrieval:
+  либо подключить semantic/HNSW candidate stage к live solver path, либо сузить README claim до standalone semantic search API.
+- Federation discovery:
+  расширить до atom/mapping-aware discovery или отметить lexical discovery как partial.
+- `examples/mcp_server_full.rs`:
+  либо сделать real store-backed parity, либо переписать README формулировку как interface example.
+
+Критерий готовности:
+
+- Все P1 findings из audit либо закрыты кодом+тестами, либо отражены в README как ограничения pre-1.0.
+- Не допускается оставлять README stronger than code.
+
+### 0.3 P2 operational surface
+
+После P0/P1:
+
+- Добавить или запланировать public `check/repair/rebuild` CLI surface.
+- Решить, нужны ли MCP read-only integrity tools.
+- Описать repair/rebuild boundaries в README.
+
+### 0.4 Запрет на обход gate
+
+До закрытия этой фазы нельзя считать проект "полностью готовым" или "production complete".
+
+Новые возможности допускаются только если они непосредственно закрывают audit findings или не затрагивают runtime claims.
+
+## 4. Фаза A: QueryContract и алгебра условий
 
 ### A1. Добавить модуль query contract
 
@@ -165,7 +226,7 @@ pub struct QueryContract {
 
 - Появляется публичный API для query через строгий контракт, а старый query path продолжает работать.
 
-## 4. Фаза B: универсальная модель знания
+## 5. Фаза B: универсальная модель знания
 
 ### B1. Source model
 
@@ -244,7 +305,7 @@ pub struct QueryContract {
 
 - Пользователь/агент может создавать и править знания не вручную через низкоуровневые atoms, а через entity/claim/relation API.
 
-## 5. Фаза C: constraint evaluation engine
+## 6. Фаза C: constraint evaluation engine
 
 ### C1. Явный engine проверки условий
 
@@ -307,7 +368,7 @@ pub struct QueryContract {
 
 - Конфликт в данных отражается в `AnswerPack.conflicts` и/или `AnswerPack.alternatives`, а не скрывается.
 
-## 6. Фаза D: расширенный AnswerPack
+## 7. Фаза D: расширенный AnswerPack
 
 ### D1. AnswerStatus
 
@@ -406,7 +467,7 @@ weighted_covered_required_gaps / weighted_total_required_gaps
 
 - LLM/renderer может объяснять, но не может незаметно создавать неподдержанный factual claim.
 
-## 7. Фаза E: federation of retrieval channels
+## 8. Фаза E: federation of retrieval channels
 
 ### E1. Общий trait retriever
 
@@ -485,7 +546,7 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 - Solver выбирает следующий retrieval action по ожидаемой полезности, а не по фиксированному порядку.
 
-## 8. Фаза F: доказательный AnswerGraph
+## 9. Фаза F: доказательный AnswerGraph
 
 ### F1. Типизация узлов и рёбер AnswerGraph
 
@@ -523,7 +584,7 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 - Выбранный `AnswerGraph` можно объяснить через cost breakdown.
 
-## 9. Фаза G: authoring API и MCP операции
+## 10. Фаза G: authoring API и MCP операции
 
 ### G1. Автоматический ingestion pipeline
 
@@ -584,7 +645,7 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 - Агент через MCP может не только искать, но и нормально вести базу знаний.
 
-## 10. Фаза H: LLM boundary
+## 11. Фаза H: LLM boundary
 
 ### H1. Контракт внешней LLM
 
@@ -604,7 +665,7 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 - Любая LLM-интеграция подключается только как proposer/renderer, не как source of truth.
 
-## 11. Фаза I: snapshot, reproducibility и масштабирование
+## 12. Фаза I: snapshot, reproducibility и масштабирование
 
 ### I1. Snapshot identity в AnswerPack
 
@@ -662,7 +723,7 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 - Federation работает как расширение knowledge fabric, а не как обмен ответами.
 
-## 12. Фаза J: CLI, MCP, docs
+## 13. Фаза J: CLI, MCP, docs
 
 ### J1. CLI для QueryContract
 
@@ -723,7 +784,7 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 - Новый пользователь понимает, что MemoryX не vector DB и не обычный RAG.
 
-## 13. Фаза K: tests, benchmarks, acceptance
+## 14. Фаза K: tests, benchmarks, acceptance
 
 ### K1. Golden scenarios
 
@@ -780,7 +841,24 @@ cargo build --release --features mcp
 
 - Все команды проходят без warnings/errors.
 
-## 14. Рекомендуемый порядок выполнения
+## 15. Рекомендуемый порядок выполнения
+
+### Milestone 0: Audit remediation baseline
+
+1. Fix P0 MCP stdio stdout pollution.
+2. Fix P0 persistent unique federation `BaseId`.
+3. Fix or document P1 AnswerPack proof provenance/status gap.
+4. Connect `QueryContractCompiler`/`ConstraintEvaluator` through `MemoryX::answer_contract`.
+5. Fix or document P1 ANN live solver path limitation.
+6. Fix or document P1 federation discovery limitation.
+7. Fix README/example MCP parity overclaim.
+8. Add initial public check/repair/rebuild direction.
+
+Результат:
+
+- README не обещает больше, чем реально делает код.
+- Baseline SKF/README несоответствия закрыты или явно помечены как pre-1.0 limitations.
+- Новая разработка идёт поверх исправленного ядра, а не поверх известных дыр.
 
 ### Milestone 1: Public contract core
 
@@ -852,7 +930,7 @@ cargo build --release --features mcp
 
 - Проект готов как публичная local-first knowledge fabric, а не только как исследовательский движок.
 
-## 15. Риски и решения
+## 16. Риски и решения
 
 ### Риск 1. Слишком большой breaking change
 
@@ -892,7 +970,7 @@ cargo build --release --features mcp
 - Потом adaptive tuning.
 - Все решения planner логировать в `QueryTrace`.
 
-## 16. Definition of Done для расширения
+## 17. Definition of Done для расширения
 
 Расширение можно считать реализованным, когда выполнены условия:
 
@@ -908,4 +986,3 @@ cargo build --release --features mcp
 - MCP поддерживает contract query, proof answer и authoring operations.
 - Есть regression tests на constraints, conflicts, provenance, partial answers, unsupported facts и reproducibility.
 - `cargo fmt`, `cargo clippy -D warnings`, `cargo test`, release build проходят без warnings/errors.
-
