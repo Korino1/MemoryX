@@ -869,6 +869,21 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### J1. CLI для QueryContract
 
+Статус: реализовано.
+
+Результат:
+
+- `memoryx query --contract <contract.json|yaml>` выполняет строгий
+  `QueryContract` через `MemoryX::answer_contract`.
+- `memoryx query --emit-contract "natural query"` печатает редактируемый
+  `QueryContract` без открытия/изменения базы.
+- `--format json|yaml` для query выдаёт структурированный AnswerPack view:
+  status, snapshot, graph summary, claims, claims_v2, evidence,
+  evidence_records, coverage, rejected candidates, conflicts, trace,
+  proposed_text и alternates.
+- `--include-trace` и `--explain-rejections` добавлены для table-output.
+- Structured query output больше не загрязняется stdout diagnostic строками.
+
 Файлы:
 
 - `src/bin/memoryx.rs`

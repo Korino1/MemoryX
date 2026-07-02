@@ -42,6 +42,7 @@ use memoryx::cas::AtomBodyHeader;
 use memoryx::cas::claims::ClaimRecord;
 use memoryx::ingest::{ExtractorIdentity, IngestExtractor};
 use memoryx::prelude::*;
+use memoryx::query::{QueryContract, QueryContractCompiler};
 #[cfg(feature = "mcp")]
 use memoryx::store::api::QueryFilters;
 use memoryx::store::api::{BatchAtom, EvidenceRef, MemoryX, StoreConfig, StoreError};
@@ -150,8 +151,24 @@ enum Commands {
         base: Option<PathBuf>,
 
         /// Query string
-        #[arg(required = true)]
-        query: String,
+        #[arg(required_unless_present = "contract")]
+        query: Option<String>,
+
+        /// Execute a strict QueryContract from JSON/YAML file
+        #[arg(long)]
+        contract: Option<PathBuf>,
+
+        /// Compile the natural query into QueryContract and print it without execution
+        #[arg(long)]
+        emit_contract: bool,
+
+        /// Include retrieval/action trace in human-readable output
+        #[arg(long)]
+        include_trace: bool,
+
+        /// Explain candidates rejected by hard QueryContract constraints
+        #[arg(long)]
+        explain_rejections: bool,
 
         /// Context policy ID
         #[arg(short = 'p', long, default_value = "0")]
@@ -2109,64 +2126,86 @@ fn create_minimal_atom_body(atom_type: AtomType, claims: &[ClaimData]) -> Vec<u8
 }
 
 /// Execute a query
-fn cmd_query(
-    base: &Path,
-    query: &str,
+struct QueryCliOptions<'a> {
+    base: &'a Path,
+    query: Option<&'a str>,
+    contract_path: Option<&'a Path>,
+    emit_contract: bool,
     ctx_policy: u32,
     _limit: Option<usize>,
     _min_trust: Option<u16>,
+    include_trace: bool,
+    explain_rejections: bool,
     format: OutputFormat,
-) -> CliResult<()> {
+}
+
+fn cmd_query(options: QueryCliOptions<'_>) -> CliResult<()> {
     let start = Instant::now();
 
+    if options.contract_path.is_some() && options.query.is_some() {
+        return Err(CliError::Validation(
+            "use either a natural query or --contract, not both".to_string(),
+        ));
+    }
+
+    if options.contract_path.is_none() && options.query.is_none() {
+        return Err(CliError::Validation(
+            "query text or --contract is required".to_string(),
+        ));
+    }
+
+    let (contract, query_label) = if let Some(path) = options.contract_path {
+        let contract = read_query_contract(path)?;
+        contract
+            .validate()
+            .map_err(|e| CliError::Validation(e.to_string()))?;
+        (contract, format!("contract:{}", path.display()))
+    } else {
+        let query_text = options.query.unwrap_or_default();
+        let contract = QueryContractCompiler::compile_contract(query_text);
+        (contract, query_text.to_string())
+    };
+
+    if options.emit_contract {
+        if options.contract_path.is_some() {
+            return Err(CliError::Validation(
+                "--emit-contract requires natural query text, not --contract".to_string(),
+            ));
+        }
+        print_serialized(&contract, options.format)?;
+        return Ok(());
+    }
+
     // Open store
-    let config = StoreConfig::new(base.to_path_buf());
+    let config = StoreConfig::new(options.base.to_path_buf());
     let store = MemoryX::new(config)
         .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
 
-    print_info(&format!("Executing query: '{}'", query));
+    if matches!(options.format, OutputFormat::Table) {
+        print_info(&format!("Executing query: '{}'", query_label));
+    }
 
     // Execute query
     let answer = store
-        .answer(query, ctx_policy)
+        .answer_contract(contract, options.ctx_policy)
         .map_err(|e| CliError::Store(format!("Query failed: {}", e)))?;
 
     let elapsed = start.elapsed();
 
     // Format and output results
-    match format {
+    match options.format {
         OutputFormat::Json => {
-            let result = serde_json::json!({
-                "query": query,
-                "confidence": answer.confidence,
-                "context_id": answer.selected_ctx,
-                "claims_count": answer.claims.len(),
-                "evidence_count": answer.evidence.len(),
-                "limitations": answer.limitations.iter().map(|l| {
-                    serde_json::json!({
-                        "code": format!("{:?}", l.code),
-                        "description": l.description,
-                        "severity": format!("{:?}", l.severity),
-                    })
-                }).collect::<Vec<_>>(),
-                "elapsed_ms": elapsed.as_millis(),
-            });
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&answer_pack_json(&answer))?
+            );
         }
         OutputFormat::Yaml => {
-            let result = serde_json::json!({
-                "query": query,
-                "confidence": answer.confidence,
-                "context_id": answer.selected_ctx,
-                "claims_count": answer.claims.len(),
-                "evidence_count": answer.evidence.len(),
-                "elapsed_ms": elapsed.as_millis(),
-            });
-            println!("{}", serde_yaml::to_string(&result)?);
+            println!("{}", serde_yaml::to_string(&answer_pack_json(&answer))?);
         }
         OutputFormat::Table => {
             println!("\n{}", "Query Results".bold().underline());
-            println!("  Query:      {}", query.cyan());
+            println!("  Query:      {}", query_label.cyan());
             println!(
                 "  Confidence: {:.1}%",
                 (answer.confidence * 100.0).to_string().yellow()
@@ -2197,10 +2236,76 @@ fn cmd_query(
                     );
                 }
             }
+
+            if options.include_trace && !answer.query_trace.retrieval_actions.is_empty() {
+                println!("\n{}", "Query Trace:".bold());
+                for action in &answer.query_trace.retrieval_actions {
+                    println!(
+                        "  gap={} utility={:.4} selected={} reason={}",
+                        action.gap_id, action.utility, action.selected, action.reason
+                    );
+                }
+            }
+
+            if options.explain_rejections && !answer.rejected_candidates.is_empty() {
+                println!("\n{}", "Rejected Candidates:".red().bold());
+                for rejected in &answer.rejected_candidates {
+                    let atom = rejected
+                        .atom_id
+                        .as_ref()
+                        .map(memoryx::cas::hex_encode)
+                        .unwrap_or_else(|| "none".to_string());
+                    println!(
+                        "  atom={} backend={} reason={}",
+                        atom, rejected.source_backend, rejected.reason
+                    );
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+fn read_query_contract(path: &Path) -> CliResult<QueryContract> {
+    let data = std::fs::read_to_string(path)?;
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("yaml" | "yml") => Ok(serde_yaml::from_str(&data)?),
+        _ => Ok(serde_json::from_str(&data)?),
+    }
+}
+
+fn answer_pack_json(answer: &memoryx::store::api::AnswerPack) -> serde_json::Value {
+    serde_json::json!({
+        "status": format!("{:?}", answer.status),
+        "selected_ctx": answer.selected_ctx,
+        "confidence": answer.confidence,
+        "snapshot": answer.snapshot,
+        "graph": {
+            "ctx_id": answer.graph.ctx_id,
+            "node_count": answer.graph.node_count(),
+            "edge_count": answer.graph.edge_count(),
+            "branch_lineage": answer.graph.branch_lineage,
+        },
+        "claims": answer.claims,
+        "claims_v2": answer.claims_v2,
+        "evidence": answer.evidence,
+        "evidence_records": answer.evidence_records,
+        "coverage_report": answer.coverage_report,
+        "rejected_candidates": answer.rejected_candidates,
+        "limitations": answer.limitations.iter().map(|l| {
+            serde_json::json!({
+                "code": format!("{:?}", l.code),
+                "description": l.description,
+                "severity": format!("{:?}", l.severity),
+            })
+        }).collect::<Vec<_>>(),
+        "alternates": answer.alternates.iter().map(answer_pack_json).collect::<Vec<_>>(),
+        "conflicts": answer.conflicts,
+        "conflict_sets": answer.conflict_sets,
+        "query_trace": answer.query_trace,
+        "proposed_text": answer.proposed_text,
+    })
 }
 
 /// Run compaction
@@ -5427,6 +5532,10 @@ fn main() {
         Commands::Query {
             base,
             query,
+            contract,
+            emit_contract,
+            include_trace,
+            explain_rejections,
             ctx_policy,
             limit,
             min_trust,
@@ -5437,14 +5546,18 @@ fn main() {
             &config,
         )
         .and_then(|resolved| {
-            cmd_query(
-                &resolved,
-                query.as_str(),
-                *ctx_policy,
-                *limit,
-                *min_trust,
-                cli.format,
-            )
+            cmd_query(QueryCliOptions {
+                base: &resolved,
+                query: query.as_deref(),
+                contract_path: contract.as_deref(),
+                emit_contract: *emit_contract,
+                ctx_policy: *ctx_policy,
+                _limit: *limit,
+                _min_trust: *min_trust,
+                include_trace: *include_trace,
+                explain_rejections: *explain_rejections,
+                format: cli.format,
+            })
         }),
         Commands::Compact {
             base,

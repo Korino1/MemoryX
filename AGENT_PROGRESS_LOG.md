@@ -617,3 +617,27 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: QueryContract CLI
+
+Done:
+
+- Added `memoryx query --contract <file>` for strict JSON/YAML `QueryContract`
+  execution through `MemoryX::answer_contract`.
+- Added `memoryx query --emit-contract "natural query"` for compile-only
+  editable contracts.
+- Added `--include-trace` and `--explain-rejections` for human-readable output.
+- Changed structured query output to emit an AnswerPack-shaped JSON/YAML view
+  instead of a lossy summary.
+- Prevented query diagnostics from polluting JSON/YAML stdout.
+- Made legacy `ClaimView` serializable so structured answer output can include
+  both `claims` and `claims_v2`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- query --help`
+- `cargo run --quiet -- --format json query --emit-contract "Explain MemoryX MCP"`
+- `cargo run --quiet -- --base-scope project --base-name j1-contract-test --format json query --contract <temp-contract.json>`

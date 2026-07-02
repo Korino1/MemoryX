@@ -1568,7 +1568,7 @@ pub struct AuthoringResult {
 // ============================================================================
 
 /// Claim view for query results
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaimView {
     pub subj: EntityRef,
     pub pred: SymId,
