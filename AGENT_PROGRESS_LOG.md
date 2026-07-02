@@ -245,3 +245,30 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Durable operation history
+
+Done:
+
+- Added per-base append-only operation history at `meta/history.log`.
+- Added public store API:
+  `HistoryOperation`, `HistoryEntry`, `MemoryX::history(limit)`.
+- Write/admin operations now record durable history:
+  `ingest`, successful `batch_ingest`, `update_atom`, `delete_atom`,
+  `rebuild_indexes`, and `repair`.
+- Preserved existing concept semantics:
+  update still creates a new atom and `SUPERSEDES`;
+  delete still creates a tombstone and does not physically erase atom content.
+- Added CLI command:
+  `memoryx history --base <base> --limit <N>`.
+- Added MCP tool:
+  `history` for newest-first recent operation history.
+- Updated `examples/mcp_server_full.rs` and `README.md` for the 16-tool MCP surface.
+- Added regression coverage for persistence/reopen/limit and MCP history access.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

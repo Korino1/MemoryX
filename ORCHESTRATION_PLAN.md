@@ -87,6 +87,7 @@
 - Минимальный доказательный `AnswerGraph`.
 - Федерация баз на claims/provenance/metadata, а не обмен готовыми текстами.
 - Устойчивость к повреждениям: CAS integrity, Merkle/integrity checks, CRDT, WAL/snapshot, repair/rebuild.
+- История действий базы: update через `SUPERSEDES`, delete через tombstone, append-only history log и получение последних N действий.
 - MCP как полноценный управляющий слой базы.
 - Local-first storage: project scope или user scope.
 - Portable CPU build по умолчанию, native/Zen4 только явный локальный режим.

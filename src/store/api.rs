@@ -18,18 +18,20 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::cas::canonical::compute_atom_id_from_payload;
 use crate::cas::io as cas_io;
 use crate::cas::{
-    claims::ClaimsSection, symbols::SymbolsSection, AtomBodyHeader, CasError, SectionDesc,
+    AtomBodyHeader, CasError, SectionDesc, claims::ClaimsSection, symbols::SymbolsSection,
 };
 use crate::graph::GraphStore;
 use crate::index::{IdLocBuilder, IdLocIndex, InvertedIndex, Location};
@@ -55,6 +57,13 @@ use crate::query::router::{BackendKind, Candidate};
 // ============================================================================
 // Term Extraction (SKF-1.1 Section 3)
 // ============================================================================
+
+fn current_unix_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
 
 /// Extract terms from atom payload for lexical indexing.
 ///
@@ -189,8 +198,7 @@ fn extract_terms_from_payload(payload: &[u8]) -> Vec<String> {
                         ]);
                         if let Some(obj_str) = syms.get(obj_local) {
                             let normalized: String =
-                                unicode_normalization::UnicodeNormalization::nfc(obj_str)
-                                    .collect();
+                                unicode_normalization::UnicodeNormalization::nfc(obj_str).collect();
                             if !normalized.is_empty() && !terms.contains(&normalized) {
                                 terms.push(normalized);
                             }
@@ -514,7 +522,9 @@ impl EntityRef {
 /// Evidence kind for provenance chain (SKF-1.1 Section 10.1)
 ///
 /// Classification of how evidence was obtained or derived.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum EvidenceKind {
     /// Citation from literature/source
     CITATION,
@@ -1255,6 +1265,51 @@ impl DeleteResult {
 }
 
 // ============================================================================
+// Operation History
+// ============================================================================
+
+/// Durable user-visible operation kind for the per-base history log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryOperation {
+    Ingest,
+    BatchIngest,
+    UpdateAtom,
+    DeleteAtom,
+    RebuildIndexes,
+    Repair,
+}
+
+/// Append-only history entry stored as one JSON object per line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    /// Monotonic enough wall-clock timestamp in Unix nanoseconds.
+    pub timestamp_unix_ns: u64,
+    /// Operation that changed durable base state.
+    pub operation: HistoryOperation,
+    /// Atom ids directly created, updated, tombstoned, or otherwise affected.
+    pub atom_ids: Vec<String>,
+    /// Additional operation-specific metadata.
+    pub details: HashMap<String, String>,
+}
+
+impl HistoryEntry {
+    /// Create a new history entry using the current system clock.
+    pub fn new(
+        operation: HistoryOperation,
+        atom_ids: Vec<String>,
+        details: HashMap<String, String>,
+    ) -> Self {
+        HistoryEntry {
+            timestamp_unix_ns: current_unix_ns(),
+            operation,
+            atom_ids,
+            details,
+        }
+    }
+}
+
+// ============================================================================
 // Claim View
 // ============================================================================
 
@@ -1831,6 +1886,12 @@ impl StoreConfig {
     pub fn meta_dir(&self) -> PathBuf {
         self.root_path.join("meta")
     }
+
+    /// Get append-only operation history log path.
+    #[inline]
+    pub fn history_path(&self) -> PathBuf {
+        self.meta_dir().join("history.log")
+    }
 }
 
 impl Default for StoreConfig {
@@ -2315,7 +2376,6 @@ impl CtxManager {
 
         ctx_index
     }
-
 
     /// Deactivate a context
     #[inline]
@@ -3820,7 +3880,12 @@ impl LocationIndex {
     /// Check if atom is deleted
     #[inline]
     pub fn is_deleted(&self, atom_id: &AtomId) -> bool {
-        self.deleted_atoms.contains(atom_id) || self.atom_to_location.get(atom_id).map(|location| location.deleted).unwrap_or(false)
+        self.deleted_atoms.contains(atom_id)
+            || self
+                .atom_to_location
+                .get(atom_id)
+                .map(|location| location.deleted)
+                .unwrap_or(false)
     }
 
     /// Persist the location index and its durable idloc companion.
@@ -3995,9 +4060,7 @@ impl TermIndex {
         fs::create_dir_all(&index_path).map_err(StoreError::from)?;
         let mut index =
             InvertedIndex::new(&index_path).map_err(|e| StoreError::Index(e.to_string()))?;
-        index
-            .load()
-            .map_err(|e| StoreError::Index(e.to_string()))?;
+        index.load().map_err(|e| StoreError::Index(e.to_string()))?;
         Ok(TermIndex { index })
     }
 
@@ -4164,7 +4227,9 @@ impl MetaStore {
                 let node_num = self
                     .node_to_atom
                     .iter()
-                    .find_map(|(node_num, mapped_atom)| (*mapped_atom == *atom_id).then_some(*node_num))
+                    .find_map(|(node_num, mapped_atom)| {
+                        (*mapped_atom == *atom_id).then_some(*node_num)
+                    })
                     .unwrap_or(u64::MAX);
                 (*atom_id, node_num, meta.clone())
             })
@@ -4219,8 +4284,13 @@ impl MetaStore {
             let mut atom_id = [0u8; 32];
             atom_id.copy_from_slice(&record[0..32]);
             let node_num = u64::from_le_bytes(record[32..40].try_into().unwrap());
-            let atom_type = AtomType::from_u32(u32::from_le_bytes(record[40..44].try_into().unwrap()))
-                .ok_or_else(|| StoreError::InvalidAtomType(u32::from_le_bytes(record[40..44].try_into().unwrap())))?;
+            let atom_type =
+                AtomType::from_u32(u32::from_le_bytes(record[40..44].try_into().unwrap()))
+                    .ok_or_else(|| {
+                        StoreError::InvalidAtomType(u32::from_le_bytes(
+                            record[40..44].try_into().unwrap(),
+                        ))
+                    })?;
             let created_at_ns = u64::from_le_bytes(record[44..52].try_into().unwrap());
             let trust_level = u16::from_le_bytes(record[52..54].try_into().unwrap());
             let domain_mask = u64::from_le_bytes(record[54..62].try_into().unwrap());
@@ -4404,6 +4474,60 @@ impl MemoryX {
         self.save()
     }
 
+    fn record_history(
+        &self,
+        operation: HistoryOperation,
+        atom_ids: Vec<String>,
+        details: HashMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let history_path = self.config.history_path();
+        if let Some(parent) = history_path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+
+        let entry = HistoryEntry::new(operation, atom_ids, details);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_path)
+            .map_err(StoreError::from)?;
+        serde_json::to_writer(&mut file, &entry).map_err(|err| StoreError::Io(err.to_string()))?;
+        file.write_all(b"\n").map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_data().map_err(StoreError::from)?;
+        Ok(())
+    }
+
+    /// Return recent durable operation history entries, newest first.
+    pub fn history(&self, limit: usize) -> Result<Vec<HistoryEntry>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let history_path = self.config.history_path();
+        if !history_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(history_path).map_err(StoreError::from)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line.map_err(StoreError::from)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: HistoryEntry =
+                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
+            entries.push(entry);
+        }
+
+        entries.reverse();
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
     /// Ingest a new atom into the store
     ///
     /// # Arguments
@@ -4484,6 +4608,16 @@ impl MemoryX {
 
         // Register node -> atom mapping for reverse lookup
         self.meta.register_node(node_num, atom_id);
+
+        let mut details = HashMap::new();
+        details.insert("atom_type".to_string(), format!("{atom_type:?}"));
+        details.insert("claim_count".to_string(), claims.len().to_string());
+        details.insert("evidence_count".to_string(), evidence.len().to_string());
+        self.record_history(
+            HistoryOperation::Ingest,
+            vec![crate::cas::hex_encode(&atom_id)],
+            details,
+        )?;
 
         self.flush()?;
         Ok(atom_id)
@@ -4602,6 +4736,20 @@ impl MemoryX {
             .save()
             .map_err(|e| StoreError::Index(e.to_string()))?;
         self.term_index = TermIndex { index: rebuilt };
+        let mut details = HashMap::new();
+        details.insert(
+            "indexed_atoms".to_string(),
+            report.indexed_atoms.to_string(),
+        );
+        details.insert(
+            "indexed_terms".to_string(),
+            report.indexed_terms.to_string(),
+        );
+        details.insert(
+            "skipped_atoms".to_string(),
+            report.skipped_atoms.to_string(),
+        );
+        self.record_history(HistoryOperation::RebuildIndexes, Vec::new(), details)?;
         self.flush()?;
         Ok(report)
     }
@@ -4611,6 +4759,15 @@ impl MemoryX {
         let before = self.verify_integrity()?;
         let rebuild = self.rebuild_indexes()?;
         let after = self.verify_integrity()?;
+        let mut details = HashMap::new();
+        details.insert("before_valid".to_string(), before.valid_atoms.to_string());
+        details.insert(
+            "before_invalid".to_string(),
+            before.invalid_atoms.to_string(),
+        );
+        details.insert("after_valid".to_string(), after.valid_atoms.to_string());
+        details.insert("after_invalid".to_string(), after.invalid_atoms.to_string());
+        self.record_history(HistoryOperation::Repair, Vec::new(), details)?;
         Ok(RepairReport {
             before,
             rebuild,
@@ -5759,7 +5916,7 @@ impl MemoryX {
         // Coalesce I/O: merge nearby offsets within same segment
         // Gap threshold: 64KB as per SKF-1.1 §10.1
         let _coalesce_gap: u64 = 64 * 1024;
-        for (_seg_id, entries) in coalesced_segments.iter_mut() {
+        for entries in coalesced_segments.values_mut() {
             // Sort by offset for coalescing
             entries.sort_by_key(|(_id, offset, _len)| *offset);
 
@@ -5778,6 +5935,18 @@ impl MemoryX {
 
             // Log coalescing efficiency (in production, use metrics)
             // Coalescing ratio = merged_count / total_entries
+        }
+
+        if !atom_ids.is_empty() {
+            let mut details = HashMap::new();
+            details.insert("total".to_string(), total.to_string());
+            details.insert("success_count".to_string(), atom_ids.len().to_string());
+            details.insert("error_count".to_string(), errors.len().to_string());
+            self.record_history(
+                HistoryOperation::BatchIngest,
+                atom_ids.iter().map(crate::cas::hex_encode).collect(),
+                details,
+            )?;
         }
 
         self.flush()?;
@@ -5901,6 +6070,23 @@ impl MemoryX {
 
         // Step 6: Return both old and new atom IDs
         // Old atom is PRESERVED for history (not deleted)
+        let mut details = HashMap::new();
+        details.insert("new_atom_type".to_string(), format!("{new_atom_type:?}"));
+        details.insert("claim_count".to_string(), new_claims.len().to_string());
+        details.insert("evidence_count".to_string(), new_evidence.len().to_string());
+        details.insert(
+            "supersedes".to_string(),
+            crate::cas::hex_encode(&old_atom_id),
+        );
+        self.record_history(
+            HistoryOperation::UpdateAtom,
+            vec![
+                crate::cas::hex_encode(&new_atom_id),
+                crate::cas::hex_encode(&old_atom_id),
+            ],
+            details,
+        )?;
+
         self.flush()?;
         Ok(UpdateResult::new(new_atom_id, old_atom_id))
     }
@@ -5995,6 +6181,21 @@ impl MemoryX {
         // Enforced by LocationIndex.get_location() checking deleted_atoms set
         // and by filter_invariants() checking trust_level > 0
         // Step 5: Return tombstone confirmation
+        let mut details = HashMap::new();
+        details.insert("reason".to_string(), format!("{reason:?}"));
+        details.insert(
+            "tombstone_id".to_string(),
+            crate::cas::hex_encode(&tombstone_id),
+        );
+        self.record_history(
+            HistoryOperation::DeleteAtom,
+            vec![
+                crate::cas::hex_encode(&atom_id),
+                crate::cas::hex_encode(&tombstone_id),
+            ],
+            details,
+        )?;
+
         self.flush()?;
         Ok(DeleteResult::new(true, tombstone_id))
     }
@@ -6379,17 +6580,21 @@ mod tests {
     #[test]
     fn test_store_config_project_default_path() {
         let config = StoreConfig::project_default();
-        assert!(config.root_path.ends_with(
-            PathBuf::from(".memoryx").join("bases").join("default")
-        ));
+        assert!(
+            config
+                .root_path
+                .ends_with(PathBuf::from(".memoryx").join("bases").join("default"))
+        );
     }
 
     #[test]
     fn test_store_config_user_default_path() {
         let config = StoreConfig::user_default();
-        assert!(config.root_path.ends_with(
-            PathBuf::from(".memoryx").join("bases").join("default")
-        ));
+        assert!(
+            config
+                .root_path
+                .ends_with(PathBuf::from(".memoryx").join("bases").join("default"))
+        );
     }
 
     #[test]
@@ -6490,8 +6695,10 @@ mod tests {
         if let Some(ctx) = ctx_manager.get_ctx_mut(parent_ctx) {
             ctx.active_claims
                 .insert(11, ActiveClaim::new(keep_atom, keep_claim.clone()));
-            ctx.active_claims
-                .insert(22, ActiveClaim::new(conflict_atom, conflicting_claim.clone()));
+            ctx.active_claims.insert(
+                22,
+                ActiveClaim::new(conflict_atom, conflicting_claim.clone()),
+            );
         } else {
             panic!("Parent context should exist");
         }
@@ -6510,7 +6717,10 @@ mod tests {
         let branched = ctx_manager.get_ctx(branch_ctx).expect("branch must exist");
 
         assert!(
-            branched.active_claims.values().any(|claim| claim.atom_id == keep_atom),
+            branched
+                .active_claims
+                .values()
+                .any(|claim| claim.atom_id == keep_atom),
             "Branch must keep the non-conflicting incumbent claim"
         );
         assert!(
@@ -6926,6 +7136,65 @@ mod tests {
     }
 
     #[test]
+    fn test_history_persists_write_operations_newest_first() {
+        let test_dir = PathBuf::from("./test_history");
+        let _ = std::fs::remove_dir_all(&test_dir);
+        let config = StoreConfig::new(test_dir);
+        let history_path = config.history_path();
+        let mut store = MemoryX::new(config.clone()).unwrap();
+
+        let first_claim = ClaimData {
+            subj: 1,
+            pred: 2,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 3,
+            qualifiers_mask: 0,
+        };
+        let first_payload =
+            build_full_test_payload_with_claim(AtomType::FACT, Some(first_claim.clone()));
+        let first_atom = store
+            .ingest(&first_payload, AtomType::FACT, &[first_claim], &[])
+            .unwrap();
+
+        let second_claim = ClaimData {
+            subj: 4,
+            pred: 5,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 6,
+            qualifiers_mask: 0,
+        };
+        let second_payload =
+            build_full_test_payload_with_claim(AtomType::FACT, Some(second_claim.clone()));
+        let update = store
+            .update_atom(
+                first_atom,
+                second_payload,
+                AtomType::FACT,
+                vec![second_claim],
+                vec![],
+            )
+            .unwrap();
+
+        store
+            .delete_atom(update.new_atom_id, DeleteReason::Obsolete)
+            .unwrap();
+
+        assert!(history_path.exists());
+
+        let reopened = MemoryX::new(config).unwrap();
+        let entries = reopened.history(2).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].operation, HistoryOperation::DeleteAtom);
+        assert_eq!(entries[1].operation, HistoryOperation::UpdateAtom);
+        assert!(
+            entries[1]
+                .details
+                .get("supersedes")
+                .is_some_and(|id| id == &crate::cas::hex_encode(&first_atom))
+        );
+    }
+
+    #[test]
     fn test_delete_atom_not_found() {
         let config = StoreConfig::new(PathBuf::from("./test_delete_not_found"));
         let mut store = MemoryX::new(config).unwrap();
@@ -7193,7 +7462,10 @@ mod tests {
         assert!(!live_after_delete.contains(&atom_a));
         assert!(live_after_delete.contains(&atom_b));
         assert!(live_after_delete.contains(&delete_result.tombstone_id));
-        assert!(matches!(store.get_atom(&atom_a), Err(StoreError::AtomNotFound(_))));
+        assert!(matches!(
+            store.get_atom(&atom_a),
+            Err(StoreError::AtomNotFound(_))
+        ));
         assert_eq!(store.get_atom_payload(&atom_b).unwrap(), payload_b);
     }
 
@@ -8320,18 +8592,24 @@ mod tests {
         );
         assert_eq!(reopened.get_node_num(&tombstone_id), Some(tombstone_node));
         assert!(reopened.loc_index.get_location(&tombstone_id).is_some());
-        assert!(reopened
-            .graph
-            .has_edge(tombstone_node, victim_node, EdgeType::TOMBSTONE_LINK));
+        assert!(
+            reopened
+                .graph
+                .has_edge(tombstone_node, victim_node, EdgeType::TOMBSTONE_LINK)
+        );
         assert_eq!(reopened.embedding_count(), 1);
 
         let semantic = reopened.search_semantic(&[1.0f32, 0.0, 0.0, 0.0], None);
         assert!(
-            semantic.iter().any(|candidate| candidate.atom_id == live_atom_id),
+            semantic
+                .iter()
+                .any(|candidate| candidate.atom_id == live_atom_id),
             "Live atom should survive restart in ANN path"
         );
         assert!(
-            semantic.iter().all(|candidate| candidate.atom_id != victim_atom_id),
+            semantic
+                .iter()
+                .all(|candidate| candidate.atom_id != victim_atom_id),
             "Deleted atom should be filtered after restart"
         );
 

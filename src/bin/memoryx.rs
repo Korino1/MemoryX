@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 use csv::{ReaderBuilder, WriterBuilder};
@@ -238,6 +238,17 @@ enum Commands {
         /// MemoryX base path or base name
         #[arg(short, long)]
         base: Option<PathBuf>,
+    },
+
+    /// Show recent durable write-operation history
+    History {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// Maximum number of newest entries to return
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
     },
 
     /// Start MCP server
@@ -647,12 +658,10 @@ fn atom_id_to_hex(atom_id: &AtomId) -> String {
 
 /// Parse atom ID from hex string
 fn hex_to_atom_id(hex: &str) -> CliResult<AtomId> {
-    let bytes = hex::decode(hex)
-        .map_err(|e| CliError::Validation(format!("Invalid hex: {}", e)))?;
+    let bytes =
+        hex::decode(hex).map_err(|e| CliError::Validation(format!("Invalid hex: {}", e)))?;
     if bytes.len() != 32 {
-        return Err(CliError::Validation(
-            "Atom ID must be 32 bytes".to_string(),
-        ));
+        return Err(CliError::Validation("Atom ID must be 32 bytes".to_string()));
     }
     let mut atom_id = [0u8; 32];
     atom_id.copy_from_slice(&bytes);
@@ -709,13 +718,14 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 fn parse_section_kind(raw: &str) -> CliResult<SectionKind> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(CliError::Validation("Section kind cannot be empty".to_string()));
+        return Err(CliError::Validation(
+            "Section kind cannot be empty".to_string(),
+        ));
     }
 
     if let Ok(value) = trimmed.parse::<u32>() {
-        return SectionKind::from_u32(value).ok_or_else(|| {
-            CliError::Validation(format!("Unsupported section kind: {}", value))
-        });
+        return SectionKind::from_u32(value)
+            .ok_or_else(|| CliError::Validation(format!("Unsupported section kind: {}", value)));
     }
 
     match trimmed.to_ascii_uppercase().as_str() {
@@ -813,9 +823,9 @@ fn parse_csv_rows(content: &str) -> CliResult<Vec<AtomExport>> {
             CliError::Validation(format!("CSV row {} is missing atom_type", index))
         })?;
         let atom_type = parse_atom_type(&atom_type_raw)?;
-        let subject = row.subject.ok_or_else(|| {
-            CliError::Validation(format!("CSV row {} is missing subject", index))
-        })?;
+        let subject = row
+            .subject
+            .ok_or_else(|| CliError::Validation(format!("CSV row {} is missing subject", index)))?;
         let predicate = row.predicate.ok_or_else(|| {
             CliError::Validation(format!("CSV row {} is missing predicate", index))
         })?;
@@ -828,11 +838,8 @@ fn parse_csv_rows(content: &str) -> CliResult<Vec<AtomExport>> {
 
         let mut evidence = evidence_json;
         if let Some(atom_id) = normalize_optional_string(row.evidence_atom_id.clone()) {
-            let section_kind = parse_section_kind(
-                row.evidence_section_kind
-                    .as_deref()
-                    .unwrap_or("EVIDENCE"),
-            )?;
+            let section_kind =
+                parse_section_kind(row.evidence_section_kind.as_deref().unwrap_or("EVIDENCE"))?;
             let offset = row.evidence_offset.ok_or_else(|| {
                 CliError::Validation(format!("CSV row {} is missing evidence_offset", index))
             })?;
@@ -859,8 +866,8 @@ fn parse_csv_rows(content: &str) -> CliResult<Vec<AtomExport>> {
             qualifiers,
         };
 
-        let key = normalize_optional_string(row.id.clone())
-            .unwrap_or_else(|| format!("__row_{}", index));
+        let key =
+            normalize_optional_string(row.id.clone()).unwrap_or_else(|| format!("__row_{}", index));
 
         let entry = grouped.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
@@ -913,7 +920,7 @@ fn parse_csv_rows(content: &str) -> CliResult<Vec<AtomExport>> {
                 return Err(CliError::Validation(format!(
                     "CSV row {} has incomplete metadata fields",
                     index
-                )))
+                )));
             }
         };
 
@@ -961,7 +968,10 @@ fn parse_csv_rows(content: &str) -> CliResult<Vec<AtomExport>> {
     let mut atoms = Vec::with_capacity(order.len());
     for key in order {
         let entry = grouped.remove(&key).ok_or_else(|| {
-            CliError::Validation(format!("CSV atom group '{}' disappeared during parsing", key))
+            CliError::Validation(format!(
+                "CSV atom group '{}' disappeared during parsing",
+                key
+            ))
         })?;
         atoms.push(AtomExport {
             id: entry.id,
@@ -1049,7 +1059,10 @@ fn write_csv_atoms(atoms: &[AtomExport]) -> CliResult<String> {
     String::from_utf8(bytes).map_err(|e| CliError::Parse(e.to_string()))
 }
 
-fn parse_atom_exports_from_content(format: ExportFormat, content: &str) -> CliResult<Vec<AtomExport>> {
+fn parse_atom_exports_from_content(
+    format: ExportFormat,
+    content: &str,
+) -> CliResult<Vec<AtomExport>> {
     match format {
         ExportFormat::Json | ExportFormat::Ndjson => {
             if content.trim().starts_with('[') {
@@ -1068,7 +1081,10 @@ fn parse_atom_exports_from_content(format: ExportFormat, content: &str) -> CliRe
     }
 }
 
-fn build_batch_atoms_from_exports(atoms: Vec<AtomExport>, skip_validation: bool) -> CliResult<Vec<BatchAtom>> {
+fn build_batch_atoms_from_exports(
+    atoms: Vec<AtomExport>,
+    skip_validation: bool,
+) -> CliResult<Vec<BatchAtom>> {
     atoms
         .into_iter()
         .map(|atom| {
@@ -1114,7 +1130,10 @@ fn build_batch_atoms_from_exports(atoms: Vec<AtomExport>, skip_validation: bool)
 }
 
 fn atom_matches_export_filter(atom: &AtomExport, filter: Option<&str>) -> bool {
-    let Some(filter) = filter.map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+    let Some(filter) = filter
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
         return true;
     };
 
@@ -1133,38 +1152,33 @@ fn atom_matches_export_filter(atom: &AtomExport, filter: Option<&str>) -> bool {
         return true;
     }
 
-    if atom
-        .claims
-        .iter()
-        .any(|claim| {
-            format!(
-                "{}:{}:{}:{}",
-                claim.subject, claim.predicate, claim.object_tag, claim.object_value
-            )
-            .to_ascii_lowercase()
-            .contains(&filter)
-        })
-    {
+    if atom.claims.iter().any(|claim| {
+        format!(
+            "{}:{}:{}:{}",
+            claim.subject, claim.predicate, claim.object_tag, claim.object_value
+        )
+        .to_ascii_lowercase()
+        .contains(&filter)
+    }) {
         return true;
     }
 
-    if atom
-        .evidence
-        .iter()
-        .any(|evidence| {
-            format!(
-                "{}:{}:{}:{}:{}",
-                evidence.atom_id, evidence.section_kind, evidence.offset, evidence.length, evidence.trust
-            )
-            .to_ascii_lowercase()
-            .contains(&filter)
-        })
-    {
+    if atom.evidence.iter().any(|evidence| {
+        format!(
+            "{}:{}:{}:{}:{}",
+            evidence.atom_id,
+            evidence.section_kind,
+            evidence.offset,
+            evidence.length,
+            evidence.trust
+        )
+        .to_ascii_lowercase()
+        .contains(&filter)
+    }) {
         return true;
     }
 
-    atom
-        .metadata
+    atom.metadata
         .as_ref()
         .map(|metadata| {
             format!(
@@ -1180,14 +1194,26 @@ fn atom_matches_export_filter(atom: &AtomExport, filter: Option<&str>) -> bool {
 fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomExport> {
     use memoryx::cas::claims::ClaimsSection;
 
-    let payload = store
-        .get_atom_payload(atom_id)
-        .map_err(|e| CliError::Store(format!("Failed to load payload for atom {}: {}", atom_id_to_hex(atom_id), e)))?;
-    let body_header = AtomBodyHeader::from_bytes(&payload)
-        .map_err(|e| CliError::Validation(format!("Invalid atom payload for {}: {}", atom_id_to_hex(atom_id), e)))?;
-    let atom_type = body_header
-        .atom_type()
-        .ok_or_else(|| CliError::Validation(format!("Payload for atom {} has an unsupported atom_type", atom_id_to_hex(atom_id))))?;
+    let payload = store.get_atom_payload(atom_id).map_err(|e| {
+        CliError::Store(format!(
+            "Failed to load payload for atom {}: {}",
+            atom_id_to_hex(atom_id),
+            e
+        ))
+    })?;
+    let body_header = AtomBodyHeader::from_bytes(&payload).map_err(|e| {
+        CliError::Validation(format!(
+            "Invalid atom payload for {}: {}",
+            atom_id_to_hex(atom_id),
+            e
+        ))
+    })?;
+    let atom_type = body_header.atom_type().ok_or_else(|| {
+        CliError::Validation(format!(
+            "Payload for atom {} has an unsupported atom_type",
+            atom_id_to_hex(atom_id)
+        ))
+    })?;
 
     let claim_to_export = |record: &ClaimRecord| -> CliResult<ClaimExport> {
         let object_value = match record.object_tag {
@@ -1195,7 +1221,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             ObjTag::BOOL => record.object_value.first().copied().unwrap_or(0) as u64,
             ObjTag::I64 => {
                 if record.object_value.len() != 8 {
-                    return Err(CliError::Validation("Invalid I64 claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid I64 claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&record.object_value[..8]);
@@ -1203,7 +1231,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             }
             ObjTag::U64 => {
                 if record.object_value.len() != 8 {
-                    return Err(CliError::Validation("Invalid U64 claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid U64 claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&record.object_value[..8]);
@@ -1211,7 +1241,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             }
             ObjTag::F64 => {
                 if record.object_value.len() != 8 {
-                    return Err(CliError::Validation("Invalid F64 claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid F64 claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&record.object_value[..8]);
@@ -1219,7 +1251,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             }
             ObjTag::BYTES => {
                 if record.object_value.len() < 4 {
-                    return Err(CliError::Validation("Invalid BYTES claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid BYTES claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 4];
                 bytes.copy_from_slice(&record.object_value[..4]);
@@ -1227,7 +1261,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             }
             ObjTag::SYM => {
                 if record.object_value.len() != 4 {
-                    return Err(CliError::Validation("Invalid SYM claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid SYM claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 4];
                 bytes.copy_from_slice(&record.object_value[..4]);
@@ -1235,7 +1271,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             }
             ObjTag::REF => {
                 if record.object_value.len() != 32 {
-                    return Err(CliError::Validation("Invalid REF claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid REF claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&record.object_value[..8]);
@@ -1243,7 +1281,9 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
             }
             ObjTag::NODENUM => {
                 if record.object_value.len() != 8 {
-                    return Err(CliError::Validation("Invalid NODENUM claim payload length".to_string()));
+                    return Err(CliError::Validation(
+                        "Invalid NODENUM claim payload length".to_string(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&record.object_value[..8]);
@@ -1281,17 +1321,19 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
     for i in 0..section_count {
         let section_offset = section_table_start + i * memoryx::cas::SectionDesc::SIZE;
         let section_desc = memoryx::cas::SectionDesc::from_bytes(&payload[section_offset..])
-            .map_err(|e| CliError::Validation(format!(
-                "Invalid section descriptor in atom {}: {}",
-                atom_id_to_hex(atom_id),
-                e
-            )))?;
-        let section_kind = section_desc
-            .kind()
-            .ok_or_else(|| CliError::Validation(format!(
+            .map_err(|e| {
+                CliError::Validation(format!(
+                    "Invalid section descriptor in atom {}: {}",
+                    atom_id_to_hex(atom_id),
+                    e
+                ))
+            })?;
+        let section_kind = section_desc.kind().ok_or_else(|| {
+            CliError::Validation(format!(
                 "Atom {} contains an unsupported section kind",
                 atom_id_to_hex(atom_id)
-            )))?;
+            ))
+        })?;
         let sec_start = section_desc.off as usize;
         let sec_len = section_desc.len as usize;
         if sec_start + sec_len > payload.len() {
@@ -1300,12 +1342,16 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
 
         match section_kind {
             memoryx::cas::SectionKind::CLAIMS => {
-                let claims_section = ClaimsSection::from_bytes(&payload[sec_start..sec_start + sec_len])
-                    .map_err(|e| CliError::Validation(format!(
+                let claims_section = ClaimsSection::from_bytes(
+                    &payload[sec_start..sec_start + sec_len],
+                )
+                .map_err(|e| {
+                    CliError::Validation(format!(
                         "Invalid claims section in atom {}: {}",
                         atom_id_to_hex(atom_id),
                         e
-                    )))?;
+                    ))
+                })?;
                 claims = claims_section
                     .claims
                     .iter()
@@ -1313,7 +1359,8 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
                     .collect::<CliResult<Vec<_>>>()?;
             }
             memoryx::cas::SectionKind::META if sec_len >= 14 => {
-                metadata.trust_level = u16::from_le_bytes([payload[sec_start], payload[sec_start + 1]]);
+                metadata.trust_level =
+                    u16::from_le_bytes([payload[sec_start], payload[sec_start + 1]]);
                 metadata.domain_mask = u64::from_le_bytes([
                     payload[sec_start + 2],
                     payload[sec_start + 3],
@@ -1335,9 +1382,13 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
         }
     }
 
-    let evidence_refs = store
-        .get_provenance_legacy(atom_id)
-        .map_err(|e| CliError::Store(format!("Failed to load provenance for atom {}: {}", atom_id_to_hex(atom_id), e)))?;
+    let evidence_refs = store.get_provenance_legacy(atom_id).map_err(|e| {
+        CliError::Store(format!(
+            "Failed to load provenance for atom {}: {}",
+            atom_id_to_hex(atom_id),
+            e
+        ))
+    })?;
 
     Ok(AtomExport {
         id: Some(atom_id_to_hex(atom_id)),
@@ -1619,7 +1670,11 @@ fn cmd_ingest(
         let content = std::fs::read_to_string(file)?;
 
         // Parse based on file extension
-        let atoms: Vec<AtomExport> = if file.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
+        let atoms: Vec<AtomExport> = if file
+            .extension()
+            .map(|e| e == "yaml" || e == "yml")
+            .unwrap_or(false)
+        {
             serde_yaml::from_str(&content)?
         } else {
             serde_json::from_str(&content)?
@@ -1938,14 +1993,16 @@ fn cmd_compact(base: &Path, compaction_type: CompactionType, dry_run: bool) -> C
                     }
 
                     let target_id = source_ids.iter().max().copied().unwrap_or(0) + 1;
-                    let records_compacted = cas_store.compact(&source_ids, target_id)
+                    let records_compacted = cas_store
+                        .compact(&source_ids, target_id)
                         .map_err(|e| CliError::Store(format!("Compact failed: {}", e)))?;
 
                     // Delete old segments
                     if records_compacted > 0 {
                         let compactor = Compactor::new(&cas_dir, None);
-                        compactor.delete_segments(&source_ids)
-                            .map_err(|e| CliError::Store(format!("Failed to delete segments: {}", e)))?;
+                        compactor.delete_segments(&source_ids).map_err(|e| {
+                            CliError::Store(format!("Failed to delete segments: {}", e))
+                        })?;
                     }
 
                     pb.finish_and_clear();
@@ -1986,28 +2043,32 @@ fn cmd_compact(base: &Path, compaction_type: CompactionType, dry_run: bool) -> C
     // Compact GraphStore
     if matches!(compaction_type, CompactionType::All | CompactionType::Graph) {
         let graph_dir = base.join("graph");
-        if graph_dir.exists() && let Ok(mut graph) = GraphStore::load(&graph_dir) {
-                let before_edges = graph.edge_count();
-                let before_delta = graph.delta_count();
+        if graph_dir.exists()
+            && let Ok(mut graph) = GraphStore::load(&graph_dir)
+        {
+            let before_edges = graph.edge_count();
+            let before_delta = graph.delta_count();
 
-                if dry_run {
-                    print_info(&format!(
-                        "Would compact graph: {} edges, {} delta layers",
-                        before_edges, before_delta
-                    ));
-                } else if graph.needs_compaction() {
-                    print_info("Compacting graph...");
-                    graph.compact()
-                        .map_err(|e| CliError::Store(format!("Graph compact failed: {}", e)))?;
+            if dry_run {
+                print_info(&format!(
+                    "Would compact graph: {} edges, {} delta layers",
+                    before_edges, before_delta
+                ));
+            } else if graph.needs_compaction() {
+                print_info("Compacting graph...");
+                graph
+                    .compact()
+                    .map_err(|e| CliError::Store(format!("Graph compact failed: {}", e)))?;
 
-                    let after_delta = graph.delta_count();
-                    print_success(&format!(
-                        "Graph compacted: {} delta layers remained ({} edges total)",
-                        after_delta, graph.edge_count()
-                    ));
-                } else {
-                    print_info("Graph does not need compaction (no delta layers)");
-                }
+                let after_delta = graph.delta_count();
+                print_success(&format!(
+                    "Graph compacted: {} delta layers remained ({} edges total)",
+                    after_delta,
+                    graph.edge_count()
+                ));
+            } else {
+                print_info("Graph does not need compaction (no delta layers)");
+            }
         }
     }
 
@@ -2100,7 +2161,12 @@ fn cmd_export(
 }
 
 /// Import data
-fn cmd_import(base: &Path, format: ExportFormat, input: &Path, skip_validation: bool) -> CliResult<()> {
+fn cmd_import(
+    base: &Path,
+    format: ExportFormat,
+    input: &Path,
+    skip_validation: bool,
+) -> CliResult<()> {
     print_info(&format!("Importing data from '{}'", input.display()));
 
     // Open store
@@ -2148,8 +2214,7 @@ fn cmd_import(base: &Path, format: ExportFormat, input: &Path, skip_validation: 
 /// Show statistics
 fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()> {
     use memoryx::cas::io::{
-        CasStore as CasIoStore,
-        SEGMENT_PREFIX, SEGMENT_EXTENSION, INDEX_EXTENSION,
+        CasStore as CasIoStore, INDEX_EXTENSION, SEGMENT_EXTENSION, SEGMENT_PREFIX,
     };
     use memoryx::graph::GraphStore;
 
@@ -2165,36 +2230,38 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
     let mut seg_total_size = 0u64;
     let mut total_records = 0u32;
 
-        if cas_dir.exists() && let Ok(cas_store) = CasIoStore::open(&cas_dir, None) {
-            cas_store.init_reader().unwrap();
+    if cas_dir.exists()
+        && let Ok(cas_store) = CasIoStore::open(&cas_dir, None)
+    {
+        cas_store.init_reader().unwrap();
 
-            for entry in std::fs::read_dir(&cas_dir)
-                .map_err(CliError::Io)?
-                .filter_map(|e| e.ok())
-            {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(SEGMENT_PREFIX) && name.ends_with(SEGMENT_EXTENSION) {
-                    seg_count += 1;
-                    seg_total_size += entry.metadata().map(|m| m.len()).unwrap_or(0);
-                }
-            }
-
-            // Count records via index files
-            for entry in std::fs::read_dir(&cas_dir)
-                .map_err(CliError::Io)?
-                .filter_map(|e| e.ok())
-            {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(SEGMENT_PREFIX)
-                    && name.ends_with(INDEX_EXTENSION)
-                    && let Ok(data) = std::fs::read(entry.path())
-                    && data.len() >= 12
-                {
-                    let entry_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
-                    total_records += entry_count;
-                }
+        for entry in std::fs::read_dir(&cas_dir)
+            .map_err(CliError::Io)?
+            .filter_map(|e| e.ok())
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(SEGMENT_PREFIX) && name.ends_with(SEGMENT_EXTENSION) {
+                seg_count += 1;
+                seg_total_size += entry.metadata().map(|m| m.len()).unwrap_or(0);
             }
         }
+
+        // Count records via index files
+        for entry in std::fs::read_dir(&cas_dir)
+            .map_err(CliError::Io)?
+            .filter_map(|e| e.ok())
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(SEGMENT_PREFIX)
+                && name.ends_with(INDEX_EXTENSION)
+                && let Ok(data) = std::fs::read(entry.path())
+                && data.len() >= 12
+            {
+                let entry_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+                total_records += entry_count;
+            }
+        }
+    }
 
     // --- Index files ---
     let mut idx_count = 0usize;
@@ -2218,7 +2285,9 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
     let mut edge_count: u64 = 0;
     let mut delta_layers: usize = 0;
 
-    if graph_dir.exists() && let Ok(graph) = GraphStore::load(&graph_dir) {
+    if graph_dir.exists()
+        && let Ok(graph) = GraphStore::load(&graph_dir)
+    {
         node_count = graph.node_count();
         edge_count = graph.edge_count();
         delta_layers = graph.delta_count();
@@ -2301,11 +2370,22 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
         OutputFormat::Table => {
             println!("\n{}", "Storage Statistics".bold().underline());
             println!("  Base Directory:  {}", base.display().to_string().cyan());
-            println!("  CAS Segments:    {} files ({} bytes)", seg_count, format_bytes(seg_total_size).yellow());
-            println!("  Index Files:     {} files ({} bytes)", idx_count, format_bytes(idx_total_size));
+            println!(
+                "  CAS Segments:    {} files ({} bytes)",
+                seg_count,
+                format_bytes(seg_total_size).yellow()
+            );
+            println!(
+                "  Index Files:     {} files ({} bytes)",
+                idx_count,
+                format_bytes(idx_total_size)
+            );
             println!("  Index Entries:   {}", total_records);
             println!("  Graph Nodes:     {}", node_count.to_string().green());
-            println!("  Graph Edges:     {}", stats.graph_edges.to_string().green());
+            println!(
+                "  Graph Edges:     {}",
+                stats.graph_edges.to_string().green()
+            );
             println!("  Delta Layers:    {}", delta_layers);
             println!("  Meta Snapshots:  {}", snapshot_count);
             println!("  Meta WAL Files:  {}", wal_count);
@@ -2313,10 +2393,21 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
 
             if detailed {
                 println!("\n{}", "Storage Breakdown:".bold());
-                println!("  CAS Data:      {} bytes ({} files)", seg_total_size, seg_count);
-                println!("  Index Data:    {} bytes ({} files)", idx_total_size, idx_count);
-                println!("  Meta Data:     {} bytes ({} files)", meta_size, snapshot_count + wal_count);
-                println!("  Graph Data:    {} bytes", 
+                println!(
+                    "  CAS Data:      {} bytes ({} files)",
+                    seg_total_size, seg_count
+                );
+                println!(
+                    "  Index Data:    {} bytes ({} files)",
+                    idx_total_size, idx_count
+                );
+                println!(
+                    "  Meta Data:     {} bytes ({} files)",
+                    meta_size,
+                    snapshot_count + wal_count
+                );
+                println!(
+                    "  Graph Data:    {} bytes",
                     if graph_dir.exists() {
                         walkdir::WalkDir::new(&graph_dir)
                             .into_iter()
@@ -2324,7 +2415,9 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
                             .filter(|e| e.file_type().is_file())
                             .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
                             .sum::<u64>()
-                    } else { 0 }
+                    } else {
+                        0
+                    }
                 );
             }
         }
@@ -2465,6 +2558,34 @@ fn cmd_repair(base: &Path, format: OutputFormat) -> CliResult<()> {
     }
 }
 
+fn cmd_history(base: &Path, limit: usize, format: OutputFormat) -> CliResult<()> {
+    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
+    let entries = store.history(limit)?;
+
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        print_serialized(&entries, format)?;
+    } else {
+        println!("\n{}", "Operation History".bold().underline());
+        println!("  Base:    {}", base.display().to_string().cyan());
+        println!("  Entries: {}", entries.len());
+
+        for (idx, entry) in entries.iter().enumerate() {
+            println!(
+                "\n[{}] {:?} @ {}",
+                idx, entry.operation, entry.timestamp_unix_ns
+            );
+            if !entry.atom_ids.is_empty() {
+                println!("  Atom IDs: {}", entry.atom_ids.join(", "));
+            }
+            for (key, value) in &entry.details {
+                println!("  {}: {}", key, value);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Start MCP server
 #[cfg(feature = "mcp")]
 fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
@@ -2602,212 +2723,367 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                     }
                 }),
                 "tools/list" => serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "tools": [
-                            {
-                                "name": "query",
-                                "description": "Query the knowledge base",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": { "question": { "type": "string" } },
-                                    "required": ["question"]
-                                }
-                            },
-                            {
-                                "name": "search_lex",
-                                "description": "Search by lexicon terms using the real inverted index",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "term": { "type": "string" },
-                                        "min_trust": { "type": "integer" },
-                                        "domain_mask": { "type": "integer" }
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "tools": [
+                                    {
+                                        "name": "query",
+                                        "description": "Run the fixed-point solver against the active or selected context and return the answer graph for one natural-language question.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "question": { "type": "string" },
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "required": ["question"],
+                                            "examples": [
+                                                {
+                                                    "question": "What decisions mention MemoryX persistence?",
+                                                    "ctx_id": 0
+                                                }
+                                            ]
+                                        }
                                     },
-                                    "required": ["term"]
-                                }
-                            },
-                    {
-                        "name": "search_graph",
-                        "description": "Search graph by pattern matching",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "pattern": { "type": "string" },
-                                "limit": { "type": "integer" }
-                            },
-                            "required": ["pattern"]
-                        }
-                    },
-                    {
-                        "name": "search_semantic",
-                        "description": "Semantic ANN search through the embedding index",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "vector": {
-                                    "type": "array",
-                                    "items": { "type": "number" }
-                                },
-                                "min_trust": { "type": "integer" },
-                                "domain_mask": { "type": "integer" }
-                            },
-                            "required": ["vector"]
-                        }
-                    },
-                    {
-                        "name": "ingest",
-                        "description": "Ingest a single knowledge atom",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "atom_type": { "type": "string" },
-                                "claims": { "type": "array" },
-                                "symbols": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                },
-                                "trust_level": { "type": "integer" },
-                                "domain_mask": { "type": "integer" }
-                            },
-                            "required": ["atom_type", "claims"]
-                        }
-                    },
-                    {
-                        "name": "batch_ingest",
-                        "description": "Batch ingest multiple atoms",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "atoms": { "type": "array" }
-                            },
-                            "required": ["atoms"]
-                        }
-                    },
-                    {
-                        "name": "update_atom",
-                        "description": "Update an atom (creates new version, marks old as superseded)",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "atom_id": { "type": "string" },
-                                "atom_type": { "type": "string" },
-                                "claims": { "type": "array" },
-                                "symbols": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                }
-                            },
-                            "required": ["atom_id", "atom_type", "claims"]
-                        }
-                    },
-                    {
-                        "name": "delete_atom",
-                        "description": "Delete an atom (creates tombstone)",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "atom_id": { "type": "string" },
-                                "reason": { "type": "string" }
-                            },
-                            "required": ["atom_id"]
-                        }
-                    },
-                    {
-                        "name": "create_context",
-                        "description": "Create a real MemoryX context",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "policy_id": { "type": "integer" }
-                            }
-                        }
-                    },
-                    {
-                        "name": "list_contexts",
-                        "description": "List all contexts",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {}
-                        }
-                    },
-                    {
-                        "name": "branch_context",
-                        "description": "Branch an existing context",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "parent_ctx": { "type": "integer" },
-                                "reason": { "type": "string" },
-                                "policy_id": { "type": "integer" }
-                            },
-                            "required": ["parent_ctx"]
-                        }
-                    },
-                    {
-                        "name": "list_conflicts",
-                        "description": "List real conflicts for a context",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "ctx_id": { "type": "integer" }
-                            }
-                        }
-                    },
-                    {
-                        "name": "graph_neighbors",
-                        "description": "Get neighbors of a graph node",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "node_num": { "type": "integer" },
-                                "edge_types": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                }
-                            },
-                            "required": ["node_num"]
-                        }
-                    },
-                    {
-                        "name": "graph_walk",
-                        "description": "Walk the real knowledge graph from seed nodes",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "seed_nodes": {
-                                    "type": "array",
-                                    "items": { "type": "integer" }
-                                },
-                                "edge_types": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                },
-                                "depth": { "type": "integer" }
-                            },
-                            "required": ["seed_nodes"]
-                        }
-                    },
-                    {
-                        "name": "extract_subgraph",
-                        "description": "Extract subgraph around center node",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "center_node": { "type": "integer" },
-                                "radius": { "type": "integer" },
-                                "edge_types": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                }
-                            },
-                            "required": ["center_node"]
-                        }
+                                    {
+                                        "name": "search_lex",
+                                        "description": "Return atoms whose indexed terms match the requested lexical term using the inverted index; this is exact term lookup, not semantic ranking.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "term": { "type": "string" },
+                                                "min_trust": { "type": "integer" },
+                                                "domain_mask": { "type": "integer" }
+                                            },
+                                            "required": ["term"],
+                                            "examples": [
+                                                {
+                                                    "term": "memoryx",
+                                                    "min_trust": 1000,
+                                                    "domain_mask": 65535
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "search_graph",
+                                        "description": "Match graph edges against the literal pattern 'src -> EDGE_TYPE -> dst', where either node id or the edge type can be '*' as a wildcard.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "pattern": { "type": "string" },
+                                                "limit": { "type": "integer" }
+                                            },
+                                            "required": ["pattern"],
+                                            "examples": [
+                                                {
+                                                    "pattern": "42 -> DEPENDS_ON -> *",
+                                                    "limit": 10
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "search_semantic",
+                                        "description": "Perform ANN vector search over embeddings and return nearest atoms filtered by trust or domain mask; this is vector retrieval, not keyword lookup.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "vector": {
+                                                    "type": "array",
+                                                    "items": { "type": "number" }
+                                                },
+                                                "min_trust": { "type": "integer" },
+                                                "domain_mask": { "type": "integer" }
+                                            },
+                                            "required": ["vector"],
+                                            "examples": [
+                                                {
+                                                    "vector": [0.12, -0.44, 0.88],
+                                                    "min_trust": 1000,
+                                                    "domain_mask": 65535
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "ingest",
+                                        "description": "Create one atom from claim tuples and write it to the current base; each claim must use numeric fields {subj, pred, obj_tag, obj_val, qualifiers_mask}.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_type": { "type": "string" },
+                                                "claims": { "type": "array" },
+                                                "symbols": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                },
+                                                "trust_level": { "type": "integer" },
+                                                "domain_mask": { "type": "integer" }
+                                            },
+                                            "required": ["atom_type", "claims"],
+                                            "examples": [
+                                                {
+                                                    "atom_type": "FACT",
+                                                    "claims": [
+                                                        {
+                                                            "subj": 1,
+                                                            "pred": 2,
+                                                            "obj_tag": 0,
+                                                            "obj_val": 3,
+                                                            "qualifiers_mask": 0
+                                                        }
+                                                    ],
+                                                    "symbols": ["memoryx", "persistence"],
+                                                    "trust_level": 5000,
+                                                    "domain_mask": 65535
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "batch_ingest",
+                                        "description": "Create multiple atoms in one call; each batch item uses the same payload shape as ingest and becomes a separate stored atom.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atoms": { "type": "array" }
+                                            },
+                                            "required": ["atoms"],
+                                            "examples": [
+                                                {
+                                                    "atoms": [
+                                                        {
+                                                            "atom_type": "FACT",
+                                                            "claims": [
+                                                                {
+                                                                    "subj": 1,
+                                                                    "pred": 2,
+                                                                    "obj_tag": 0,
+                                                                    "obj_val": 3,
+                                                                    "qualifiers_mask": 0
+                                                                }
+                                                            ],
+                                                            "symbols": ["memoryx"]
+                                                        },
+                                                        {
+                                                            "atom_type": "DECISION",
+                                                            "claims": [
+                                                                {
+                                                                    "subj": 4,
+                                                                    "pred": 5,
+                                                                    "obj_tag": 0,
+                                                                    "obj_val": 6,
+                                                                    "qualifiers_mask": 0
+                                                                }
+                                                            ],
+                                                            "symbols": ["global", "projects"]
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "update_atom",
+                                        "description": "Create a new version of an existing atom id and preserve the old version as superseded provenance.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_id": { "type": "string" },
+                                                "atom_type": { "type": "string" },
+                                                "claims": { "type": "array" },
+                                                "symbols": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                }
+                                            },
+                                            "required": ["atom_id", "atom_type", "claims"],
+                                            "examples": [
+                                                {
+                                                    "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                                    "atom_type": "DECISION",
+                                                    "claims": [
+                                                        {
+                                                            "subj": 1,
+                                                            "pred": 2,
+                                                            "obj_tag": 0,
+                                                            "obj_val": 7,
+                                                            "qualifiers_mask": 0
+                                                        }
+                                                    ],
+                                                    "symbols": ["memoryx", "mcp"]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "delete_atom",
+                                        "description": "Create a tombstone for the given atom id and preserve deletion provenance instead of physically erasing the atom.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_id": { "type": "string" },
+                                                "reason": { "type": "string" }
+                                            },
+                                            "required": ["atom_id"],
+                                            "examples": [
+                                                {
+                                                    "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                                    "reason": "Superseded by a later decision"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "history",
+                                        "description": "Return newest-first durable write-operation history from the active base; use this to inspect recent ingest, update, delete, repair, and rebuild actions.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "limit": { "type": "integer" }
+                                            },
+                                            "examples": [
+                                                {
+                                                    "limit": 20
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "create_context",
+                                        "description": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "policy_id": { "type": "integer" }
+                                            },
+                                            "examples": [
+                                                {
+                                                    "policy_id": 1
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "list_contexts",
+                                        "description": "Return every context in the base with its id, parent, policy, state, and claim counts.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "branch_context",
+                                        "description": "Create a child context from an existing live parent context id and optionally assign a new policy id and branch reason.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "parent_ctx": { "type": "integer" },
+                                                "reason": { "type": "string" },
+                                                "policy_id": { "type": "integer" }
+                                            },
+                                            "required": ["parent_ctx"],
+                                            "examples": [
+                                                {
+                                                    "parent_ctx": 1,
+                                                    "policy_id": 2,
+                                                    "reason": "Project-specific working branch"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "list_conflicts",
+                                        "description": "Return all conflict records for the requested context id, or for the active context when ctx_id is omitted.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "examples": [
+                                                {
+                                                    "ctx_id": 1
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "graph_neighbors",
+                                        "description": "Return the direct incoming and outgoing neighbors of one graph node, optionally filtered by edge type; this is a one-hop query only.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "node_num": { "type": "integer" },
+                                                "edge_types": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                }
+                                            },
+                                            "required": ["node_num"],
+                                            "examples": [
+                                                {
+                                                    "node_num": 42,
+                                                    "edge_types": ["DEPENDS_ON", "SUPPORTS"]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "graph_walk",
+                                        "description": "Traverse the graph from the provided seed nodes up to the requested depth and return visited edges; this is multi-hop traversal, not subgraph extraction.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "seed_nodes": {
+                                                    "type": "array",
+                                                    "items": { "type": "integer" }
+                                                },
+                                                "edge_types": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                },
+                                                "depth": { "type": "integer" }
+                                            },
+                                            "required": ["seed_nodes"],
+                                            "examples": [
+                                                {
+                                                    "seed_nodes": [42],
+                                                    "edge_types": ["DEPENDS_ON"],
+                                                    "depth": 2
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "extract_subgraph",
+                                        "description": "Extract the bounded neighborhood around one center node using graph traversal within the requested radius.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "center_node": { "type": "integer" },
+                                                "radius": { "type": "integer" },
+                                                "edge_types": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" }
+                                                }
+                                            },
+                                            "required": ["center_node"],
+                                            "examples": [
+                                                {
+                                                    "center_node": 42,
+                                                    "radius": 2,
+                                                    "edge_types": ["DEPENDS_ON", "SUPPORTS"]
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
                     }
-                ]
-            }
-        }),
+                }),
                 "tools/call" => {
                     let tool_name = req
                         .get("params")
@@ -2816,27 +3092,28 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                         .unwrap_or("");
                     let arguments = req.get("params").and_then(|p| p.get("arguments"));
 
-                match tool_name {
-                    "query" => mcp_query_response(store, id, arguments),
-                    "search_lex" => mcp_search_lex_response(store, id, arguments),
-                    "search_graph" => mcp_search_graph_response(store, id, arguments),
-                    "search_semantic" => mcp_search_semantic_response(store, id, arguments),
-                    "ingest" => mcp_ingest_response(store, id, arguments),
-                    "batch_ingest" => mcp_batch_ingest_response(store, id, arguments),
-                    "update_atom" => mcp_update_atom_response(store, id, arguments),
-                    "delete_atom" => mcp_delete_atom_response(store, id, arguments),
-                    "create_context" => mcp_create_context_response(store, id, arguments),
-                    "list_contexts" => mcp_list_contexts_response(store, id, arguments),
-                    "branch_context" => mcp_branch_context_response(store, id, arguments),
-                    "list_conflicts" => mcp_list_conflicts_response(store, id, arguments),
-                    "graph_neighbors" => mcp_graph_neighbors_response(store, id, arguments),
-                    "graph_walk" => mcp_graph_walk_response(store, id, arguments),
-                    "extract_subgraph" => mcp_extract_subgraph_response(store, id, arguments),
-                    _ => serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "error": { "code": -32601, "message": "Tool not found" }
-                    }),
+                    match tool_name {
+                        "query" => mcp_query_response(store, id, arguments),
+                        "search_lex" => mcp_search_lex_response(store, id, arguments),
+                        "search_graph" => mcp_search_graph_response(store, id, arguments),
+                        "search_semantic" => mcp_search_semantic_response(store, id, arguments),
+                        "ingest" => mcp_ingest_response(store, id, arguments),
+                        "batch_ingest" => mcp_batch_ingest_response(store, id, arguments),
+                        "update_atom" => mcp_update_atom_response(store, id, arguments),
+                        "delete_atom" => mcp_delete_atom_response(store, id, arguments),
+                        "history" => mcp_history_response(store, id, arguments),
+                        "create_context" => mcp_create_context_response(store, id, arguments),
+                        "list_contexts" => mcp_list_contexts_response(store, id, arguments),
+                        "branch_context" => mcp_branch_context_response(store, id, arguments),
+                        "list_conflicts" => mcp_list_conflicts_response(store, id, arguments),
+                        "graph_neighbors" => mcp_graph_neighbors_response(store, id, arguments),
+                        "graph_walk" => mcp_graph_walk_response(store, id, arguments),
+                        "extract_subgraph" => mcp_extract_subgraph_response(store, id, arguments),
+                        _ => serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": { "code": -32601, "message": "Tool not found" }
+                        }),
                     }
                 }
                 _ => serde_json::json!({
@@ -3136,7 +3413,10 @@ fn mcp_create_context_response(
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
     let ctx_id = store.create_context(policy_id as u32);
-    mcp_text_result(id, format!("created_ctx={}\npolicy_id={}", ctx_id, policy_id))
+    mcp_text_result(
+        id,
+        format!("created_ctx={}\npolicy_id={}", ctx_id, policy_id),
+    )
 }
 
 #[cfg(feature = "mcp")]
@@ -3165,7 +3445,10 @@ fn mcp_list_conflicts_response(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    mcp_text_result(id, format!("ctx_id={}\ncount={}\n{}", ctx_id, conflicts.len(), lines))
+    mcp_text_result(
+        id,
+        format!("ctx_id={}\ncount={}\n{}", ctx_id, conflicts.len(), lines),
+    )
 }
 
 #[cfg(feature = "mcp")]
@@ -3179,7 +3462,11 @@ fn mcp_graph_walk_response(
         Err(err) => return err,
     };
     let Some(seed_nodes_json) = args.get("seed_nodes").and_then(|value| value.as_array()) else {
-        return mcp_error(id, -32602, "Missing required integer array field 'seed_nodes'");
+        return mcp_error(
+            id,
+            -32602,
+            "Missing required integer array field 'seed_nodes'",
+        );
     };
 
     let mut seed_nodes = Vec::with_capacity(seed_nodes_json.len());
@@ -3315,14 +3602,22 @@ fn mcp_ingest_response(
     let Some(claims_json) = args.get("claims").and_then(|value| value.as_array()) else {
         return mcp_error(id, -32602, "Missing required array field 'claims'");
     };
-    let claims: Vec<ClaimData> = match claims_json.iter().map(mcp_parse_claim_from_json).collect::<Result<Vec<_>, _>>() {
+    let claims: Vec<ClaimData> = match claims_json
+        .iter()
+        .map(mcp_parse_claim_from_json)
+        .collect::<Result<Vec<_>, _>>()
+    {
         Ok(c) => c,
         Err(e) => return mcp_error(id, -32602, format!("Invalid claim: {}", e)),
     };
     let symbols: Vec<String> = args
         .get("symbols")
         .and_then(|value| value.as_array())
-        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     let trust_level = args
         .get("trust_level")
@@ -3334,10 +3629,11 @@ fn mcp_ingest_response(
         .and_then(|value| value.as_u64())
         .unwrap_or(0xFFFF);
 
-    let payload = match mcp_build_atom_payload(atom_type, &symbols, &claims, trust_level, domain_mask) {
-        Ok(p) => p,
-        Err(e) => return mcp_error(id, -32603, format!("Failed to build payload: {}", e)),
-    };
+    let payload =
+        match mcp_build_atom_payload(atom_type, &symbols, &claims, trust_level, domain_mask) {
+            Ok(p) => p,
+            Err(e) => return mcp_error(id, -32603, format!("Failed to build payload: {}", e)),
+        };
 
     match store.ingest(&payload, atom_type, &claims, &[]) {
         Ok(atom_id) => mcp_text_result(
@@ -3366,7 +3662,11 @@ fn mcp_batch_ingest_response(
     let Some(atoms_json) = args.get("atoms").and_then(|value| value.as_array()) else {
         return mcp_error(id, -32602, "Missing required array field 'atoms'");
     };
-    let batch_atoms: Vec<BatchAtom> = match atoms_json.iter().map(mcp_parse_batch_atom_from_json).collect::<Result<Vec<_>, _>>() {
+    let batch_atoms: Vec<BatchAtom> = match atoms_json
+        .iter()
+        .map(mcp_parse_batch_atom_from_json)
+        .collect::<Result<Vec<_>, _>>()
+    {
         Ok(a) => a,
         Err(e) => return mcp_error(id, -32602, format!("Invalid batch atom: {}", e)),
     };
@@ -3409,7 +3709,13 @@ fn mcp_update_atom_response(
     };
     let old_atom_id = match mcp_parse_atom_id(atom_id_str) {
         Some(id) => id,
-        None => return mcp_error(id, -32602, format!("Invalid atom ID format: {}", atom_id_str)),
+        None => {
+            return mcp_error(
+                id,
+                -32602,
+                format!("Invalid atom ID format: {}", atom_id_str),
+            );
+        }
     };
     let Some(atom_type_str) = args.get("atom_type").and_then(|value| value.as_str()) else {
         return mcp_error(id, -32602, "Missing required string field 'atom_type'");
@@ -3421,14 +3727,22 @@ fn mcp_update_atom_response(
     let Some(claims_json) = args.get("claims").and_then(|value| value.as_array()) else {
         return mcp_error(id, -32602, "Missing required array field 'claims'");
     };
-    let claims: Vec<ClaimData> = match claims_json.iter().map(mcp_parse_claim_from_json).collect::<Result<Vec<_>, _>>() {
+    let claims: Vec<ClaimData> = match claims_json
+        .iter()
+        .map(mcp_parse_claim_from_json)
+        .collect::<Result<Vec<_>, _>>()
+    {
         Ok(c) => c,
         Err(e) => return mcp_error(id, -32602, format!("Invalid claim: {}", e)),
     };
     let symbols: Vec<String> = args
         .get("symbols")
         .and_then(|value| value.as_array())
-        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let new_payload = match mcp_build_atom_payload(atom_type, &symbols, &claims, 5000, 0xFFFF) {
@@ -3464,9 +3778,18 @@ fn mcp_delete_atom_response(
     };
     let atom_id = match mcp_parse_atom_id(atom_id_str) {
         Some(id) => id,
-        None => return mcp_error(id, -32602, format!("Invalid atom ID format: {}", atom_id_str)),
+        None => {
+            return mcp_error(
+                id,
+                -32602,
+                format!("Invalid atom ID format: {}", atom_id_str),
+            );
+        }
     };
-    let reason_str = args.get("reason").and_then(|value| value.as_str()).unwrap_or("Obsolete");
+    let reason_str = args
+        .get("reason")
+        .and_then(|value| value.as_str())
+        .unwrap_or("Obsolete");
     let delete_reason = mcp_parse_delete_reason(reason_str);
 
     match store.delete_atom(atom_id, delete_reason) {
@@ -3484,6 +3807,39 @@ fn mcp_delete_atom_response(
 }
 
 #[cfg(feature = "mcp")]
+fn mcp_history_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let limit = arguments
+        .and_then(|args| args.get("limit"))
+        .and_then(|value| value.as_u64())
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(20);
+
+    match store.history(limit) {
+        Ok(entries) => {
+            let mut output = format!("Operation history\nEntries: {}", entries.len());
+            for (idx, entry) in entries.iter().enumerate() {
+                output.push_str(&format!(
+                    "\n\n[{}] {:?} @ {}",
+                    idx, entry.operation, entry.timestamp_unix_ns
+                ));
+                if !entry.atom_ids.is_empty() {
+                    output.push_str(&format!("\nAtom IDs: {}", entry.atom_ids.join(", ")));
+                }
+                for (key, value) in &entry.details {
+                    output.push_str(&format!("\n{}: {}", key, value));
+                }
+            }
+            mcp_text_result(id, output)
+        }
+        Err(e) => mcp_error(id, -32603, format!("History read failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
 fn mcp_list_contexts_response(
     store: &mut MemoryX,
     id: serde_json::Value,
@@ -3491,25 +3847,25 @@ fn mcp_list_contexts_response(
 ) -> serde_json::Value {
     let active_ctx = store.active_context();
     let contexts = store.list_contexts();
-    
+
     let mut output = String::new();
     output.push_str("Contexts:\n");
     output.push_str(&format!("  Active: {}\n", active_ctx));
     output.push_str(&format!("  Total: {}\n\n", contexts.len()));
-    
+
     for (idx, ctx) in contexts.iter().enumerate() {
         let status = if ctx.active { "active" } else { "frozen" };
-        
+
         let parent_str = match ctx.parent_ctx {
             Some(p) => format!("{}", p),
             None => "none".to_string(),
         };
-        
+
         output.push_str(&format!(
             "[{}] ID: {}, Status: {}, Parent: {}",
             idx, ctx.ctx_id, status, parent_str
         ));
-        
+
         // Add branch reason if not Manual
         let reason_str = match ctx.branch_reason {
             BranchReason::Manual => None,
@@ -3520,15 +3876,15 @@ fn mcp_list_contexts_response(
         if let Some(reason) = reason_str {
             output.push_str(&format!(", Branch reason: {}", reason));
         }
-        
+
         // Add policy ID if not default
         if ctx.policy_id != 0 {
             output.push_str(&format!(", Policy: {}", ctx.policy_id));
         }
-        
+
         // Add claims count
         output.push_str(&format!(", Claims: {}", ctx.active_claims.len()));
-        
+
         // Add conflicts count if any
         if !ctx.conflicts.is_empty() {
             output.push_str(&format!(", Conflicts: {}", ctx.conflicts.len()));
@@ -3536,7 +3892,7 @@ fn mcp_list_contexts_response(
 
         output.push('\n');
     }
-    
+
     mcp_text_result(id, output)
 }
 #[cfg(feature = "mcp")]
@@ -3552,7 +3908,10 @@ fn mcp_branch_context_response(
     let Some(parent_ctx) = args.get("parent_ctx").and_then(|value| value.as_u64()) else {
         return mcp_error(id, -32602, "Missing required integer field 'parent_ctx'");
     };
-    let reason_str = args.get("reason").and_then(|value| value.as_str()).unwrap_or("Manual");
+    let reason_str = args
+        .get("reason")
+        .and_then(|value| value.as_str())
+        .unwrap_or("Manual");
     let branch_reason = mcp_parse_branch_reason(reason_str);
     let policy_id = args
         .get("policy_id")
@@ -3629,7 +3988,10 @@ fn mcp_graph_neighbors_response(
     if total_neighbors == 0 {
         return mcp_text_result(
             id,
-            format!("Graph neighbors for node {}:\n\nNo neighbors found.", node_num),
+            format!(
+                "Graph neighbors for node {}:\n\nNo neighbors found.",
+                node_num
+            ),
         );
     }
 
@@ -3642,11 +4004,17 @@ fn mcp_graph_neighbors_response(
 
     let mut idx = 0;
     for (neighbor, edge_type) in &outgoing_neighbors {
-        lines.push(format!("[{}] Node: {}, Edge: {:?} (outgoing)", idx, neighbor, edge_type));
+        lines.push(format!(
+            "[{}] Node: {}, Edge: {:?} (outgoing)",
+            idx, neighbor, edge_type
+        ));
         idx += 1;
     }
     for (neighbor, edge_type) in &incoming_neighbors {
-        lines.push(format!("[{}] Node: {}, Edge: {:?} (incoming)", idx, neighbor, edge_type));
+        lines.push(format!(
+            "[{}] Node: {}, Edge: {:?} (incoming)",
+            idx, neighbor, edge_type
+        ));
         idx += 1;
     }
 
@@ -3694,7 +4062,7 @@ fn mcp_extract_subgraph_response(
 
     // Build the response
     let mut lines = vec![
-        format!("Extracted subgraph:"),
+        "Extracted subgraph:".to_string(),
         format!("Center node: {}", center_node),
         format!("Radius: {}", radius),
         format!("Nodes: {}", nodes_vec.len()),
@@ -3743,22 +4111,10 @@ fn mcp_parse_atom_type(s: &str) -> Option<AtomType> {
 
 #[cfg(feature = "mcp")]
 fn mcp_parse_claim_from_json(value: &serde_json::Value) -> Result<ClaimData, String> {
-    let subj = value
-        .get("subj")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let pred = value
-        .get("pred")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let obj_tag = value
-        .get("obj_tag")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u8;
-    let obj_val = value
-        .get("obj_val")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let subj = value.get("subj").and_then(|v| v.as_u64()).unwrap_or(0);
+    let pred = value.get("pred").and_then(|v| v.as_u64()).unwrap_or(0);
+    let obj_tag = value.get("obj_tag").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    let obj_val = value.get("obj_val").and_then(|v| v.as_u64()).unwrap_or(0);
     let qualifiers_mask = value
         .get("qualifiers_mask")
         .and_then(|v| v.as_u64())
@@ -3795,7 +4151,11 @@ fn mcp_parse_batch_atom_from_json(value: &serde_json::Value) -> Result<BatchAtom
     let symbols: Vec<String> = value
         .get("symbols")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let payload = mcp_build_atom_payload(atom_type, &symbols, &claims, 5000, 0xFFFF)
@@ -3851,11 +4211,11 @@ fn mcp_build_atom_payload(
     trust_level: u16,
     domain_mask: u64,
 ) -> Result<Vec<u8>, String> {
+    use memoryx::cas::claims::{ClaimRecord, ClaimsSection};
+    use memoryx::cas::evidence::EvidenceSection;
+    use memoryx::cas::invariants::InvariantsSection;
     use memoryx::cas::meta::{MetaField, MetaFieldKind, MetaSection, MetaValue};
     use memoryx::cas::symbols::SymbolsSection;
-    use memoryx::cas::claims::{ClaimsSection, ClaimRecord};
-    use memoryx::cas::invariants::InvariantsSection;
-    use memoryx::cas::evidence::EvidenceSection;
     use memoryx::utils::crc32;
 
     // Create SYMBOLS section
@@ -4108,6 +4468,13 @@ fn main() {
             &config,
         )
         .and_then(|resolved| cmd_repair(&resolved, cli.format)),
+        Commands::History { base, limit } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| cmd_history(&resolved, *limit, cli.format)),
         Commands::Serve {
             base,
             port,
@@ -4147,7 +4514,9 @@ mod tests {
             qualifiers_mask: 0,
         }];
         let payload = create_minimal_atom_body(AtomType::FACT, &claims);
-        let atom_id = store.ingest(&payload, AtomType::FACT, &claims, &[]).unwrap();
+        let atom_id = store
+            .ingest(&payload, AtomType::FACT, &claims, &[])
+            .unwrap();
         (store, atom_id)
     }
 
@@ -4200,7 +4569,9 @@ mod tests {
         let exported = serde_json::to_string_pretty(&vec![export]).unwrap();
         std::fs::write(&json_path, &exported).unwrap();
         assert!(exported.contains(&atom_id_to_hex(&atom_id)));
-        assert!(!exported.contains("0101010101010101010101010101010101010101010101010101010101010101"));
+        assert!(
+            !exported.contains("0101010101010101010101010101010101010101010101010101010101010101")
+        );
 
         let imported_dir = tempdir().unwrap();
         let imported_base = imported_dir.path().join("imported");
@@ -4319,6 +4690,24 @@ mod tests {
             .filter_map(|tool| tool["name"].as_str())
             .collect();
 
+        for tool in tools {
+            let description = tool["description"].as_str().unwrap_or("");
+            assert!(
+                !description.trim().is_empty(),
+                "tool {} must have a non-empty description",
+                tool["name"].as_str().unwrap_or("<unknown>")
+            );
+            let examples_len = tool["inputSchema"]["examples"]
+                .as_array()
+                .map(|examples| examples.len())
+                .unwrap_or(0);
+            assert!(
+                examples_len > 0,
+                "tool {} must have at least one example",
+                tool["name"].as_str().unwrap_or("<unknown>")
+            );
+        }
+
         assert!(names.contains(&"query"));
         assert!(names.contains(&"search_lex"));
         assert!(names.contains(&"search_graph"));
@@ -4327,6 +4716,7 @@ mod tests {
         assert!(names.contains(&"batch_ingest"));
         assert!(names.contains(&"update_atom"));
         assert!(names.contains(&"delete_atom"));
+        assert!(names.contains(&"history"));
         assert!(names.contains(&"create_context"));
         assert!(names.contains(&"list_contexts"));
         assert!(names.contains(&"branch_context"));
@@ -4334,7 +4724,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 16);
     }
 
     #[cfg(feature = "mcp")]
@@ -4504,7 +4894,9 @@ mod tests {
             qualifiers_mask: 0,
         }];
         let payload = create_minimal_atom_body(AtomType::FACT, &claims);
-        let atom_id = store.ingest(&payload, AtomType::FACT, &claims, &[]).unwrap();
+        let atom_id = store
+            .ingest(&payload, AtomType::FACT, &claims, &[])
+            .unwrap();
         let atom_node = store.get_node_num(&atom_id).unwrap();
 
         let extract_request = serde_json::json!({
@@ -4564,5 +4956,20 @@ mod tests {
         let delete_response = process_mcp_request(&mut store, &delete_request).await;
         assert!(delete_response.contains("Successfully deleted atom"));
         assert!(delete_response.contains("Tombstone ID"));
+
+        let history_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 33,
+            "method": "tools/call",
+            "params": {
+                "name": "history",
+                "arguments": {"limit": 2}
+            }
+        })
+        .to_string();
+        let history_response = process_mcp_request(&mut store, &history_request).await;
+        assert!(history_response.contains("Operation history"));
+        assert!(history_response.contains("DeleteAtom"));
+        assert!(history_response.contains("UpdateAtom"));
     }
 }

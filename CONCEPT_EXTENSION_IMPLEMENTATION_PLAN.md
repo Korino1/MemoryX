@@ -71,6 +71,7 @@ renderer explains
 - **Fixed-point сборка ответа.** `FixedPointSolver` и минимальный доказательный `AnswerGraph` остаются ядром query path. Новые planners/retrievers должны подавать candidates в solver, а не обходить solver.
 - **Федерация баз на идентичной архитектуре.** Federation должна передавать claims/provenance/metadata/snapshots, а не готовый текстовый ответ. Новые contract/query APIs должны быть совместимы с federated execution.
 - **Устойчивость к повреждениям.** Merkle/integrity checks, CAS durability, CRDT/WAL/snapshot, replication and repair paths нельзя выносить в “потом” при изменении форматов. Любые новые индексы должны быть rebuildable from CAS или иметь repair procedure.
+- **История действий базы.** Изменения должны быть наблюдаемыми: update создаёт новую версию и `SUPERSEDES`, delete создаёт tombstone, а успешные write/admin операции пишутся в append-only history log с возможностью получить последние N действий.
 - **MCP как полноценный управляющий слой.** MCP должен сохранять возможность работать с базой, контекстами, конфликтами, графом и authoring operations, а не только выполнять текстовый query.
 - **Local-first хранение.** База должна оставаться в выбранном scope: project-local или user-global. Новые функции не должны вводить скрытые внешние хранилища.
 

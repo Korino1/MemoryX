@@ -1,6 +1,6 @@
 //! MemoryX Full MCP Server v0.2.0
 //!
-//! Complete MCP (Model Context Protocol) server with all 15 tools:
+//! Complete MCP (Model Context Protocol) server with all 16 tools:
 //! - query: Natural language query
 //! - search_lex: Lexical search
 //! - search_graph: Graph search
@@ -9,6 +9,7 @@
 //! - batch_ingest: Batch ingest
 //! - update_atom: Update atom
 //! - delete_atom: Delete atom
+//! - history: Recent operation history
 //! - create_context: Create context
 //! - list_contexts: List contexts
 //! - branch_context: Branch context
@@ -25,9 +26,9 @@ use tokio::sync::RwLock;
 
 // MemoryX imports
 use memoryx::prelude::*;
-use memoryx::store::api::{MemoryX, StoreConfig, CtxId, CtxPolicyId};
 use memoryx::store::api::{BatchAtom, DeleteReason};
 use memoryx::store::api::{BranchReason, QueryFilters};
+use memoryx::store::api::{CtxId, CtxPolicyId, MemoryX, StoreConfig};
 
 fn project_base_root() -> Result<PathBuf, String> {
     std::env::current_dir()
@@ -49,7 +50,7 @@ fn scoped_base_path(scope: &str, base_name: &str) -> Result<PathBuf, String> {
             return Err(format!(
                 "Invalid --base-scope '{}'. Expected 'project' or 'user'",
                 other
-            ))
+            ));
         }
     };
     Ok(root.join(base_name))
@@ -136,15 +137,24 @@ struct RpcError {
 
 impl RpcError {
     fn method_not_found(message: String) -> Self {
-        RpcError { code: -32601, message }
+        RpcError {
+            code: -32601,
+            message,
+        }
     }
 
     fn invalid_params(message: String) -> Self {
-        RpcError { code: -32602, message }
+        RpcError {
+            code: -32602,
+            message,
+        }
     }
 
     fn internal_error(message: String) -> Self {
-        RpcError { code: -32603, message }
+        RpcError {
+            code: -32603,
+            message,
+        }
     }
 }
 
@@ -172,7 +182,10 @@ struct ToolContent {
 
 impl ToolContent {
     fn text(text: String) -> Self {
-        ToolContent { content_type: "text".to_string(), text }
+        ToolContent {
+            content_type: "text".to_string(),
+            text,
+        }
     }
 }
 
@@ -188,7 +201,7 @@ struct MemoryXMcpServer {
 impl MemoryXMcpServer {
     fn new(data_dir: PathBuf) -> Result<Self, String> {
         let store_config = StoreConfig::new(data_dir);
-        
+
         let store = MemoryX::new(store_config)
             .map_err(|e| format!("Failed to create MemoryX store: {}", e))?;
 
@@ -381,7 +394,22 @@ impl MemoryXMcpServer {
                     "required": ["atom_id"]
                 }),
             },
-            // 9. create_context - Create context
+            // 9. history - Recent operation history
+            Tool {
+                name: "history".to_string(),
+                description: "Return newest-first durable write-operation history.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of newest entries to return"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+            // 10. create_context - Create context
             Tool {
                 name: "create_context".to_string(),
                 description: "Create a new context branch for hypothesis exploration.".to_string(),
@@ -396,7 +424,7 @@ impl MemoryXMcpServer {
                     "required": []
                 }),
             },
-            // 10. list_contexts - List contexts
+            // 11. list_contexts - List contexts
             Tool {
                 name: "list_contexts".to_string(),
                 description: "List all contexts with status and parent relationships.".to_string(),
@@ -405,7 +433,7 @@ impl MemoryXMcpServer {
                     "properties": {}
                 }),
             },
-            // 11. branch_context - Branch context
+            // 12. branch_context - Branch context
             Tool {
                 name: "branch_context".to_string(),
                 description: "Create a branch from an existing context.".to_string(),
@@ -428,7 +456,7 @@ impl MemoryXMcpServer {
                     "required": ["parent_ctx"]
                 }),
             },
-            // 12. list_conflicts - List conflicts
+            // 13. list_conflicts - List conflicts
             Tool {
                 name: "list_conflicts".to_string(),
                 description: "List conflicts in a context with severity and resolution options.".to_string(),
@@ -533,7 +561,7 @@ impl MemoryXMcpServer {
                 writeln!(output, "Evidence sources: {}", answer.evidence.len()).unwrap();
                 writeln!(output, "Graph nodes: {}", answer.graph.node_count()).unwrap();
                 writeln!(output, "Graph edges: {}", answer.graph.edge_count()).unwrap();
-                
+
                 if !answer.limitations.is_empty() {
                     writeln!(output, "\nLimitations:").unwrap();
                     for lim in &answer.limitations {
@@ -554,15 +582,21 @@ impl MemoryXMcpServer {
     async fn search_lex(&self, query: String, limit: Option<u32>) -> Result<ToolResult, String> {
         let limit = limit.unwrap_or(100);
         let store = self.store.read().await;
-        
+
         let node_nums = store.search_lex(&query, None);
         let total_matches = node_nums.len();
         let limited: Vec<_> = node_nums.into_iter().take(limit as usize).collect();
 
         let mut output = String::new();
         writeln!(output, "Lexical search results for '{}':", query).unwrap();
-        writeln!(output, "Found {} matches (showing {})", total_matches, limited.len()).unwrap();
-        
+        writeln!(
+            output,
+            "Found {} matches (showing {})",
+            total_matches,
+            limited.len()
+        )
+        .unwrap();
+
         for (i, node_num) in limited.iter().enumerate() {
             writeln!(output, "  [{}] Node: {}", i, node_num).unwrap();
         }
@@ -574,15 +608,23 @@ impl MemoryXMcpServer {
     }
 
     /// 3. search_graph - Graph search
-    async fn search_graph(&self, pattern: String, limit: Option<u32>) -> Result<ToolResult, String> {
+    async fn search_graph(
+        &self,
+        pattern: String,
+        limit: Option<u32>,
+    ) -> Result<ToolResult, String> {
         let limit = limit.unwrap_or(50);
         let _store = self.store.read().await;
-        
+
         // Parse pattern and search
         let mut output = String::new();
         writeln!(output, "Graph search pattern: '{}'", pattern).unwrap();
         writeln!(output, "Limit: {}", limit).unwrap();
-        writeln!(output, "\nNote: Graph search uses pattern matching on graph structure.").unwrap();
+        writeln!(
+            output,
+            "\nNote: Graph search uses pattern matching on graph structure."
+        )
+        .unwrap();
         writeln!(output, "Pattern syntax: subject -> predicate -> object").unwrap();
 
         Ok(ToolResult {
@@ -592,26 +634,41 @@ impl MemoryXMcpServer {
     }
 
     /// 4. search_semantic - Semantic search
-    async fn search_semantic(&self, vector: Vec<f32>, min_trust: Option<u16>, limit: Option<u32>) -> Result<ToolResult, String> {
+    async fn search_semantic(
+        &self,
+        vector: Vec<f32>,
+        min_trust: Option<u16>,
+        limit: Option<u32>,
+    ) -> Result<ToolResult, String> {
         let limit_val = limit.unwrap_or(10) as usize;
         let store = self.store.read().await;
-        
+
         let filters = if min_trust.is_some() {
             Some(QueryFilters::new(min_trust.unwrap_or(0), 0xFFFF))
         } else {
             None
         };
-        
+
         let candidates = store.search_semantic(&vector, filters);
         let limited: Vec<_> = candidates.into_iter().take(limit_val).collect();
 
         let mut output = String::new();
         writeln!(output, "Semantic search results:").unwrap();
-        writeln!(output, "Found {} candidates (showing {})", limited.len(), limited.len()).unwrap();
-        
+        writeln!(
+            output,
+            "Found {} candidates (showing {})",
+            limited.len(),
+            limited.len()
+        )
+        .unwrap();
+
         for (i, candidate) in limited.iter().enumerate() {
-            writeln!(output, "  [{}] Node: {}, Trust: {}, Type: {:?}", 
-                i, candidate.node_num, candidate.trust, candidate.atom_type).unwrap();
+            writeln!(
+                output,
+                "  [{}] Node: {}, Trust: {}, Type: {:?}",
+                i, candidate.node_num, candidate.trust, candidate.atom_type
+            )
+            .unwrap();
         }
 
         Ok(ToolResult {
@@ -621,14 +678,20 @@ impl MemoryXMcpServer {
     }
 
     /// 5. ingest - Single atom ingest
-    async fn ingest(&self, atom_type: String, claims: Vec<serde_json::Value>, 
-                    symbols: Option<Vec<String>>, trust_level: Option<u16>, 
-                    domain_mask: Option<u64>) -> Result<ToolResult, String> {
+    async fn ingest(
+        &self,
+        atom_type: String,
+        claims: Vec<serde_json::Value>,
+        symbols: Option<Vec<String>>,
+        trust_level: Option<u16>,
+        domain_mask: Option<u64>,
+    ) -> Result<ToolResult, String> {
         let parsed_type = parse_atom_type(&atom_type)
             .ok_or_else(|| format!("Invalid atom type: {}", atom_type))?;
 
         // Parse claims from JSON
-        let parsed_claims: Vec<ClaimData> = claims.iter()
+        let parsed_claims: Vec<ClaimData> = claims
+            .iter()
             .map(parse_claim_from_json)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Invalid claim: {}", e))?;
@@ -663,7 +726,8 @@ impl MemoryXMcpServer {
 
     /// 6. batch_ingest - Batch ingest
     async fn batch_ingest(&self, atoms: Vec<serde_json::Value>) -> Result<ToolResult, String> {
-        let batch_atoms: Vec<BatchAtom> = atoms.iter()
+        let batch_atoms: Vec<BatchAtom> = atoms
+            .iter()
             .map(parse_batch_atom_from_json)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Invalid batch atom: {}", e))?;
@@ -676,7 +740,7 @@ impl MemoryXMcpServer {
                 writeln!(output, "Total: {}", result.total).unwrap();
                 writeln!(output, "Success: {}", result.success_count()).unwrap();
                 writeln!(output, "Errors: {}", result.error_count()).unwrap();
-                
+
                 if !result.atom_ids.is_empty() {
                     writeln!(output, "\nAtom IDs:").unwrap();
                     for (i, atom_id) in result.atom_ids.iter().take(5).enumerate() {
@@ -697,16 +761,21 @@ impl MemoryXMcpServer {
     }
 
     /// 7. update_atom - Update atom
-    async fn update_atom(&self, atom_id_str: String, atom_type: String, 
-                         claims: Vec<serde_json::Value>, symbols: Option<Vec<String>>) 
-                         -> Result<ToolResult, String> {
+    async fn update_atom(
+        &self,
+        atom_id_str: String,
+        atom_type: String,
+        claims: Vec<serde_json::Value>,
+        symbols: Option<Vec<String>>,
+    ) -> Result<ToolResult, String> {
         let old_atom_id = parse_atom_id(&atom_id_str)
             .ok_or_else(|| format!("Invalid atom ID format: {}", atom_id_str))?;
-        
+
         let parsed_type = parse_atom_type(&atom_type)
             .ok_or_else(|| format!("Invalid atom type: {}", atom_type))?;
 
-        let parsed_claims: Vec<ClaimData> = claims.iter()
+        let parsed_claims: Vec<ClaimData> = claims
+            .iter()
             .map(parse_claim_from_json)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Invalid claim: {}", e))?;
@@ -739,10 +808,14 @@ impl MemoryXMcpServer {
     }
 
     /// 8. delete_atom - Delete atom
-    async fn delete_atom(&self, atom_id_str: String, reason: Option<String>) -> Result<ToolResult, String> {
+    async fn delete_atom(
+        &self,
+        atom_id_str: String,
+        reason: Option<String>,
+    ) -> Result<ToolResult, String> {
         let atom_id = parse_atom_id(&atom_id_str)
             .ok_or_else(|| format!("Invalid atom ID format: {}", atom_id_str))?;
-        
+
         let delete_reason = parse_delete_reason(&reason.unwrap_or_else(|| "Obsolete".to_string()));
 
         let mut store = self.store.write().await;
@@ -764,7 +837,39 @@ impl MemoryXMcpServer {
         }
     }
 
-    /// 9. create_context - Create context
+    /// 9. history - Recent operation history
+    async fn history(&self, limit: Option<usize>) -> Result<ToolResult, String> {
+        let store = self.store.read().await;
+        match store.history(limit.unwrap_or(20)) {
+            Ok(entries) => {
+                let mut output = String::new();
+                writeln!(output, "Operation history").unwrap();
+                writeln!(output, "Entries: {}", entries.len()).unwrap();
+                for (idx, entry) in entries.iter().enumerate() {
+                    writeln!(
+                        output,
+                        "\n[{}] {:?} @ {}",
+                        idx, entry.operation, entry.timestamp_unix_ns
+                    )
+                    .unwrap();
+                    if !entry.atom_ids.is_empty() {
+                        writeln!(output, "Atom IDs: {}", entry.atom_ids.join(", ")).unwrap();
+                    }
+                    for (key, value) in &entry.details {
+                        writeln!(output, "{}: {}", key, value).unwrap();
+                    }
+                }
+
+                Ok(ToolResult {
+                    content: vec![ToolContent::text(output)],
+                    is_error: None,
+                })
+            }
+            Err(e) => Err(format!("History read failed: {}", e)),
+        }
+    }
+
+    /// 10. create_context - Create context
     async fn create_context(&self, policy_id: Option<u64>) -> Result<ToolResult, String> {
         let mut store = self.store.write().await;
         let new_ctx = store.create_context(policy_id.unwrap_or(0) as CtxPolicyId);
@@ -787,7 +892,11 @@ impl MemoryXMcpServer {
         let mut output = String::new();
         writeln!(output, "Contexts:").unwrap();
         writeln!(output, "  Active: {}", active_ctx).unwrap();
-        writeln!(output, "\nNote: Full context listing requires MemoryX API extension").unwrap();
+        writeln!(
+            output,
+            "\nNote: Full context listing requires MemoryX API extension"
+        )
+        .unwrap();
 
         Ok(ToolResult {
             content: vec![ToolContent::text(output)],
@@ -796,12 +905,20 @@ impl MemoryXMcpServer {
     }
 
     /// 11. branch_context - Branch context
-    async fn branch_context(&self, parent_ctx: u64, reason: Option<String>, 
-                            policy_id: Option<u64>) -> Result<ToolResult, String> {
+    async fn branch_context(
+        &self,
+        parent_ctx: u64,
+        reason: Option<String>,
+        policy_id: Option<u64>,
+    ) -> Result<ToolResult, String> {
         let branch_reason = parse_branch_reason(&reason.unwrap_or_else(|| "Manual".to_string()));
-        
+
         let mut store = self.store.write().await;
-        match store.branch_ctx(parent_ctx as CtxId, branch_reason, policy_id.unwrap_or(0) as u32) {
+        match store.branch_ctx(
+            parent_ctx as CtxId,
+            branch_reason,
+            policy_id.unwrap_or(0) as u32,
+        ) {
             Some(new_ctx) => {
                 let mut output = String::new();
                 writeln!(output, "Created branch context: {}", new_ctx).unwrap();
@@ -827,15 +944,24 @@ impl MemoryXMcpServer {
         let mut output = String::new();
         writeln!(output, "Conflicts in context {}:", ctx).unwrap();
         writeln!(output, "Total conflicts: {}", conflicts.len()).unwrap();
-        
+
         if conflicts.is_empty() {
             writeln!(output, "No conflicts detected").unwrap();
         } else {
             for (i, conflict) in conflicts.iter().enumerate() {
-                writeln!(output, "  [{}] Type: {:?}, Severity: {:?}", 
-                    i, conflict.conflict_type, conflict.severity).unwrap();
-                writeln!(output, "      Atoms: {} vs {}", 
-                    hex_encode(&conflict.atom_a), hex_encode(&conflict.atom_b)).unwrap();
+                writeln!(
+                    output,
+                    "  [{}] Type: {:?}, Severity: {:?}",
+                    i, conflict.conflict_type, conflict.severity
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "      Atoms: {} vs {}",
+                    hex_encode(&conflict.atom_a),
+                    hex_encode(&conflict.atom_b)
+                )
+                .unwrap();
             }
         }
 
@@ -846,18 +972,30 @@ impl MemoryXMcpServer {
     }
 
     /// 13. graph_neighbors - Graph neighbors
-    async fn graph_neighbors(&self, node_num: u64, edge_types: Option<Vec<String>>) -> Result<ToolResult, String> {
+    async fn graph_neighbors(
+        &self,
+        node_num: u64,
+        edge_types: Option<Vec<String>>,
+    ) -> Result<ToolResult, String> {
         let _store = self.store.read().await;
-        
-        let parsed_types: Vec<EdgeType> = edge_types.as_ref()
-            .map(|types| types.iter()
-                .filter_map(|s| parse_edge_type(s))
-                .collect())
+
+        let parsed_types: Vec<EdgeType> = edge_types
+            .as_ref()
+            .map(|types| types.iter().filter_map(|s| parse_edge_type(s)).collect())
             .unwrap_or_else(|| vec![EdgeType::DEPENDS_ON, EdgeType::SUPPORTS, EdgeType::CAUSES]);
 
         let mut output = String::new();
         writeln!(output, "Graph neighbors for node {}:", node_num).unwrap();
-        writeln!(output, "Edge types: {:?}", parsed_types.iter().map(|e| format!("{:?}", e)).collect::<Vec<_>>().join(", ")).unwrap();
+        writeln!(
+            output,
+            "Edge types: {:?}",
+            parsed_types
+                .iter()
+                .map(|e| format!("{:?}", e))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .unwrap();
         writeln!(output, "\nNote: Neighbor lookup requires GraphStore API").unwrap();
 
         Ok(ToolResult {
@@ -867,28 +1005,40 @@ impl MemoryXMcpServer {
     }
 
     /// 14. graph_walk - Graph walk
-    async fn graph_walk(&self, seed_nodes: Vec<u64>, edge_types: Option<Vec<String>>, 
-                        depth: Option<u8>) -> Result<ToolResult, String> {
+    async fn graph_walk(
+        &self,
+        seed_nodes: Vec<u64>,
+        edge_types: Option<Vec<String>>,
+        depth: Option<u8>,
+    ) -> Result<ToolResult, String> {
         let depth = depth.unwrap_or(3);
         let store = self.store.read().await;
-        
-        let parsed_types: Vec<EdgeType> = edge_types.as_ref()
-            .map(|types| types.iter()
-                .filter_map(|s| parse_edge_type(s))
-                .collect())
+
+        let parsed_types: Vec<EdgeType> = edge_types
+            .as_ref()
+            .map(|types| types.iter().filter_map(|s| parse_edge_type(s)).collect())
             .unwrap_or_else(|| vec![EdgeType::CAUSES, EdgeType::DEPENDS_ON, EdgeType::SUPPORTS]);
 
         let edges = store.graph_walk(&seed_nodes, &parsed_types, depth, None);
 
         let mut output = String::new();
         writeln!(output, "Graph walk from {} seed nodes:", seed_nodes.len()).unwrap();
-        writeln!(output, "Edge types: {:?}", parsed_types.iter().map(|e| format!("{:?}", e)).collect::<Vec<_>>().join(", ")).unwrap();
+        writeln!(
+            output,
+            "Edge types: {:?}",
+            parsed_types
+                .iter()
+                .map(|e| format!("{:?}", e))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .unwrap();
         writeln!(output, "Depth: {}, Found edges: {}", depth, edges.len()).unwrap();
-        
+
         for (i, (src, dst, etype)) in edges.iter().take(50).enumerate() {
             writeln!(output, "  [{}] {} --{:?}--> {}", i, src, etype, dst).unwrap();
         }
-        
+
         if edges.len() > 50 {
             writeln!(output, "  ... and {} more", edges.len() - 50).unwrap();
         }
@@ -900,20 +1050,28 @@ impl MemoryXMcpServer {
     }
 
     /// 15. extract_subgraph - Extract subgraph
-    async fn extract_subgraph(&self, center_node: u64, radius: Option<u8>, 
-                              edge_types: Option<Vec<String>>) -> Result<ToolResult, String> {
+    async fn extract_subgraph(
+        &self,
+        center_node: u64,
+        radius: Option<u8>,
+        edge_types: Option<Vec<String>>,
+    ) -> Result<ToolResult, String> {
         let radius = radius.unwrap_or(2);
-        
+
         let mut output = String::new();
         writeln!(output, "Extracting subgraph:").unwrap();
         writeln!(output, "Center node: {}", center_node).unwrap();
         writeln!(output, "Radius: {}", radius).unwrap();
-        
+
         if let Some(types) = edge_types {
             writeln!(output, "Edge types: {:?}", types).unwrap();
         }
-        
-        writeln!(output, "\nNote: Subgraph extraction uses graph_walk internally").unwrap();
+
+        writeln!(
+            output,
+            "\nNote: Subgraph extraction uses graph_walk internally"
+        )
+        .unwrap();
 
         Ok(ToolResult {
             content: vec![ToolContent::text(output)],
@@ -927,18 +1085,16 @@ impl MemoryXMcpServer {
 
     async fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         match request.method.as_str() {
-            "initialize" => {
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: request.id,
-                    result: Some(serde_json::json!({
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": { "tools": {} },
-                        "serverInfo": { "name": "memoryx", "version": "0.2.0" }
-                    })),
-                    error: None,
-                }
-            }
+            "initialize" => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: Some(serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "memoryx", "version": "0.2.0" }
+                })),
+                error: None,
+            },
             "tools/list" => {
                 let tools = Self::define_tools();
                 JsonRpcResponse {
@@ -951,16 +1107,18 @@ impl MemoryXMcpServer {
             "tools/call" => {
                 let name: String = match extract_arg(&request.params, "name") {
                     Ok(n) => n,
-                    Err(e) => return JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: request.id,
-                        result: None,
-                        error: Some(RpcError::invalid_params(e)),
-                    },
+                    Err(e) => {
+                        return JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: request.id,
+                            result: None,
+                            error: Some(RpcError::invalid_params(e)),
+                        };
+                    }
                 };
-                
-                let arguments: serde_json::Value = extract_arg(&request.params, "arguments")
-                    .unwrap_or(serde_json::json!({}));
+
+                let arguments: serde_json::Value =
+                    extract_arg(&request.params, "arguments").unwrap_or(serde_json::json!({}));
 
                 match self.handle_tool_call(name, arguments).await {
                     Ok(result) => JsonRpcResponse {
@@ -981,12 +1139,19 @@ impl MemoryXMcpServer {
                 jsonrpc: "2.0".to_string(),
                 id: request.id,
                 result: None,
-                error: Some(RpcError::method_not_found(format!("Unknown method: {}", request.method))),
+                error: Some(RpcError::method_not_found(format!(
+                    "Unknown method: {}",
+                    request.method
+                ))),
             },
         }
     }
 
-    async fn handle_tool_call(&self, name: String, args: serde_json::Value) -> Result<ToolResult, String> {
+    async fn handle_tool_call(
+        &self,
+        name: String,
+        args: serde_json::Value,
+    ) -> Result<ToolResult, String> {
         match name.as_str() {
             "query" => {
                 let question: String = extract_arg(&args, "question")?;
@@ -1015,7 +1180,8 @@ impl MemoryXMcpServer {
                 let symbols: Option<Vec<String>> = extract_arg_opt(&args, "symbols");
                 let trust_level: Option<u16> = extract_arg_opt(&args, "trust_level");
                 let domain_mask: Option<u64> = extract_arg_opt(&args, "domain_mask");
-                self.ingest(atom_type, claims, symbols, trust_level, domain_mask).await
+                self.ingest(atom_type, claims, symbols, trust_level, domain_mask)
+                    .await
             }
             "batch_ingest" => {
                 let atoms: Vec<serde_json::Value> = extract_arg(&args, "atoms")?;
@@ -1033,13 +1199,15 @@ impl MemoryXMcpServer {
                 let reason: Option<String> = extract_arg_opt(&args, "reason");
                 self.delete_atom(atom_id, reason).await
             }
+            "history" => {
+                let limit: Option<usize> = extract_arg_opt(&args, "limit");
+                self.history(limit).await
+            }
             "create_context" => {
                 let policy_id: Option<u64> = extract_arg_opt(&args, "policy_id");
                 self.create_context(policy_id).await
             }
-            "list_contexts" => {
-                self.list_contexts().await
-            }
+            "list_contexts" => self.list_contexts().await,
             "branch_context" => {
                 let parent_ctx: u64 = extract_arg(&args, "parent_ctx")?;
                 let reason: Option<String> = extract_arg_opt(&args, "reason");
@@ -1073,7 +1241,7 @@ impl MemoryXMcpServer {
 
     async fn run_stdio(&self) -> Result<(), String> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        
+
         let stdin = tokio::io::stdin();
         let mut reader = BufReader::new(stdin);
         let mut stdout = tokio::io::stdout();
@@ -1097,12 +1265,18 @@ impl MemoryXMcpServer {
                             let response = self.handle_request(request).await;
                             let response_json = serde_json::to_string(&response)
                                 .map_err(|e| format!("Failed to serialize response: {}", e))?;
-                            
-                            stdout.write_all(response_json.as_bytes()).await
+
+                            stdout
+                                .write_all(response_json.as_bytes())
+                                .await
                                 .map_err(|e| format!("Failed to write response: {}", e))?;
-                            stdout.write_all(b"\n").await
+                            stdout
+                                .write_all(b"\n")
+                                .await
                                 .map_err(|e| format!("Failed to write newline: {}", e))?;
-                            stdout.flush().await
+                            stdout
+                                .flush()
+                                .await
                                 .map_err(|e| format!("Failed to flush: {}", e))?;
                         }
                         Err(e) => {
@@ -1110,7 +1284,10 @@ impl MemoryXMcpServer {
                                 jsonrpc: "2.0".to_string(),
                                 id: None,
                                 result: None,
-                                error: Some(RpcError::invalid_params(format!("Invalid JSON: {}", e))),
+                                error: Some(RpcError::invalid_params(format!(
+                                    "Invalid JSON: {}",
+                                    e
+                                ))),
                             };
                             let error_json = serde_json::to_string(&error_response).unwrap();
                             let _ = stdout.write_all(error_json.as_bytes()).await;
@@ -1190,17 +1367,17 @@ fn parse_branch_reason(s: &str) -> BranchReason {
 fn parse_atom_id(s: &str) -> Option<[u8; 32]> {
     let s = s.trim();
     let s = s.strip_prefix("0x").unwrap_or(s);
-    
+
     if s.len() != 64 {
         return None;
     }
-    
+
     let mut bytes = [0u8; 32];
     for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
         let chunk_str = std::str::from_utf8(chunk).ok()?;
         bytes[i] = u8::from_str_radix(chunk_str, 16).ok()?;
     }
-    
+
     Some(bytes)
 }
 
@@ -1209,19 +1386,12 @@ fn hex_encode(atom_id: &[u8; 32]) -> String {
 }
 
 fn parse_claim_from_json(value: &serde_json::Value) -> Result<ClaimData, String> {
-    let subj = value.get("subj")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let pred = value.get("pred")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let obj_tag = value.get("obj_tag")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u8;
-    let obj_val = value.get("obj_val")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let qualifiers_mask = value.get("qualifiers_mask")
+    let subj = value.get("subj").and_then(|v| v.as_u64()).unwrap_or(0);
+    let pred = value.get("pred").and_then(|v| v.as_u64()).unwrap_or(0);
+    let obj_tag = value.get("obj_tag").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    let obj_val = value.get("obj_val").and_then(|v| v.as_u64()).unwrap_or(0);
+    let qualifiers_mask = value
+        .get("qualifiers_mask")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
 
@@ -1235,24 +1405,32 @@ fn parse_claim_from_json(value: &serde_json::Value) -> Result<ClaimData, String>
 }
 
 fn parse_batch_atom_from_json(value: &serde_json::Value) -> Result<BatchAtom, String> {
-    let atom_type_str = value.get("atom_type")
+    let atom_type_str = value
+        .get("atom_type")
         .and_then(|v| v.as_str())
         .unwrap_or("FACT");
     let atom_type = parse_atom_type(atom_type_str)
         .ok_or_else(|| format!("Invalid atom type: {}", atom_type_str))?;
 
-    let claims_json: Vec<serde_json::Value> = value.get("claims")
+    let claims_json: Vec<serde_json::Value> = value
+        .get("claims")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let claims: Vec<ClaimData> = claims_json.iter()
+    let claims: Vec<ClaimData> = claims_json
+        .iter()
         .map(parse_claim_from_json)
         .collect::<Result<Vec<_>, _>>()?;
 
     // Build payload from symbols and claims
-    let symbols: Vec<String> = value.get("symbols")
+    let symbols: Vec<String> = value
+        .get("symbols")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let payload = build_atom_payload(atom_type, symbols, &claims, 5000, 0xFFFF)?;
@@ -1387,17 +1565,22 @@ fn extract_arg<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
     key: &str,
 ) -> Result<T, String> {
-    value.get(key)
+    value
+        .get(key)
         .ok_or_else(|| format!("Missing required argument: {}", key))
-        .and_then(|v| serde_json::from_value(v.clone())
-            .map_err(|e| format!("Invalid argument '{}': {}", key, e)))
+        .and_then(|v| {
+            serde_json::from_value(v.clone())
+                .map_err(|e| format!("Invalid argument '{}': {}", key, e))
+        })
 }
 
 fn extract_arg_opt<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
     key: &str,
 ) -> Option<T> {
-    value.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
+    value
+        .get(key)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
 // ============================================================================
@@ -1407,13 +1590,13 @@ fn extract_arg_opt<T: serde::de::DeserializeOwned>(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::env;
-    
+
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
     let mut data_dir_arg: Option<PathBuf> = None;
     let mut base_scope = "project".to_string();
     let mut base_name: Option<String> = None;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1452,14 +1635,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Options:");
                 println!("  -d, --data-dir <PATH|NAME>  Base path or base name");
                 println!("      --base-scope <SCOPE>    project|user (default: project)");
-                println!("      --base-name <NAME>      Base name when no path is provided (default: default)");
+                println!(
+                    "      --base-name <NAME>      Base name when no path is provided (default: default)"
+                );
                 println!("  -h, --help                  Show this help message");
                 println!();
                 println!("Resolved defaults:");
                 println!("  project -> <cwd>/.memoryx/bases/default");
                 println!("  user    -> <home>/.memoryx/bases/default");
                 println!();
-                println!("MCP Tools (15 total):");
+                println!("MCP Tools (16 total):");
                 println!("  1. query           - Natural language query");
                 println!("  2. search_lex      - Lexical search");
                 println!("  3. search_graph    - Graph search");
@@ -1468,13 +1653,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  6. batch_ingest    - Batch ingest");
                 println!("  7. update_atom     - Update atom");
                 println!("  8. delete_atom     - Delete atom");
-                println!("  9. create_context  - Create context");
-                println!("  10. list_contexts  - List contexts");
-                println!("  11. branch_context - Branch context");
-                println!("  12. list_conflicts - List conflicts");
-                println!("  13. graph_neighbors- Graph neighbors");
-                println!("  14. graph_walk     - Graph walk");
-                println!("  15. extract_subgraph- Extract subgraph");
+                println!("  9. history         - Recent operation history");
+                println!("  10. create_context - Create context");
+                println!("  11. list_contexts  - List contexts");
+                println!("  12. branch_context - Branch context");
+                println!("  13. list_conflicts - List conflicts");
+                println!("  14. graph_neighbors- Graph neighbors");
+                println!("  15. graph_walk     - Graph walk");
+                println!("  16. extract_subgraph- Extract subgraph");
                 return Ok(());
             }
             _ => {
@@ -1491,25 +1677,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
-    
+
     // Create data directory if it doesn't exist
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("Failed to create data directory: {}", e))?;
-    
+
     // Create server
-    let server = MemoryXMcpServer::new(data_dir.clone())
-        .map_err(|e| {
-            eprintln!("Failed to create server: {}", e);
-            std::process::exit(1);
-        })?;
-    
+    let server = MemoryXMcpServer::new(data_dir.clone()).map_err(|e| {
+        eprintln!("Failed to create server: {}", e);
+        std::process::exit(1);
+    })?;
+
     eprintln!("Data directory: {}", data_dir.display());
-    
+
     // Run server
     server.run_stdio().await.map_err(|e| {
         eprintln!("Server error: {}", e);
         std::process::exit(1);
     })?;
-    
+
     Ok(())
 }
