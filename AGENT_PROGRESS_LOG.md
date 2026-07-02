@@ -150,6 +150,25 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 
+## 2026-07-02: Deterministic constraint evaluator
+
+Done:
+
+- Added `src/query/constraints.rs`.
+- Added `ConstraintSubject` abstraction so solver/router/MCP candidates can later be evaluated without changing public contract types.
+- Added `ConstraintFacts` test/helper subject.
+- Added `ConstraintEvaluator::evaluate_contract()` and `evaluate_constraint()`.
+- Implemented deterministic evaluation for `Eq`, `Ne`, `Contains`, `Matches`, `Exists`, `Gte`, `Lte`.
+- Implemented correct `MUST_NOT` semantics:
+  a forbidden condition is satisfied when the matched predicate is false.
+- Exported evaluator types from `src/query/mod.rs`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+
 ## Open State
 
 Known dirty working tree at hook creation time:

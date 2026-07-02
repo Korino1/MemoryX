@@ -24,6 +24,10 @@ pub use contract::*;
 pub mod compiler;
 pub use compiler::QueryContractCompiler;
 
+// Deterministic constraint evaluation
+pub mod constraints;
+pub use constraints::{ConstraintEvaluator, ConstraintFacts, ConstraintSubject};
+
 // Re-export all types from solver module
 pub use solver::*;
 
