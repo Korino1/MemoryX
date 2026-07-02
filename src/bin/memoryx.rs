@@ -1442,6 +1442,56 @@ fn validate_allowed_base_path(path: &Path) -> CliResult<PathBuf> {
     }
 }
 
+#[cfg(feature = "mcp")]
+fn federation_base_id_path(base: &Path) -> PathBuf {
+    base.join("meta").join("federation_base_id.hex")
+}
+
+#[cfg(feature = "mcp")]
+fn load_or_create_federation_base_id(base: &Path) -> CliResult<[u8; 32]> {
+    let path = federation_base_id_path(base);
+    if path.exists() {
+        let raw = std::fs::read_to_string(&path)?;
+        return parse_federation_base_id(raw.trim());
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let canonical_base = base
+        .canonicalize()
+        .unwrap_or_else(|_| absolute_or_cwd(base).unwrap_or_else(|_| base.to_path_buf()));
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"memoryx:federation-base-id:v1");
+    hasher.update(canonical_base.to_string_lossy().as_bytes());
+    hasher.update(&now_ns.to_le_bytes());
+    hasher.update(&std::process::id().to_le_bytes());
+    let base_id = *hasher.finalize().as_bytes();
+
+    std::fs::write(&path, hex::encode(base_id))?;
+    Ok(base_id)
+}
+
+#[cfg(feature = "mcp")]
+fn parse_federation_base_id(raw: &str) -> CliResult<[u8; 32]> {
+    let bytes = hex::decode(raw)
+        .map_err(|e| CliError::Validation(format!("Invalid federation BaseId: {}", e)))?;
+    if bytes.len() != 32 {
+        return Err(CliError::Validation(format!(
+            "Invalid federation BaseId length: expected 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let mut base_id = [0u8; 32];
+    base_id.copy_from_slice(&bytes);
+    Ok(base_id)
+}
+
 fn resolve_base_path(
     base_arg: Option<&PathBuf>,
     cli_scope: Option<BaseScope>,
@@ -2319,9 +2369,7 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             // HTTP Federation server
             use memoryx::federation::{FederationConfig, FederationServer, Gateway};
 
-            let mut base_id = [0u8; 32];
-            base_id[0] = 1;
-
+            let base_id = load_or_create_federation_base_id(base)?;
             let config = FederationConfig::new(base_id);
             let gateway = Arc::new(tokio::sync::RwLock::new(Gateway::new(
                 std::sync::Arc::new(store),
@@ -4041,15 +4089,26 @@ mod tests {
     fn test_reject_base_outside_allowed_roots() {
         let config = MemoryXConfig::default();
         let outside = std::env::temp_dir().join("memoryx_outside_root");
-        let err = resolve_base_path(
-            Some(&outside),
-            None,
-            None,
-            &config,
-        )
-        .unwrap_err();
+        let err = resolve_base_path(Some(&outside), None, None, &config).unwrap_err();
 
         assert!(matches!(err, CliError::Validation(_)));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn test_federation_base_id_is_persistent_and_unique_per_base() {
+        let dir = tempdir().unwrap();
+        let base_a = dir.path().join("base_a");
+        let base_b = dir.path().join("base_b");
+
+        let first_a = load_or_create_federation_base_id(&base_a).unwrap();
+        let second_a = load_or_create_federation_base_id(&base_a).unwrap();
+        let first_b = load_or_create_federation_base_id(&base_b).unwrap();
+
+        assert_eq!(first_a, second_a);
+        assert_ne!(first_a, first_b);
+        assert!(federation_base_id_path(&base_a).exists());
+        assert!(federation_base_id_path(&base_b).exists());
     }
 
     #[cfg(feature = "mcp")]
