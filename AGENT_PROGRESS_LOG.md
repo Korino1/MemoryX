@@ -678,3 +678,22 @@ Verification:
 - `cargo fmt --check`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
+
+## 2026-07-02: Golden scenario regression tests
+
+Done:
+
+- Added `tests/query_contract.rs`.
+- Added `tests/answer_pack.rs`.
+- Added `tests/conflict_branching.rs`.
+- Added `tests/provenance_paths.rs`.
+- Covered QueryContract MUST/MUST_NOT/SHOULD handling, unsupported empty
+  contract rejection, deterministic AnswerPack knowledge-state fields, no
+  fabricated claims for unsupported facts, branch context visibility, and
+  provenance lookup for real atom-backed claim.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`

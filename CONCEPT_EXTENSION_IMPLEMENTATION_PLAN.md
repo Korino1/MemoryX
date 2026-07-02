@@ -976,6 +976,21 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### K1. Golden scenarios
 
+Статус: реализовано.
+
+Результат:
+
+- Добавлены integration tests:
+  `tests/query_contract.rs`,
+  `tests/answer_pack.rs`,
+  `tests/conflict_branching.rs`,
+  `tests/provenance_paths.rs`.
+- Покрыты contract MUST/MUST_NOT/SHOULD, empty unsupported contract rejection,
+  AnswerPack deterministic knowledge-state fields, no fabricated claims for
+  unsupported facts, branch context visibility, and provenance chain lookup for
+  real atom.
+- Полный `cargo test --all-targets --all-features --quiet` проходит.
+
 Файлы:
 
 - добавить `tests/query_contract.rs`
