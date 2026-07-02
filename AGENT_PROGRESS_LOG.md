@@ -115,6 +115,25 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 
+## 2026-07-02: Deterministic QueryContract compiler
+
+Done:
+
+- Added `src/query/compiler.rs`.
+- Added `QueryContractCompiler::compile_contract(query)`.
+- Added `QueryContractCompiler::compile_goal(query)` as a safe bridge through `QueryContract::to_goal_spec()`.
+- Implemented deterministic baseline parsing for the concept example:
+  Rust, local/offline, conflicts, MCP, not PostgreSQL, Windows priority, provenance priority.
+- Preserved safety rule:
+  natural-language labels are not fabricated into internal entity IDs.
+- Exported `QueryContractCompiler` from `src/query/mod.rs`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+
 ## Open State
 
 Known dirty working tree at hook creation time:

@@ -20,6 +20,10 @@
 pub mod contract;
 pub use contract::*;
 
+// Deterministic natural-language compiler for QueryContract
+pub mod compiler;
+pub use compiler::QueryContractCompiler;
+
 // Re-export all types from solver module
 pub use solver::*;
 
