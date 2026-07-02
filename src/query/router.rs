@@ -17,6 +17,7 @@ use crate::index::{InvertedIndex, Location};
 use crate::query::ann::EmbeddingIndex;
 use crate::query::constraints::ConstraintSubject;
 use crate::query::contract::{ConstraintTarget, ConstraintValue};
+use crate::query::retrieval::{CandidateV2, Retriever};
 use crate::store::api::{CostWeights, CtxId, EvidenceRef, Gap, GapId};
 use crate::store::{
     AtomId, AtomType, DomainMask, EdgeType, GapKind, NodeNum, PatternRef, TrustLevel,
@@ -1072,6 +1073,20 @@ impl QueryRouter {
         }
         candidate_map.into_values().collect()
     }
+
+    /// Route a gap through all current channels and expose the common CandidateV2 contract.
+    pub fn route_v2(&self, gap: &Gap, goal: &crate::query::solver::GoalSpec) -> Vec<CandidateV2> {
+        self.route(gap, goal)
+            .iter()
+            .map(|candidate| CandidateV2::from_candidate(candidate, goal))
+            .collect()
+    }
+}
+
+impl Retriever for QueryRouter {
+    fn retrieve(&self, gap: &Gap, goal: &crate::query::solver::GoalSpec) -> Vec<CandidateV2> {
+        self.route_v2(gap, goal)
+    }
 }
 
 /// Deduplicate candidates by AtomId, keeping highest-priority backend.
@@ -1143,6 +1158,37 @@ mod tests {
         // Verify backend kind
         assert_eq!(candidate.source_backend, BackendKind::Ann);
         assert_eq!(candidate.source_priority, SourcePriority::Ann);
+    }
+
+    #[test]
+    fn test_route_v2_preserves_semantic_candidate_validation_boundary() {
+        let mut router = QueryRouter::new();
+        let atom_id = [7u8; 32];
+        let location = Location::new(0, 100, 256, 42, 0xFFFF);
+        router.register_atom(atom_id, 42, 0, 100, 256);
+        router.ann.register(42, atom_id, location);
+
+        let gap = Gap::new(0, GapKind::NEED_FACT, ClaimPattern::default());
+        let goal = test_goal()
+            .with_entities(vec![EntityRef::Node(42)])
+            .with_semantic_vectors(vec![vec![1.0, 0.0]])
+            .with_constraints(vec![crate::query::contract::Constraint::must(
+                "backend_is_ann",
+                crate::query::contract::ConstraintTarget::Custom("backend".to_owned()),
+                crate::query::contract::ConstraintOperator::Eq,
+                crate::query::contract::ConstraintValue::Text("ANN".to_owned()),
+            )]);
+
+        let candidates = router.route_v2(&gap, &goal);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].retrieval_reason,
+            crate::query::RetrievalReason::Semantic
+        );
+        assert!(candidates[0].requires_validation);
+        assert_eq!(candidates[0].matched_constraints.len(), 1);
+        assert_eq!(candidates[0].matched_constraints[0].0, "backend_is_ann");
     }
 
     #[test]

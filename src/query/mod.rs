@@ -28,6 +28,12 @@ pub use compiler::QueryContractCompiler;
 pub mod constraints;
 pub use constraints::{ConstraintEvaluator, ConstraintFacts, ConstraintSubject};
 
+// Common retriever contracts for candidate-producing channels
+pub mod retrieval;
+pub use retrieval::{
+    CandidateV2, ConstraintBitSet, KnowledgeObjectRef, RetrievalReason, Retriever,
+};
+
 // Re-export all types from solver module
 pub use solver::*;
 

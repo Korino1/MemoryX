@@ -504,6 +504,17 @@ weighted_covered_required_gaps / weighted_total_required_gaps
 
 ### E1. Общий trait retriever
 
+Статус: реализовано, совместимый adapter layer.
+
+Факт реализации:
+
+- Добавлен `src/query/retrieval.rs`.
+- Введены `Retriever`, `CandidateV2`, `KnowledgeObjectRef`, `RetrievalReason`, `ConstraintBitSet`.
+- `QueryRouter::route_v2()` возвращает проверяемые candidates с retrieval reason и matched constraints.
+- `QueryRouter` реализует `Retriever`.
+- Semantic/ANN candidates явно помечаются `requires_validation=true`; retrieval не становится source of truth.
+- Regression test проверяет, что semantic retrieval возвращает candidate contract, но сохраняет validation boundary.
+
 Файлы:
 
 - добавить `src/query/retrieval.rs`

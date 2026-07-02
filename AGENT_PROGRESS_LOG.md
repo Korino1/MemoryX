@@ -418,3 +418,27 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Common retriever contract
+
+Done:
+
+- Added `src/query/retrieval.rs`.
+- Added common retrieval API:
+  `Retriever`, `CandidateV2`, `KnowledgeObjectRef`, `RetrievalReason`,
+  and `ConstraintBitSet`.
+- Added `QueryRouter::route_v2()` and implemented `Retriever` for
+  `QueryRouter`.
+- `CandidateV2` carries matched constraint IDs, retrieval reason, estimated
+  gain/cost, backend name, and `requires_validation`.
+- Preserved anti-RAG boundary:
+  semantic/ANN retrieval returns candidates only and keeps validation mandatory.
+- Added regression coverage for semantic candidate V2 output and validation
+  boundary.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
