@@ -770,6 +770,19 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### I1. Snapshot identity в AnswerPack
 
+Статус: реализовано.
+
+Результат:
+
+- Добавлен `KnowledgeSnapshotId`.
+- `AnswerPack.snapshot` стал обязательной частью публичного ответа.
+- `MemoryX::solve_goal` заполняет snapshot перед возвратом ответа.
+- Snapshot включает CAS atom count, graph node/edge count, index generation,
+  context id и solver version.
+- Добавлена CLI-команда `snapshot`.
+- Добавлены тесты на наличие snapshot в answer path и изменение snapshot после
+  добавления атома.
+
 Файлы:
 
 - `src/store/api.rs`

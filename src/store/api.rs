@@ -3035,6 +3035,31 @@ pub struct RetrievalActionTrace {
     pub reason: String,
 }
 
+/// Snapshot identity for tying an answer to a concrete local knowledge state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeSnapshotId {
+    pub cas_atom_count: usize,
+    pub graph_node_count: u64,
+    pub graph_edge_count: u64,
+    pub index_generation: u64,
+    pub context_id: CtxId,
+    pub solver_version: String,
+}
+
+impl KnowledgeSnapshotId {
+    pub fn logical_id(&self) -> String {
+        format!(
+            "cas:{}|graph:{}:{}|index:{}|ctx:{}|solver:{}",
+            self.cas_atom_count,
+            self.graph_node_count,
+            self.graph_edge_count,
+            self.index_generation,
+            self.context_id,
+            self.solver_version
+        )
+    }
+}
+
 /// Type of conflict
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictType {
@@ -3200,6 +3225,8 @@ pub struct AnswerPack {
     pub query_trace: QueryTrace,
     /// Renderer/LLM-proposed text that is not a verified factual claim.
     pub proposed_text: Vec<crate::query::llm_boundary::Proposal<String>>,
+    /// Snapshot identity of the knowledge state used for this answer.
+    pub snapshot: KnowledgeSnapshotId,
 }
 
 impl AnswerPack {
@@ -3223,6 +3250,14 @@ impl AnswerPack {
             conflict_sets: Vec::new(),
             query_trace: QueryTrace::default(),
             proposed_text: Vec::new(),
+            snapshot: KnowledgeSnapshotId {
+                cas_atom_count: 0,
+                graph_node_count: 0,
+                graph_edge_count: 0,
+                index_generation: 0,
+                context_id: ctx_id,
+                solver_version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
         }
     }
 
@@ -5919,8 +5954,21 @@ impl MemoryX {
         let mut pack = solver
             .solve(goal, ctx_policy)
             .map_err(|e| StoreError::Query(e.to_string()))?;
+        pack.snapshot = self.knowledge_snapshot(pack.selected_ctx)?;
         self.enrich_answer_sources(&mut pack)?;
         Ok(pack)
+    }
+
+    /// Build a snapshot identity for the current local knowledge state.
+    pub fn knowledge_snapshot(&self, context_id: CtxId) -> Result<KnowledgeSnapshotId, StoreError> {
+        Ok(KnowledgeSnapshotId {
+            cas_atom_count: self.loc_index.live_atom_ids().len(),
+            graph_node_count: self.graph.node_count(),
+            graph_edge_count: self.graph.edge_count(),
+            index_generation: self.loc_index.live_atom_ids().len() as u64,
+            context_id,
+            solver_version: env!("CARGO_PKG_VERSION").to_owned(),
+        })
     }
 
     /// Create a QueryRouter populated with all current store data.
@@ -9282,6 +9330,33 @@ mod tests {
         let answer = store.answer_contract(contract, 0).unwrap();
 
         assert_eq!(answer.selected_ctx, 0);
+        assert_eq!(answer.snapshot.context_id, 0);
+    }
+
+    #[test]
+    fn test_knowledge_snapshot_tracks_atom_count() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config).unwrap();
+
+        let before = store.knowledge_snapshot(0).unwrap();
+        assert_eq!(before.cas_atom_count, 0);
+
+        let claim = ClaimData {
+            subj: 1,
+            pred: 2,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 3,
+            qualifiers_mask: 0,
+        };
+        let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+        store
+            .ingest(&payload, AtomType::FACT, &[claim], &[])
+            .unwrap();
+
+        let after = store.knowledge_snapshot(0).unwrap();
+        assert_eq!(after.cas_atom_count, 1);
+        assert_ne!(before.logical_id(), after.logical_id());
     }
 
     #[test]

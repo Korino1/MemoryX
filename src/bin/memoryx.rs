@@ -266,6 +266,17 @@ enum Commands {
         limit: usize,
     },
 
+    /// Show current knowledge snapshot identity
+    Snapshot {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// Context ID to bind into the snapshot
+        #[arg(long, default_value = "0")]
+        ctx: u32,
+    },
+
     /// Create an entity from CLI fields or a JSON/YAML form
     CreateEntity {
         /// MemoryX base path or base name
@@ -2847,6 +2858,28 @@ fn cmd_history(base: &Path, limit: usize, format: OutputFormat) -> CliResult<()>
                 println!("  {}: {}", key, value);
             }
         }
+    }
+
+    Ok(())
+}
+
+fn cmd_snapshot(base: &Path, ctx: u32, format: OutputFormat) -> CliResult<()> {
+    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
+    let snapshot = store.knowledge_snapshot(ctx)?;
+
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        print_serialized(&snapshot, format)?;
+    } else {
+        println!("\n{}", "Knowledge Snapshot".bold().underline());
+        println!("  Base:       {}", base.display().to_string().cyan());
+        println!("  Logical ID: {}", snapshot.logical_id());
+        println!("  CAS atoms:  {}", snapshot.cas_atom_count);
+        println!(
+            "  Graph:      {} nodes / {} edges",
+            snapshot.graph_node_count, snapshot.graph_edge_count
+        );
+        println!("  Context:    {}", snapshot.context_id);
+        println!("  Solver:     {}", snapshot.solver_version);
     }
 
     Ok(())
@@ -5483,6 +5516,13 @@ fn main() {
             &config,
         )
         .and_then(|resolved| cmd_history(&resolved, *limit, cli.format)),
+        Commands::Snapshot { base, ctx } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| cmd_snapshot(&resolved, *ctx, cli.format)),
         Commands::CreateEntity {
             base,
             name,

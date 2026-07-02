@@ -555,3 +555,26 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Knowledge snapshot identity
+
+Done:
+
+- Added `KnowledgeSnapshotId` as the stable answer/database binding structure.
+- Added mandatory `AnswerPack.snapshot`.
+- `MemoryX::solve_goal` now fills the snapshot before answer enrichment.
+- Snapshot currently records CAS atom count, graph node count, graph edge count,
+  index generation, selected context id, and solver version.
+- Added `memoryx snapshot` CLI command with JSON/table/YAML output through the
+  global format flag.
+- Added regression tests proving answer-path snapshot presence and snapshot
+  identity changes after atom ingestion.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
+- `cargo run --quiet -- snapshot --help`
+- `cargo run --quiet -- --base-scope project --base-name snapshot-cli-test --format json snapshot --ctx 0`
