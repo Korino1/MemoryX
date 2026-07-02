@@ -49,6 +49,10 @@ pub use gap_generator::GapGenerator;
 pub mod set_cover;
 pub use set_cover::{AtomCandidate, SetCoverResult, SetCoverSolver};
 
+// Deterministic retrieval planner
+pub mod planner;
+pub use planner::{PlannerBudgets, RetrievalAction, RetrievalPlanner};
+
 // Cost calculation module
 pub mod cost;
 pub use cost::{AnswerGraphCostCalculator, AtomCostCalculator, CostBreakdown, CostCalculator};

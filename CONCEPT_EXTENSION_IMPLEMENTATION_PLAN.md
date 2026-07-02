@@ -568,6 +568,18 @@ pub struct CandidateV2 {
 
 ### E3. Adaptive retrieval planner
 
+Статус: реализовано, deterministic basic planner.
+
+Факт реализации:
+
+- Добавлен `src/query/planner.rs`.
+- `RetrievalPlanner` считает utility:
+  `expected_gap_coverage * evidence_quality * constraint_selectivity / execution_cost`.
+- Planner учитывает action/I/O budgets и deterministic tie-breaking по `gap_id`.
+- `FixedPointSolver` использует planner для порядка retrieval actions вместо исходного порядка gaps.
+- `AnswerPack.query_trace.retrieval_actions` показывает выбранные retrieval actions.
+- Tests покрывают порядок actions, budget limit и наличие planner trace в real answer path.
+
 Файлы:
 
 - добавить `src/query/planner.rs`

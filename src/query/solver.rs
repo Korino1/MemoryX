@@ -8,6 +8,7 @@
 use crate::cas::CasError;
 use crate::cas::io::CasStore;
 use crate::prelude::*;
+use crate::query::planner::{PlannerBudgets, RetrievalPlanner};
 use crate::store::api::ProofStep;
 use crate::store::{
     AtomId, AtomType, ClaimPattern, DomainMask, EdgeType, GapKind, Intent, NodeNum, SymId,
@@ -190,6 +191,8 @@ pub struct SolverState {
     pub prev_graph_hash: u64,
     /// Candidates rejected by query contract constraints before ranking.
     pub rejected_candidates: Vec<RejectedCandidateSummary>,
+    /// Bounded query planning trace.
+    pub query_trace: crate::store::api::QueryTrace,
 }
 
 impl SolverState {
@@ -210,6 +213,7 @@ impl SolverState {
             fetched_offsets: Vec::new(),
             prev_graph_hash: 0,
             rejected_candidates: Vec::new(),
+            query_trace: crate::store::api::QueryTrace::default(),
         }
     }
 
@@ -1766,6 +1770,7 @@ impl FixedPointSolver {
         }
 
         self.apply_conflict_policy_to_pack(&mut pack, &state);
+        pack.query_trace = state.query_trace.clone();
 
         Ok(pack)
     }
@@ -1935,8 +1940,24 @@ impl FixedPointSolver {
     fn iteration(&self, state: &mut SolverState) -> Result<(), SolverError> {
         // Step 1: Route uncovered gaps to candidates
         let mut all_candidates = Vec::new();
+        let planned_actions = RetrievalPlanner::plan(
+            &state.gaps,
+            &state.goal,
+            PlannerBudgets {
+                max_actions: self.config.fetch_budget as usize,
+                max_io_bytes: self.config.io_budget,
+            },
+        );
 
-        for (_gap_idx, gap) in state.uncovered_gaps() {
+        state
+            .query_trace
+            .retrieval_actions
+            .extend(planned_actions.iter().map(|action| action.to_trace(true)));
+
+        for action in planned_actions {
+            let Some(gap) = state.get_gap(action.gap_id) else {
+                continue;
+            };
             let candidates = self.router.route(gap, &state.goal);
             for mut candidate in candidates {
                 candidate.covers_gaps.push(gap.id);

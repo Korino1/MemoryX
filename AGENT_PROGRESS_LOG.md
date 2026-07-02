@@ -442,3 +442,25 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Deterministic retrieval planner
+
+Done:
+
+- Added `src/query/planner.rs`.
+- Added `RetrievalPlanner`, `RetrievalAction`, and `PlannerBudgets`.
+- Implemented deterministic utility scoring:
+  `expected_gap_coverage * evidence_quality * constraint_selectivity / execution_cost`.
+- Planner respects action and I/O budgets and uses deterministic tie-breaking.
+- `FixedPointSolver` now plans uncovered gaps before routing instead of using
+  raw gap order.
+- Added `AnswerPack.query_trace` with selected retrieval actions.
+- Added regression coverage for planner ordering, budget limiting, and trace
+  exposure in a real answer path.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

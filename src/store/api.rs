@@ -3021,6 +3021,20 @@ pub struct ConflictSet {
     pub conflicts: Vec<ConflictSummary>,
 }
 
+/// Bounded trace of retrieval planning and filtering decisions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct QueryTrace {
+    pub retrieval_actions: Vec<RetrievalActionTrace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetrievalActionTrace {
+    pub gap_id: GapId,
+    pub utility: f32,
+    pub selected: bool,
+    pub reason: String,
+}
+
 /// Type of conflict
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictType {
@@ -3182,6 +3196,8 @@ pub struct AnswerPack {
     pub conflicts: Vec<ConflictSummary>,
     /// Conflict groups with branch alternatives and applied policy.
     pub conflict_sets: Vec<ConflictSet>,
+    /// Bounded execution trace for contract/planner decisions.
+    pub query_trace: QueryTrace,
 }
 
 impl AnswerPack {
@@ -3203,6 +3219,7 @@ impl AnswerPack {
             alternates: Vec::new(),
             conflicts: Vec::new(),
             conflict_sets: Vec::new(),
+            query_trace: QueryTrace::default(),
         }
     }
 
@@ -9299,6 +9316,10 @@ mod tests {
         assert!(
             !answer.claims.is_empty(),
             "AnswerPack should have claims from ingested atoms"
+        );
+        assert!(
+            !answer.query_trace.retrieval_actions.is_empty(),
+            "AnswerPack should expose retrieval planner trace"
         );
     }
 
