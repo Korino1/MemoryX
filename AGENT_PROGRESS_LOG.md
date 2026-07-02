@@ -489,3 +489,29 @@ Verification:
 - `cargo run --quiet -- --help`
 - `cargo run --quiet -- ingest --help`
 - `cargo run --quiet -- --format json ingest --extract-claims --dry-run <temp-text-file>`
+
+## 2026-07-02: Semi-structured entity authoring CLI
+
+Done:
+
+- Added `MemoryX::add_entity_claim` to write an atom-backed claim for an
+  existing entity without manual binary atom authoring.
+- Added CLI commands:
+  `create-entity`, `add-entity-claim`, `create-relation`.
+- `create-entity` accepts direct CLI fields or JSON/YAML form with
+  `canonical_name`, `entity_type`, and `aliases`.
+- Verified project-scoped CLI flow:
+  create `GPU`, create `CUDA`, add claim to `GPU`, create relation `GPU -> CUDA`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
+- `cargo run --quiet -- create-entity --help`
+- `cargo run --quiet -- add-entity-claim --help`
+- `cargo run --quiet -- create-relation --help`
+- `cargo run --quiet -- --base-scope project --base-name g2-cli-test --format json create-entity --name GPU --entity-type hardware`
+- `cargo run --quiet -- --base-scope project --base-name g2-cli-test --format json add-entity-claim --entity 1 --predicate 7 --object 4090`
+- `cargo run --quiet -- --base-scope project --base-name g2-cli-test --format json create-relation --subject 1 --predicate 8 --object 2`

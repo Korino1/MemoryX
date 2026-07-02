@@ -266,6 +266,75 @@ enum Commands {
         limit: usize,
     },
 
+    /// Create an entity from CLI fields or a JSON/YAML form
+    CreateEntity {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// Entity canonical name
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Entity type
+        #[arg(long)]
+        entity_type: Option<String>,
+
+        /// JSON/YAML form with canonical_name/entity_type/aliases
+        #[arg(long)]
+        form: Option<PathBuf>,
+    },
+
+    /// Add a semi-structured claim to an entity
+    AddEntityClaim {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// Subject entity ID
+        #[arg(long)]
+        entity: u64,
+
+        /// Predicate symbol ID
+        #[arg(long)]
+        predicate: u32,
+
+        /// Object value as unsigned integer
+        #[arg(long)]
+        object: u64,
+
+        /// Object tag (U64, I64, BOOL, SYM, REF, NODENUM)
+        #[arg(long)]
+        object_tag: Option<String>,
+
+        /// Context ID
+        #[arg(long, default_value = "0")]
+        ctx: u32,
+    },
+
+    /// Create an atom-backed relation between two entities
+    CreateRelation {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// Subject entity ID
+        #[arg(long)]
+        subject: u64,
+
+        /// Predicate symbol ID
+        #[arg(long)]
+        predicate: u32,
+
+        /// Object entity ID
+        #[arg(long)]
+        object: u64,
+
+        /// Context ID
+        #[arg(long, default_value = "0")]
+        ctx: u32,
+    },
+
     /// Start MCP server
     Serve {
         /// MemoryX base path or base name
@@ -1667,6 +1736,27 @@ struct IngestCliOptions<'a> {
     verbose: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct EntityCreateForm {
+    canonical_name: String,
+    entity_type: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+}
+
+fn read_entity_create_form(path: &Path) -> CliResult<EntityCreateForm> {
+    let content = std::fs::read_to_string(path)?;
+    if path
+        .extension()
+        .map(|ext| ext == "yaml" || ext == "yml")
+        .unwrap_or(false)
+    {
+        Ok(serde_yaml::from_str(&content)?)
+    } else {
+        Ok(serde_json::from_str(&content)?)
+    }
+}
+
 /// Ingest atoms from files
 fn cmd_ingest(options: IngestCliOptions<'_>) -> CliResult<()> {
     let IngestCliOptions {
@@ -1774,6 +1864,85 @@ fn cmd_ingest(options: IngestCliOptions<'_>) -> CliResult<()> {
     ));
 
     Ok(())
+}
+
+fn cmd_create_entity(
+    base: &Path,
+    name: Option<&str>,
+    entity_type: Option<&str>,
+    form: Option<&Path>,
+    output_format: OutputFormat,
+) -> CliResult<()> {
+    let config = StoreConfig::new(base.to_path_buf());
+    let mut store = MemoryX::new(config)
+        .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
+
+    let form = match form {
+        Some(path) => read_entity_create_form(path)?,
+        None => EntityCreateForm {
+            canonical_name: name
+                .ok_or_else(|| {
+                    CliError::Validation("--name is required without --form".to_owned())
+                })?
+                .to_owned(),
+            entity_type: entity_type
+                .ok_or_else(|| {
+                    CliError::Validation("--entity-type is required without --form".to_owned())
+                })?
+                .to_owned(),
+            aliases: Vec::new(),
+        },
+    };
+
+    let mut entity = store
+        .create_entity(form.canonical_name, form.entity_type)
+        .map_err(|e| CliError::Store(format!("Create entity failed: {}", e)))?;
+    for alias in form.aliases {
+        entity = store
+            .alias_entity(entity.entity_id, alias)
+            .map_err(|e| CliError::Store(format!("Alias entity failed: {}", e)))?;
+    }
+
+    print_serialized(&entity, output_format)
+}
+
+fn cmd_add_entity_claim(
+    base: &Path,
+    entity: u64,
+    predicate: u32,
+    object: u64,
+    object_tag: Option<&str>,
+    ctx: u32,
+    output_format: OutputFormat,
+) -> CliResult<()> {
+    let config = StoreConfig::new(base.to_path_buf());
+    let mut store = MemoryX::new(config)
+        .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
+    let object_tag = ObjTag::from_u8(parse_object_tag(object_tag)?)
+        .ok_or_else(|| CliError::Validation("invalid object tag".to_owned()))?;
+    let result = store
+        .add_entity_claim(entity, predicate, object_tag, object, ctx, Vec::new())
+        .map_err(|e| CliError::Store(format!("Add entity claim failed: {}", e)))?;
+
+    print_serialized(&result, output_format)
+}
+
+fn cmd_create_relation(
+    base: &Path,
+    subject: u64,
+    predicate: u32,
+    object: u64,
+    ctx: u32,
+    output_format: OutputFormat,
+) -> CliResult<()> {
+    let config = StoreConfig::new(base.to_path_buf());
+    let mut store = MemoryX::new(config)
+        .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
+    let result = store
+        .assert_relation(subject, predicate, object, ctx, Vec::new())
+        .map_err(|e| CliError::Store(format!("Create relation failed: {}", e)))?;
+
+    print_serialized(&result, output_format)
 }
 
 fn cmd_ingest_extract_claims(
@@ -5065,6 +5234,65 @@ fn main() {
             &config,
         )
         .and_then(|resolved| cmd_history(&resolved, *limit, cli.format)),
+        Commands::CreateEntity {
+            base,
+            name,
+            entity_type,
+            form,
+        } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| {
+            cmd_create_entity(
+                &resolved,
+                name.as_deref(),
+                entity_type.as_deref(),
+                form.as_deref(),
+                cli.format,
+            )
+        }),
+        Commands::AddEntityClaim {
+            base,
+            entity,
+            predicate,
+            object,
+            object_tag,
+            ctx,
+        } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| {
+            cmd_add_entity_claim(
+                &resolved,
+                *entity,
+                *predicate,
+                *object,
+                object_tag.as_deref(),
+                *ctx,
+                cli.format,
+            )
+        }),
+        Commands::CreateRelation {
+            base,
+            subject,
+            predicate,
+            object,
+            ctx,
+        } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| {
+            cmd_create_relation(&resolved, *subject, *predicate, *object, *ctx, cli.format)
+        }),
         Commands::Serve {
             base,
             port,

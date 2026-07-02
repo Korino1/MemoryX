@@ -5423,6 +5423,50 @@ impl MemoryX {
         Ok(entity)
     }
 
+    /// Add a semi-structured claim to an entity without manual binary atom authoring.
+    pub fn add_entity_claim(
+        &mut self,
+        entity_id: EntityId,
+        predicate: SymId,
+        object_tag: ObjTag,
+        object_value: u64,
+        ctx_id: CtxId,
+        evidence: Vec<EvidenceRef>,
+    ) -> Result<AuthoringResult, StoreError> {
+        if self.get_entity(entity_id)?.is_none() {
+            return Err(StoreError::Io(format!("entity {} not found", entity_id)));
+        }
+
+        let claim = ClaimData {
+            subj: entity_id,
+            pred: u64::from(predicate),
+            obj_tag: object_tag.to_u8(),
+            obj_val: object_value,
+            qualifiers_mask: 0,
+        };
+        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim));
+        let atom_id = self.ingest(
+            &payload,
+            AtomType::FACT,
+            std::slice::from_ref(&claim),
+            &evidence,
+        )?;
+        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, atom_id)?;
+
+        let mut entity = self
+            .get_entity(entity_id)?
+            .ok_or_else(|| StoreError::Io(format!("entity {} not found", entity_id)))?;
+        entity.claims.push(atom_id);
+        entity.updated_at_unix_ns = current_unix_ns();
+        self.append_entity(&entity)?;
+
+        Ok(AuthoringResult {
+            atom_id,
+            relation_id: None,
+            ctx_id: actual_ctx,
+        })
+    }
+
     /// Assert a high-level relation as a real atom claim and activate it in context.
     pub fn assert_relation(
         &mut self,
@@ -8327,6 +8371,22 @@ mod tests {
         let reopened = MemoryX::new(config).unwrap();
         assert_eq!(reopened.list_entities().unwrap().len(), 2);
         assert_eq!(reopened.read_relations().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_add_entity_claim_writes_atom_and_updates_entity() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config).unwrap();
+
+        let entity = store.create_entity("GPU", "hardware").unwrap();
+        let result = store
+            .add_entity_claim(entity.entity_id, 7, ObjTag::U64, 4090, 0, Vec::new())
+            .unwrap();
+
+        assert!(store.verify_atom(&result.atom_id).unwrap());
+        let updated = store.get_entity(entity.entity_id).unwrap().unwrap();
+        assert!(updated.claims.contains(&result.atom_id));
     }
 
     #[test]

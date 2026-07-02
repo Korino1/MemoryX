@@ -674,6 +674,18 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### G2. Полуструктурированное создание сущностей
 
+Статус: реализовано.
+
+Факт реализации:
+
+- `create_entity` уже был реализован в authoring layer.
+- Добавлен `MemoryX::add_entity_claim`.
+- Relation creation покрыта atom-backed `assert_relation`.
+- CLI добавил:
+  `create-entity`, `add-entity-claim`, `create-relation`.
+- `create-entity` поддерживает JSON/YAML form с `canonical_name`, `entity_type`, `aliases`.
+- Runtime-проверка CLI на project-scoped базе подтвердила создание entity, claim и relation без ручного binary atom authoring.
+
 Файлы:
 
 - `src/store/entity.rs`
