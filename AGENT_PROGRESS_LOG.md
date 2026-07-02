@@ -299,3 +299,27 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Claim model V2
+
+Done:
+
+- Extended `ClaimStatus` with:
+  `Hypothesis`, `Contradicted`, `Superseded`, `Deprecated`, `Unknown`.
+- Added public claim model support types:
+  `Polarity`, `Modality`, `Qualifier`, `TimeInterval`, `ConfidenceVector`.
+- Added `ClaimViewV2` with explicit epistemic status, modality, polarity,
+  time interval, confidence vector, evidence refs, and provenance path.
+- Added automatic `ClaimView -> ClaimViewV2` conversion.
+- Extended `AnswerPack` with `claims_v2`; `add_claim` now keeps legacy and V2
+  claim surfaces in sync.
+- Added serde derives to `EntityRef`, `ObjTag`, and `ConstValue` so the new
+  public claim model remains serializable.
+- Added regression coverage for status/modality/confidence conversion.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

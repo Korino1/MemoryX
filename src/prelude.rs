@@ -164,7 +164,9 @@ pub use crate::utils::write_u64_le;
 pub use crate::store::api::ActiveClaim;
 pub use crate::store::api::AnswerPack;
 pub use crate::store::api::BranchReason;
+pub use crate::store::api::ClaimStatus;
 pub use crate::store::api::ClaimView;
+pub use crate::store::api::ClaimViewV2;
 pub use crate::store::api::Conflict;
 pub use crate::store::api::ConflictSeverity;
 pub use crate::store::api::ConflictType;
@@ -180,12 +182,16 @@ pub use crate::store::api::Limitation;
 pub use crate::store::api::LimitationCode;
 pub use crate::store::api::LimitationSeverity;
 pub use crate::store::api::MemoryX;
+pub use crate::store::api::Modality;
+pub use crate::store::api::Polarity;
+pub use crate::store::api::Qualifier;
 pub use crate::store::api::SourceId;
 pub use crate::store::api::SourceKind;
 pub use crate::store::api::SourceLocation;
 pub use crate::store::api::SourceRecord;
 pub use crate::store::api::StoreConfig;
 pub use crate::store::api::StoreError;
+pub use crate::store::api::TimeInterval;
 
 // Federation types
 #[cfg(feature = "federation")]

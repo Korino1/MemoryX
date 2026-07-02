@@ -12,6 +12,7 @@ MemoryX - не hosted SaaS и не обёртка над vector database. Это
 - contexts и conflicts как объектами первого класса
 - lexical, semantic и graph retrieval
 - fixed-point solver, который собирает `AnswerGraph`
+- `ClaimViewV2` с epistemic status, confidence vector, modality, polarity, evidence и provenance
 - import/export, stats, compaction и federation
 - MCP surface для интеграции с ассистентами
 
@@ -234,6 +235,7 @@ MemoryX is not a hosted app or a generic vector database wrapper. It is a Rust k
 - context branching for conflicting claims
 - lexical, semantic, and graph-backed retrieval
 - a fixed-point query solver that builds an AnswerGraph
+- `ClaimViewV2` output with epistemic status, confidence vector, modality, polarity, evidence, and provenance
 - import/export, stats, compaction, and federation support
 - MCP surfaces for assistant integrations
 

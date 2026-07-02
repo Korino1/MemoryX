@@ -444,7 +444,7 @@ impl Instruction {
 // ============================================================================
 
 /// Constant value types for VM
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ConstValue {
     /// Symbol ID
     Sym(u32),
@@ -954,12 +954,15 @@ impl CtxIndex {
         atom_id: AtomId,
         severity: ConflictSeverity,
     ) {
-        let entry = self.conflicts.entry(pattern_hash).or_insert_with(|| ConflictInfo {
-            atom_ids: Vec::new(),
-            claim_signatures: Vec::new(),
-            severity,
-            pattern_hash,
-        });
+        let entry = self
+            .conflicts
+            .entry(pattern_hash)
+            .or_insert_with(|| ConflictInfo {
+                atom_ids: Vec::new(),
+                claim_signatures: Vec::new(),
+                severity,
+                pattern_hash,
+            });
 
         if !entry.atom_ids.contains(&atom_id) {
             entry.atom_ids.push(atom_id);
@@ -984,7 +987,12 @@ impl CtxIndex {
 
     /// Add a claim entry with the exact claim signature, used by the live CTX index.
     #[inline]
-    pub fn add_claim_index(&mut self, claim: &ClaimData, atom_id: AtomId, severity: ConflictSeverity) {
+    pub fn add_claim_index(
+        &mut self,
+        claim: &ClaimData,
+        atom_id: AtomId,
+        severity: ConflictSeverity,
+    ) {
         let pattern_hash = Self::claim_pattern_hash(claim);
         let claim_signature = Self::claim_signature(claim);
         self.insert_conflict(pattern_hash, Some(claim_signature), atom_id, severity);
@@ -3497,7 +3505,10 @@ mod tests {
         };
 
         let result = ctx_manager.assert_claim_with_atom_id(ctx_id, &claim1, [1u8; 32]);
-        assert!(result.is_ok(), "First claim should be added without conflict");
+        assert!(
+            result.is_ok(),
+            "First claim should be added without conflict"
+        );
 
         let claim2 = ClaimData {
             subj: 1,
@@ -3600,7 +3611,9 @@ mod tests {
             qualifiers_mask: 0,
         };
         assert!(
-            ctx_index.probe_conflict(&same_pattern_different_value).is_some(),
+            ctx_index
+                .probe_conflict(&same_pattern_different_value)
+                .is_some(),
             "Different value under the same pattern must be treated as a real conflict"
         );
 

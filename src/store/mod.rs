@@ -349,7 +349,9 @@ impl std::error::Error for InvalidEdgeType {}
 
 /// Runtime type tags for values
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum ObjTag {
     /// Null value
     NULL = 0,
@@ -995,7 +997,9 @@ impl std::error::Error for InvalidGapKind {}
 
 /// Conflict-free Replicated Data Type kinds
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CrdtKind {
     /// G-Counter (grow-only counter)

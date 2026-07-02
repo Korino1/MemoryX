@@ -462,7 +462,7 @@ impl Gap {
 // ============================================================================
 
 /// Entity reference types for query specification
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EntityRef {
     /// Symbol reference by ID
     Sym(SymId),
@@ -1434,10 +1434,16 @@ pub struct ClaimView {
 }
 
 /// Epistemic status of a claim returned in an AnswerPack.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClaimStatus {
     Verified,
     Derived,
+    Hypothesis,
+    Contradicted,
+    Superseded,
+    Deprecated,
+    Unknown,
     Structural,
     InsufficientEvidence,
 }
@@ -1478,6 +1484,128 @@ impl ClaimView {
         self.evidence_refs = evidence_refs;
         self.provenance_path = provenance_path;
         self
+    }
+}
+
+/// Claim polarity for explicit positive/negative assertions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Polarity {
+    Positive,
+    Negative,
+    Neutral,
+}
+
+/// Claim modality for factual, possible, required, or forbidden assertions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Modality {
+    Asserted,
+    Hypothetical,
+    Possible,
+    Necessary,
+    Forbidden,
+}
+
+/// Qualifier attached to a public claim view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Qualifier {
+    pub key: String,
+    pub value: String,
+}
+
+/// Validity interval for a claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeInterval {
+    pub valid_from_unix_ns: Option<u64>,
+    pub valid_to_unix_ns: Option<u64>,
+    pub observed_at_unix_ns: Option<u64>,
+}
+
+/// Multi-factor confidence vector for claim-level output.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ConfidenceVector {
+    pub trust: f32,
+    pub evidence: f32,
+    pub consistency: f32,
+    pub freshness: f32,
+    pub overall: f32,
+}
+
+impl ConfidenceVector {
+    pub fn from_trust(trust: TrustLevel, evidence_count: usize, status: ClaimStatus) -> Self {
+        let trust_factor = trust as f32 / 10000.0;
+        let evidence_factor = if evidence_count > 0 { 1.0 } else { 0.0 };
+        let consistency_factor = match status {
+            ClaimStatus::Contradicted => 0.0,
+            ClaimStatus::Superseded | ClaimStatus::Deprecated => 0.25,
+            ClaimStatus::Unknown | ClaimStatus::InsufficientEvidence => 0.4,
+            _ => 1.0,
+        };
+        let freshness_factor = 1.0;
+        let overall = (trust_factor * 0.4
+            + evidence_factor * 0.25
+            + consistency_factor * 0.25
+            + freshness_factor * 0.1)
+            .clamp(0.0, 1.0);
+
+        ConfidenceVector {
+            trust: trust_factor,
+            evidence: evidence_factor,
+            consistency: consistency_factor,
+            freshness: freshness_factor,
+            overall,
+        }
+    }
+}
+
+/// Public claim model with explicit epistemic and confidence fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimViewV2 {
+    pub subj: EntityRef,
+    pub pred: SymId,
+    pub obj_tag: ObjTag,
+    pub obj_value: ConstValue,
+    pub qualifiers_mask: u32,
+    pub qualifiers: Vec<Qualifier>,
+    pub polarity: Polarity,
+    pub modality: Modality,
+    pub time: TimeInterval,
+    pub trust: TrustLevel,
+    pub confidence: ConfidenceVector,
+    pub atom_id: AtomId,
+    pub status: ClaimStatus,
+    pub evidence_refs: Vec<EvidenceRef>,
+    pub provenance_path: Vec<EvidenceRef>,
+}
+
+impl From<ClaimView> for ClaimViewV2 {
+    fn from(claim: ClaimView) -> Self {
+        let evidence_count = claim.evidence_refs.len();
+        ClaimViewV2 {
+            subj: claim.subj,
+            pred: claim.pred,
+            obj_tag: claim.obj_tag,
+            obj_value: claim.obj_value,
+            qualifiers_mask: claim.qualifiers_mask,
+            qualifiers: Vec::new(),
+            polarity: Polarity::Positive,
+            modality: match claim.status {
+                ClaimStatus::Hypothesis => Modality::Hypothetical,
+                _ => Modality::Asserted,
+            },
+            time: TimeInterval {
+                valid_from_unix_ns: None,
+                valid_to_unix_ns: None,
+                observed_at_unix_ns: None,
+            },
+            trust: claim.trust,
+            confidence: ConfidenceVector::from_trust(claim.trust, evidence_count, claim.status),
+            atom_id: claim.atom_id,
+            status: claim.status,
+            evidence_refs: claim.evidence_refs,
+            provenance_path: claim.provenance_path,
+        }
     }
 }
 
@@ -2787,6 +2915,8 @@ pub struct AnswerPack {
     pub selected_ctx: CtxId,
     /// Extracted claims
     pub claims: Vec<ClaimView>,
+    /// Extended public claims with explicit epistemic fields.
+    pub claims_v2: Vec<ClaimViewV2>,
     /// Evidence references
     pub evidence: Vec<EvidenceRef>,
     /// Proof-grade evidence records enriched with source metadata when available.
@@ -2809,6 +2939,7 @@ impl AnswerPack {
             graph: AnswerGraph::new(),
             selected_ctx: ctx_id,
             claims: Vec::new(),
+            claims_v2: Vec::new(),
             evidence: Vec::new(),
             evidence_records: Vec::new(),
             coverage_report: CoverageReport::empty(),
@@ -3061,6 +3192,7 @@ impl AnswerPack {
     /// Add a claim to the answer pack
     #[inline]
     pub fn add_claim(&mut self, claim: ClaimView) {
+        self.claims_v2.push(claim.clone().into());
         self.claims.push(claim);
         self.coverage_report.claim_count = self.claims.len();
     }
@@ -7540,6 +7672,32 @@ mod tests {
         let reopened = MemoryX::new(config).unwrap();
         let persisted = reopened.get_source(source.source_id).unwrap().unwrap();
         assert_eq!(persisted.label, "concept-spec");
+    }
+
+    #[test]
+    fn test_claim_view_v2_preserves_epistemic_status_and_confidence() {
+        let evidence = EvidenceRef::new([3u8; 32], SectionKind::CLAIMS, 10, 5, 8000);
+        let claim = ClaimView::new(
+            EntityRef::Node(1),
+            2,
+            ObjTag::U64,
+            ConstValue::u64(42),
+            0,
+            7500,
+            [4u8; 32],
+        )
+        .with_provenance(
+            ClaimStatus::Hypothesis,
+            vec![evidence.clone()],
+            vec![evidence],
+        );
+
+        let claim_v2 = ClaimViewV2::from(claim);
+        assert_eq!(claim_v2.status, ClaimStatus::Hypothesis);
+        assert_eq!(claim_v2.modality, Modality::Hypothetical);
+        assert_eq!(claim_v2.polarity, Polarity::Positive);
+        assert_eq!(claim_v2.evidence_refs.len(), 1);
+        assert!(claim_v2.confidence.overall > 0.0);
     }
 
     #[test]
