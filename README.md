@@ -56,6 +56,18 @@ cargo +nightly run --release --bin memoryx -- ingest --base default facts.json
 cargo +nightly run --release --bin memoryx -- query --base default "что известно про Rust ownership?"
 ```
 
+Скомпилировать редактируемый `QueryContract` без выполнения:
+
+```bash
+cargo +nightly run --release --bin memoryx -- --format json query --emit-contract "Explain MemoryX MCP"
+```
+
+Выполнить сохранённый contract и получить структурированный `AnswerPack`:
+
+```bash
+cargo +nightly run --release --bin memoryx -- --format json query --contract contract.json
+```
+
 Посмотреть статистику:
 
 ```bash
@@ -108,12 +120,18 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 Доступные инструменты:
 
 - `query`
+- `compile_query_contract`
+- `validate_query_contract`
+- `explain_answer_graph`
+- `get_provenance_path`
 - `search_lex`
 - `search_graph`
 - `search_semantic`
 - `ingest`
 - `batch_ingest`
 - `update_atom`
+- `supersede_claim`
+- `correct_claim`
 - `delete_atom`
 - `history`
 - `register_source`
@@ -122,6 +140,9 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 - `create_entity`
 - `list_entities`
 - `alias_entity`
+- `merge_entities`
+- `split_entity`
+- `add_claim`
 - `assert_relation`
 - `correct_relation`
 - `create_context`
@@ -136,6 +157,20 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 ```bash
 cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
+```
+
+Примеры MCP calls:
+
+```json
+{"name":"compile_query_contract","arguments":{"query_text":"Explain MemoryX MCP"}}
+```
+
+```json
+{"name":"query","arguments":{"query_text":"What decisions mention persistence?","ctx_id":0}}
+```
+
+```json
+{"name":"explain_answer_graph","arguments":{"query_text":"Find facts about MemoryX persistence","ctx_id":0}}
 ```
 
 ### Полный MCP example
@@ -228,6 +263,10 @@ cargo +nightly run --release --bin memoryx -- history --base default --limit 20
 ## Для Дальнейшего Чтения
 
 - CLI entry point: `src/bin/memoryx.rs`
+- Query contract: `docs/QUERY_CONTRACT.md`
+- Answer pack: `docs/ANSWER_PACK.md`
+- Authoring API: `docs/AUTHORING_API.md`
+- LLM boundary: `docs/LLM_BOUNDARY.md`
 - Полный MCP example: `examples/mcp_server_full.rs`
 - Нативное API: `examples/native_api.rs` и `examples/basic.rs`
 - Общая структура crate: `src/lib.rs`
@@ -358,15 +397,21 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 `memoryx serve --stdio` is the core store-backed MCP transport. Build it with the `mcp` feature.
 
-It exposes the full 24-tool production surface:
+It exposes the full 33-tool production surface:
 
 - `query`
+- `compile_query_contract`
+- `validate_query_contract`
+- `explain_answer_graph`
+- `get_provenance_path`
 - `search_lex`
 - `search_graph`
 - `search_semantic`
 - `ingest`
 - `batch_ingest`
 - `update_atom`
+- `supersede_claim`
+- `correct_claim`
 - `delete_atom`
 - `history`
 - `register_source`
@@ -375,6 +420,9 @@ It exposes the full 24-tool production surface:
 - `create_entity`
 - `list_entities`
 - `alias_entity`
+- `merge_entities`
+- `split_entity`
+- `add_claim`
 - `assert_relation`
 - `correct_relation`
 - `create_context`
@@ -389,6 +437,20 @@ Example:
 
 ```bash
 cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
+```
+
+MCP call examples:
+
+```json
+{"name":"compile_query_contract","arguments":{"query_text":"Explain MemoryX MCP"}}
+```
+
+```json
+{"name":"query","arguments":{"query_text":"What decisions mention persistence?","ctx_id":0}}
+```
+
+```json
+{"name":"get_provenance_path","arguments":{"atom_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 ```
 
 ### Full MCP example
@@ -536,5 +598,9 @@ The crate exposes a native Rust API under `memoryx::store::api` and related modu
 ## Further Reading
 
 - CLI entry point: `src/bin/memoryx.rs`
+- Query contract: `docs/QUERY_CONTRACT.md`
+- Answer pack: `docs/ANSWER_PACK.md`
+- Authoring API: `docs/AUTHORING_API.md`
+- LLM boundary: `docs/LLM_BOUNDARY.md`
 - Full MCP example: `examples/mcp_server_full.rs`
 - Full crate layout: `src/lib.rs`

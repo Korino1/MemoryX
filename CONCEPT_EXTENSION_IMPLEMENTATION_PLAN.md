@@ -939,6 +939,20 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### J3. README и concept docs
 
+Статус: реализовано.
+
+Результат:
+
+- README актуализирован под executable knowledge fabric, contract query,
+  AnswerPack output и 33-tool MCP surface.
+- Добавлены docs:
+  `docs/QUERY_CONTRACT.md`,
+  `docs/ANSWER_PACK.md`,
+  `docs/AUTHORING_API.md`.
+- README содержит examples для simple query, contract emission/execution,
+  MCP query/explain/provenance calls и ссылки на новые docs.
+- Статус проекта явно оставлен pre-1.0 без marketing overclaim.
+
 Файлы:
 
 - README.md

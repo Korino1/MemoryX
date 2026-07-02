@@ -661,3 +661,20 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: README and concept docs
+
+Done:
+
+- Updated README with QueryContract compile/execute examples and current
+  33-tool MCP surface.
+- Added `docs/QUERY_CONTRACT.md`.
+- Added `docs/ANSWER_PACK.md`.
+- Added `docs/AUTHORING_API.md`.
+- Linked the new docs from README and kept status wording pre-1.0 / non-hype.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
