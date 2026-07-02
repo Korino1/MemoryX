@@ -45,7 +45,9 @@ use crate::vm::{AtomView as CasAtomView, ClaimData, ConstValue};
 pub use crate::store::ObjTag;
 
 // Re-export solver types (solver depends on this module, not vice versa)
-pub use crate::query::{FixedPointSolver, GoalSpec, GoalSpecCompiler};
+pub use crate::query::{
+    FixedPointSolver, GoalSpec, GoalSpecCompiler, QueryContract, QueryContractCompiler,
+};
 
 // Import Candidate for search_semantic return type
 use crate::query::router::{BackendKind, Candidate};
@@ -4486,6 +4488,33 @@ impl MemoryX {
         query_text: &str,
         ctx_policy: CtxPolicyId,
     ) -> Result<AnswerPack, StoreError> {
+        let contract = QueryContractCompiler::compile_contract(query_text);
+        self.answer_contract(contract, ctx_policy)
+    }
+
+    /// Answer a strict query contract.
+    ///
+    /// This is the public contract-first query path. Natural language query
+    /// compatibility goes through `QueryContractCompiler` and then calls this
+    /// method, so MCP/CLI query execution cannot bypass the contract layer.
+    pub fn answer_contract(
+        &self,
+        contract: QueryContract,
+        ctx_policy: CtxPolicyId,
+    ) -> Result<AnswerPack, StoreError> {
+        let goal = contract
+            .to_goal_spec()
+            .map_err(|e| StoreError::Query(e.to_string()))?
+            .with_ctx_policy(ctx_policy);
+
+        self.solve_goal(goal, ctx_policy)
+    }
+
+    fn solve_goal(
+        &self,
+        goal: GoalSpec,
+        ctx_policy: CtxPolicyId,
+    ) -> Result<AnswerPack, StoreError> {
         // Create router populated with current store data
         let router = self.create_router();
 
@@ -4502,8 +4531,6 @@ impl MemoryX {
             .with_ctx_manager(Arc::clone(&self.ctx_manager))
             .with_timestamp(now_ns)
             .with_cas(Arc::clone(&self.cas.io_store));
-
-        let goal = GoalSpecCompiler::compile(query_text).with_ctx_policy(ctx_policy);
 
         solver
             .solve(goal, ctx_policy)
@@ -7549,6 +7576,21 @@ mod tests {
             !claim_term_lookup.is_empty(),
             "Inverted backend should have claim subject term indexed"
         );
+    }
+
+    #[test]
+    fn test_answer_contract_public_path() {
+        use crate::query::{ContractIntent, EntityPattern};
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let store = MemoryX::new(config).unwrap();
+        let contract =
+            QueryContract::new(ContractIntent::Lookup).with_target(EntityPattern::label("term:1"));
+
+        let answer = store.answer_contract(contract, 0).unwrap();
+
+        assert_eq!(answer.selected_ctx, 0);
     }
 
     #[test]

@@ -19,6 +19,8 @@ impl QueryContractCompiler {
         let mut contract = QueryContract::new(classify_intent(&normalized))
             .with_target(EntityPattern::label(query.trim()));
 
+        apply_explicit_term_targets(&normalized, &mut contract);
+        apply_broad_lookup_compat_target(&mut contract);
         apply_requirement_rules(&normalized, &mut contract);
         apply_negative_rules(&normalized, &mut contract);
         apply_priority_rules(&normalized, &mut contract);
@@ -125,6 +127,37 @@ fn apply_requirement_rules(normalized: &str, contract: &mut QueryContract) {
             ConstraintOperator::Contains,
             ConstraintValue::Text("mcp".to_owned()),
         ));
+    }
+}
+
+fn apply_explicit_term_targets(normalized: &str, contract: &mut QueryContract) {
+    for token in normalized.split_whitespace() {
+        if let Ok(term_id) = token.parse::<u32>() {
+            contract.targets.push(EntityPattern {
+                id: Some(format!("term:{term_id}")),
+                label: Some(token.to_owned()),
+                entity_type: Some("term_id".to_owned()),
+                aliases: Vec::new(),
+                domain_mask: None,
+            });
+        }
+    }
+}
+
+fn apply_broad_lookup_compat_target(contract: &mut QueryContract) {
+    let has_explicit_target = contract
+        .targets
+        .iter()
+        .any(|target| target.id.as_deref().is_some_and(|id| id.contains(':')));
+
+    if contract.intent == ContractIntent::Lookup && !has_explicit_target {
+        contract.targets.push(EntityPattern {
+            id: Some("term:0".to_owned()),
+            label: Some("compat_broad_lookup".to_owned()),
+            entity_type: Some("compatibility_term_seed".to_owned()),
+            aliases: Vec::new(),
+            domain_mask: None,
+        });
     }
 }
 
@@ -268,6 +301,20 @@ mod tests {
         let goal = QueryContractCompiler::compile_goal("Explain MemoryX MCP").unwrap();
 
         assert!(goal.entities.is_empty());
+    }
+
+    #[test]
+    fn compiler_preserves_explicit_numeric_term_ids() {
+        let goal = QueryContractCompiler::compile_goal("find 100").unwrap();
+
+        assert_eq!(goal.entities, vec![crate::query::EntityRef::Term(100)]);
+    }
+
+    #[test]
+    fn compiler_preserves_broad_lookup_compat_seed() {
+        let goal = QueryContractCompiler::compile_goal("find what").unwrap();
+
+        assert_eq!(goal.entities, vec![crate::query::EntityRef::Term(0)]);
     }
 
     #[test]
