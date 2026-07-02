@@ -20,11 +20,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use crate::cas::hex_decode;
 use crate::crdt::{ActorId, MetaStore};
 use crate::store::api::{MemoryX, StoreError};
 use crate::store::{AtomId, AtomType, TrustLevel};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 // Re-export main types
 pub use crate::store::api::EvidenceRef;
@@ -42,6 +43,13 @@ pub type BaseId = [u8; 32];
 
 /// Federation version for protocol compatibility
 pub const FEDERATION_PROTOCOL_VERSION: u16 = 0x0101; // 1.1
+
+fn current_unix_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+}
 
 // ============================================================================
 // Federation Errors
@@ -1974,29 +1982,38 @@ impl Gateway {
             return response;
         }
 
-        // Search local term index
-        let results = self
-            .local_store
-            .search_lex(&req.term, None);
+        // Search local base by direct atom id first, then by lexical term.
+        let mut seen_atoms = std::collections::HashSet::new();
+        if let Some(atom_id) = Self::parse_discover_atom_id(&req.term)
+            && let Some(node_num) = self.local_store.get_node_num(&atom_id)
+            && let Some(meta) = self.local_store.meta.get_meta(&atom_id)
+            && self.discovery_meta_matches(meta, &req)
+        {
+            seen_atoms.insert(atom_id);
+            response.add_result(self.discovery_result_for_atom(
+                &req.term,
+                atom_id,
+                node_num,
+                meta.trust_level,
+                1.0,
+            ));
+        }
+
+        let results = self.local_store.search_lex(&req.term, None);
 
         for node_num in results {
-            // Get atom metadata
-            if let Some(meta) = self.local_store.meta.get_meta_by_node(node_num) {
-                // Check trust threshold
-                if meta.trust_level < req.min_trust {
-                    continue;
-                }
-
-                // Create discovery result
-                let result = DiscoveryResult::new(
-                    self.config.local_base_id,
-                    req.term.clone(),
-                    1.0, // Full relevance for direct match
-                    0,   // 0 hops (local)
+            if let Some(atom_id) = self.local_store.meta.get_atom_by_node(node_num).copied()
+                && seen_atoms.insert(atom_id)
+                && let Some(meta) = self.local_store.meta.get_meta(&atom_id)
+                && self.discovery_meta_matches(meta, &req)
+            {
+                response.add_result(self.discovery_result_for_atom(
+                    &req.term,
+                    atom_id,
+                    node_num,
                     meta.trust_level,
-                );
-
-                response.add_result(result);
+                    1.0,
+                ));
             }
         }
 
@@ -2013,6 +2030,70 @@ impl Gateway {
         }
 
         response
+    }
+
+    fn parse_discover_atom_id(term: &str) -> Option<AtomId> {
+        let trimmed = term.trim();
+        let hex = trimmed.strip_prefix("atom:").unwrap_or(trimmed);
+        (hex.len() == 64).then(|| hex_decode(hex).ok()).flatten()
+    }
+
+    fn discovery_meta_matches(
+        &self,
+        meta: &crate::store::api::AtomMetadata,
+        req: &DiscoverRequest,
+    ) -> bool {
+        if meta.trust_level < req.min_trust {
+            return false;
+        }
+
+        if let Some(constraints) = &req.constraints {
+            if let Some(domain_mask) = constraints.domain_mask
+                && domain_mask != 0
+                && (meta.domain_mask & domain_mask) == 0
+            {
+                return false;
+            }
+
+            if let Some(atom_types) = &constraints.atom_types
+                && !atom_types.contains(&meta.atom_type)
+            {
+                return false;
+            }
+
+            if let Some((from_ns, to_ns)) = constraints.time_range
+                && (meta.created_at_ns < from_ns || meta.created_at_ns >= to_ns)
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn discovery_result_for_atom(
+        &self,
+        term: &str,
+        atom_id: AtomId,
+        _node_num: u64,
+        trust_level: TrustLevel,
+        relevance: f64,
+    ) -> DiscoveryResult {
+        let now_ns = current_unix_ns();
+        let mut result = DiscoveryResult::new(
+            self.config.local_base_id,
+            term.to_owned(),
+            relevance,
+            0,
+            trust_level,
+        )
+        .with_atom_id(atom_id);
+
+        for mapping in self.find_mappings_valid(&atom_id, now_ns) {
+            result = result.with_mapping(mapping);
+        }
+
+        result
     }
 
     async fn forward_discover(&self, req: &DiscoverRequest) -> Vec<DiscoveryResult> {
@@ -3555,17 +3636,63 @@ assert_eq!(mapping.evidence.len(), 1);
         assert!(earlier_mapping.is_valid_at(400));
     }
 
+    #[tokio::test]
+    async fn test_gateway_discover_returns_atom_id_mappings_and_honors_constraints() {
+        use crate::store::api::{MemoryX, StoreConfig};
+        use std::sync::Arc;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryX::new(StoreConfig::new(temp_dir.path().join("store"))).unwrap();
+        let payload = build_discovery_test_payload("federated-atom", AtomType::FACT, 9000);
+        let atom_id = store.ingest(&payload, AtomType::FACT, &[], &[]).unwrap();
+
+        let local_base = [1u8; 32];
+        let remote_base = [2u8; 32];
+        let gateway = Gateway::new(Arc::new(store), FederationConfig::new(local_base));
+        gateway.add_mapping(MapsTo::new(atom_id, remote_base, [3u8; 32], 0.9));
+
+        let mut request = DiscoverRequest::new(format!("atom:{}", hex::encode(atom_id)), [9u8; 32])
+            .with_min_trust(5000);
+        request.constraints = Some(QueryConstraints {
+            max_results: None,
+            domain_mask: Some(0xFFFF),
+            atom_types: Some(vec![AtomType::FACT]),
+            time_range: None,
+        });
+
+        let response = gateway.handle_discover(request).await;
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].atom_id, Some(atom_id));
+        assert_eq!(response.results[0].mappings.len(), 1);
+        assert_eq!(response.results[0].mappings[0].remote_base, remote_base);
+
+        let mut blocked_request =
+            DiscoverRequest::new(format!("atom:{}", hex::encode(atom_id)), [9u8; 32]);
+        blocked_request.constraints = Some(QueryConstraints {
+            max_results: None,
+            domain_mask: Some(0xFFFF),
+            atom_types: Some(vec![AtomType::RULE]),
+            time_range: None,
+        });
+
+        let blocked = gateway.handle_discover(blocked_request).await;
+        assert!(blocked.results.is_empty());
+    }
+
     #[test]
     fn test_gateway_verify_mapping_trust() {
-        use std::sync::Arc;
         use crate::store::api::{MemoryX, StoreConfig};
+        use std::sync::Arc;
 
         let local_base = [1u8; 32];
         let trusted_base = [2u8; 32];
 
-        let trusted_peer = PeerConfig::new(trusted_base, "https://trusted.example.com".to_string(), 8000);
-        let config = FederationConfig::new(local_base)
-            .with_peer(trusted_peer);
+        let trusted_peer = PeerConfig::new(
+            trusted_base,
+            "https://trusted.example.com".to_string(),
+            8000,
+        );
+        let config = FederationConfig::new(local_base).with_peer(trusted_peer);
 
         let store = Arc::new(MemoryX::new(StoreConfig::default()).unwrap());
         let gateway = Gateway::new(store, config);
