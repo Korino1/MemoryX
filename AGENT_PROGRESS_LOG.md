@@ -169,6 +169,22 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 
+## 2026-07-02: SKF/README conformance audit
+
+Done:
+
+- Assigned auditor subagent `Newton`.
+- Audited current code against:
+  `Concept/SKF.txt`, `Concept/SKF-1.1 Implementer-Ready Spec.txt`, and `README.md`.
+- Created `SKF_README_CONFORMANCE_AUDIT_2026-07-02.md`.
+- Main findings:
+  MCP stdio stdout pollution risk, hardcoded federation BaseId, partial ANN live solver path, missing per-claim proof provenance/status in AnswerPack, narrow federation discovery, example MCP parity overclaim, missing public repair/rebuild surface.
+
+Verification reported by auditor:
+
+- `cargo +nightly test --all-targets --all-features --quiet`
+- `cargo +nightly clippy --all-targets --all-features -- -D warnings`
+
 ## Open State
 
 Known dirty working tree at hook creation time:
