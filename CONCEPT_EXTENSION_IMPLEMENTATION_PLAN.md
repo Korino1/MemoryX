@@ -802,6 +802,20 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### I2. Rebuildable indexes guarantee
 
+Статус: реализовано.
+
+Результат:
+
+- Добавлен явный API `rebuild_indexes_from_cas`.
+- `rebuild_indexes` задокументирован как восстановление derived lexical index
+  из CAS и durable location/meta mappings.
+- Зафиксировано, что semantic/ANN index является ускорителем, а не source of truth.
+- Добавлен corruption/recovery regression test: lexical lookup исчезает после
+  замены inverted index на пустой derived index и восстанавливается после
+  `rebuild_indexes_from_cas`.
+- CLI `rebuild-index` подтверждён как пользовательский вход в тот же recovery
+  контур.
+
 Файлы:
 
 - `src/index/mod.rs`

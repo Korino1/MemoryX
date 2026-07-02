@@ -5806,6 +5806,10 @@ impl MemoryX {
     }
 
     /// Rebuild lexical indexes from live CAS atom payloads.
+    ///
+    /// CAS and the durable location/meta mappings are the source of truth.
+    /// Semantic/ANN data remains a derived accelerator and is not required to
+    /// recover lexical knowledge.
     pub fn rebuild_indexes(&mut self) -> Result<RebuildIndexReport, StoreError> {
         let mut report = RebuildIndexReport::default();
         let mut rebuilt = InvertedIndex::new(&self.config.index_dir())
@@ -5862,6 +5866,12 @@ impl MemoryX {
         self.record_history(HistoryOperation::RebuildIndexes, Vec::new(), details)?;
         self.flush()?;
         Ok(report)
+    }
+
+    /// Explicit source-of-truth rebuild API for callers that need to recover
+    /// derived indexes from CAS-backed atoms after index corruption or deletion.
+    pub fn rebuild_indexes_from_cas(&mut self) -> Result<RebuildIndexReport, StoreError> {
+        self.rebuild_indexes()
     }
 
     /// Run a safe repair pass: verify, rebuild indexes, verify again.
@@ -7944,6 +7954,41 @@ mod tests {
         assert_eq!(index.lookup("rust"), Some(vec![1, 2].as_slice()));
         assert_eq!(index.lookup("language"), Some(vec![1].as_slice()));
         assert_eq!(index.lookup("python"), None);
+    }
+
+    #[test]
+    fn test_rebuild_indexes_from_cas_restores_lexical_lookup() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config.clone()).unwrap();
+        let claim = ClaimData {
+            subj: 42,
+            pred: 2,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 420,
+            qualifiers_mask: 0,
+        };
+        let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+        store
+            .ingest(&payload, AtomType::FACT, &[claim], &[])
+            .unwrap();
+
+        let before = store.search_lex("subject_42", None);
+        assert_eq!(before.len(), 1);
+
+        let empty_index = InvertedIndex::new(&config.index_dir())
+            .map_err(|e| e.to_string())
+            .unwrap();
+        store.term_index = TermIndex { index: empty_index };
+        assert!(store.search_lex("subject_42", None).is_empty());
+
+        let report = store.rebuild_indexes_from_cas().unwrap();
+        assert_eq!(report.indexed_atoms, 1);
+        assert_eq!(report.skipped_atoms, 0);
+        assert!(report.errors.is_empty());
+
+        let after = store.search_lex("subject_42", None);
+        assert_eq!(after, before);
     }
 
     // ========================================================================

@@ -578,3 +578,22 @@ Verification:
 - `cargo run --quiet -- --help`
 - `cargo run --quiet -- snapshot --help`
 - `cargo run --quiet -- --base-scope project --base-name snapshot-cli-test --format json snapshot --ctx 0`
+
+## 2026-07-02: Rebuildable indexes guarantee
+
+Done:
+
+- Added explicit `MemoryX::rebuild_indexes_from_cas` API.
+- Documented the rebuild contract: CAS plus durable location/meta mappings are
+  source of truth; lexical and semantic indexes are derived accelerators.
+- Added regression coverage for recovering lexical lookup after replacing the
+  inverted index with an empty derived index.
+- Verified CLI `rebuild-index` remains the user-facing recovery entry point.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
+- `cargo run --quiet -- rebuild-index --help`
