@@ -130,7 +130,7 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 ### Полный MCP example
 
-`examples/mcp_server_full.rs` - полный stdio MCP example с тем же 15-tool surface, что и production `memoryx serve --stdio`:
+`examples/mcp_server_full.rs` - демонстрационный stdio MCP server вокруг того же store-backed набора операций. Источник истины для production MCP - `memoryx serve --stdio`.
 
 - `query`
 - `search_lex`
@@ -192,8 +192,8 @@ CLI и MCP открывают одну и ту же durable store layout, поэ
 - Кодовая база рабочая и store-backed, но публичный API и wire formats проектно-специфичны.
 - `mcp` - опциональный feature. Без него `serve` не поднимет MCP surface.
 - `memoryx serve --stdio` уже даёт полный production MCP surface для работы с базой.
-- `examples/mcp_server_full.rs` остаётся example-обвязкой вокруг того же набора возможностей.
-- Административные операции вроде `init`, `import`, `export`, `stats`, `compact` остаются CLI-командами, а не отдельными MCP tools.
+- `examples/mcp_server_full.rs` остаётся демонстрационной example-обвязкой, а не production entry point.
+- Административные операции вроде `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index` и `repair` остаются CLI-командами, а не отдельными MCP tools.
 
 ## Для Дальнейшего Чтения
 
@@ -353,7 +353,7 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 ### Full MCP example
 
-`examples/mcp_server_full.rs` is the complete stdio MCP example exposing the same 15-tool surface as production `memoryx serve --stdio`:
+`examples/mcp_server_full.rs` is a demonstrational stdio MCP server around the same store-backed operation set. The production MCP source of truth is `memoryx serve --stdio`:
 
 - `query`
 - `search_lex`
@@ -424,6 +424,11 @@ cargo +nightly run --release --bin memoryx -- import --base default --format jso
 # Export data as CSV
 cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
 
+# Verify and repair a base
+cargo +nightly run --release --bin memoryx -- verify-integrity --base default
+cargo +nightly run --release --bin memoryx -- rebuild-index --base default
+cargo +nightly run --release --bin memoryx -- repair --base default
+
 # Run the full MCP example
 cargo +nightly run --release --features mcp --example mcp_server_full -- --base-scope project --base-name default
 ```
@@ -460,8 +465,8 @@ examples/
 - The codebase is functional and store-backed, but the API and wire formats are project-specific.
 - `mcp` is an optional feature. Without it, `serve` will fail with a feature error.
 - `memoryx serve --stdio` now exposes the full production MCP surface for working with the knowledge base.
-- `examples/mcp_server_full.rs` remains a complete example server around the same capability set.
-- Administrative operations such as `init`, `import`, `export`, `stats`, and `compact` remain CLI commands rather than standalone MCP tools.
+- `examples/mcp_server_full.rs` remains a demonstrational example server, not the production entry point.
+- Administrative operations such as `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index`, and `repair` remain CLI commands rather than standalone MCP tools.
 
 ## Native Rust API
 

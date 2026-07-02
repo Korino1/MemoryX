@@ -36,14 +36,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 
 // MemoryX imports
-use memoryx::prelude::*;
 use memoryx::cas::AtomBodyHeader;
 use memoryx::cas::claims::ClaimRecord;
-use memoryx::store::api::{BatchAtom, EvidenceRef, MemoryX, StoreConfig};
-#[cfg(feature = "mcp")]
-use memoryx::store::api::{BranchReason, DeleteReason};
+use memoryx::prelude::*;
 #[cfg(feature = "mcp")]
 use memoryx::store::api::QueryFilters;
+use memoryx::store::api::{BatchAtom, EvidenceRef, MemoryX, StoreConfig, StoreError};
+#[cfg(feature = "mcp")]
+use memoryx::store::api::{BranchReason, DeleteReason};
 use memoryx::vm::ClaimData;
 
 // ============================================================================
@@ -213,6 +213,31 @@ enum Commands {
         /// Show detailed statistics
         #[arg(short, long)]
         detailed: bool,
+    },
+
+    /// Verify integrity of all live atoms in the base
+    VerifyIntegrity {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+    },
+
+    /// Rebuild lexical indexes from live CAS atom payloads
+    RebuildIndex {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// Dry run (verify only; do not rewrite indexes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Run safe repair: verify, rebuild indexes, verify again
+    Repair {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
     },
 
     /// Start MCP server
@@ -549,6 +574,12 @@ impl From<serde_yaml::Error> for CliError {
 impl From<csv::Error> for CliError {
     fn from(e: csv::Error) -> Self {
         CliError::Parse(e.to_string())
+    }
+}
+
+impl From<StoreError> for CliError {
+    fn from(e: StoreError) -> Self {
+        CliError::Store(e.to_string())
     }
 }
 
@@ -1370,12 +1401,14 @@ fn print_warning(message: &str) {
     println!("{} {}", "⚠".yellow(), message);
 }
 
+#[cfg(feature = "mcp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiagnosticSink {
     Stdout,
     Stderr,
 }
 
+#[cfg(feature = "mcp")]
 fn serve_diagnostic_sink(stdio: bool) -> DiagnosticSink {
     if stdio {
         DiagnosticSink::Stderr
@@ -1384,6 +1417,7 @@ fn serve_diagnostic_sink(stdio: bool) -> DiagnosticSink {
     }
 }
 
+#[cfg(feature = "mcp")]
 fn print_info_to(sink: DiagnosticSink, message: &str) {
     match sink {
         DiagnosticSink::Stdout => print_info(message),
@@ -2297,6 +2331,138 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
     }
 
     Ok(())
+}
+
+fn print_serialized<T: Serialize>(value: &T, format: OutputFormat) -> CliResult<()> {
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        OutputFormat::Yaml => println!("{}", serde_yaml::to_string(value)?),
+        OutputFormat::Table => {}
+    }
+    Ok(())
+}
+
+fn cmd_verify_integrity(base: &Path, format: OutputFormat) -> CliResult<()> {
+    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
+    let summary = store.verify_integrity()?;
+
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        print_serialized(&summary, format)?;
+    } else {
+        println!("\n{}", "Integrity Verification".bold().underline());
+        println!("  Base:          {}", base.display().to_string().cyan());
+        println!("  Checked atoms: {}", summary.checked_atoms);
+        println!(
+            "  Valid atoms:   {}",
+            summary.valid_atoms.to_string().green()
+        );
+        println!(
+            "  Invalid atoms: {}",
+            summary.invalid_atoms.to_string().red()
+        );
+        println!(
+            "  Missing atoms: {}",
+            summary.missing_atoms.to_string().red()
+        );
+        if summary.errors.is_empty() {
+            print_success("Integrity verification passed");
+        } else {
+            for error in &summary.errors {
+                print_error(error);
+            }
+        }
+    }
+
+    if summary.is_valid() {
+        Ok(())
+    } else {
+        Err(CliError::Store("integrity verification failed".to_string()))
+    }
+}
+
+fn cmd_rebuild_index(base: &Path, dry_run: bool, format: OutputFormat) -> CliResult<()> {
+    let mut store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
+
+    if dry_run {
+        let summary = store.verify_integrity()?;
+        if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+            print_serialized(&summary, format)?;
+        } else {
+            println!("\n{}", "Rebuild Index Dry Run".bold().underline());
+            println!("  Base:          {}", base.display().to_string().cyan());
+            println!("  Live atoms:    {}", summary.checked_atoms);
+            println!("  Index rewrite: skipped (--dry-run)");
+        }
+        return Ok(());
+    }
+
+    let report = store.rebuild_indexes()?;
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        print_serialized(&report, format)?;
+    } else {
+        println!("\n{}", "Index Rebuild".bold().underline());
+        println!("  Base:          {}", base.display().to_string().cyan());
+        println!(
+            "  Indexed atoms: {}",
+            report.indexed_atoms.to_string().green()
+        );
+        println!("  Indexed terms: {}", report.indexed_terms);
+        println!(
+            "  Skipped atoms: {}",
+            report.skipped_atoms.to_string().yellow()
+        );
+        for error in &report.errors {
+            print_error(error);
+        }
+        print_success("Index rebuild complete");
+    }
+
+    Ok(())
+}
+
+fn cmd_repair(base: &Path, format: OutputFormat) -> CliResult<()> {
+    let mut store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
+    let report = store.repair()?;
+
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        print_serialized(&report, format)?;
+    } else {
+        println!("\n{}", "Repair".bold().underline());
+        println!(
+            "  Base:               {}",
+            base.display().to_string().cyan()
+        );
+        println!("  Before valid atoms: {}", report.before.valid_atoms);
+        println!("  Before invalid:     {}", report.before.invalid_atoms);
+        println!(
+            "  Reindexed atoms:    {}",
+            report.rebuild.indexed_atoms.to_string().green()
+        );
+        println!("  Reindexed terms:    {}", report.rebuild.indexed_terms);
+        println!("  After valid atoms:  {}", report.after.valid_atoms);
+        println!(
+            "  After invalid:      {}",
+            report.after.invalid_atoms.to_string().red()
+        );
+        for error in report
+            .before
+            .errors
+            .iter()
+            .chain(report.rebuild.errors.iter())
+            .chain(report.after.errors.iter())
+        {
+            print_error(error);
+        }
+    }
+
+    if report.after.is_valid() {
+        print_success("Repair completed and final integrity check passed");
+        Ok(())
+    } else {
+        Err(CliError::Store(
+            "repair completed but final integrity check failed".to_string(),
+        ))
+    }
 }
 
 /// Start MCP server
@@ -3921,6 +4087,27 @@ fn main() {
             &config,
         )
         .and_then(|resolved| cmd_stats(&resolved, *detailed, cli.format)),
+        Commands::VerifyIntegrity { base } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| cmd_verify_integrity(&resolved, cli.format)),
+        Commands::RebuildIndex { base, dry_run } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| cmd_rebuild_index(&resolved, *dry_run, cli.format)),
+        Commands::Repair { base } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| cmd_repair(&resolved, cli.format)),
         Commands::Serve {
             base,
             port,
@@ -3972,6 +4159,7 @@ mod tests {
         assert!(parse_atom_type("unknown").is_err());
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn test_stdio_serve_uses_stderr_for_diagnostics() {
         assert_eq!(serve_diagnostic_sink(true), DiagnosticSink::Stderr);

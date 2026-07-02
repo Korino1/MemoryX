@@ -4037,6 +4037,37 @@ impl TermIndex {
     }
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct StoreIntegritySummary {
+    pub checked_atoms: usize,
+    pub valid_atoms: usize,
+    pub invalid_atoms: usize,
+    pub missing_atoms: usize,
+    pub errors: Vec<String>,
+}
+
+impl StoreIntegritySummary {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.invalid_atoms == 0 && self.missing_atoms == 0 && self.errors.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RebuildIndexReport {
+    pub indexed_atoms: usize,
+    pub indexed_terms: usize,
+    pub skipped_atoms: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RepairReport {
+    pub before: StoreIntegritySummary,
+    pub rebuild: RebuildIndexReport,
+    pub after: StoreIntegritySummary,
+}
+
 // ============================================================================
 // MetaStore
 // ============================================================================
@@ -4492,6 +4523,99 @@ impl MemoryX {
     /// List all live atom IDs in stable order.
     pub fn list_atom_ids(&self) -> Vec<AtomId> {
         self.loc_index.live_atom_ids()
+    }
+
+    /// Verify all live atoms in this base.
+    pub fn verify_integrity(&self) -> Result<StoreIntegritySummary, StoreError> {
+        let mut summary = StoreIntegritySummary::default();
+
+        for atom_id in self.list_atom_ids() {
+            summary.checked_atoms += 1;
+            match self.verify_atom(&atom_id) {
+                Ok(true) => summary.valid_atoms += 1,
+                Ok(false) => {
+                    summary.invalid_atoms += 1;
+                    summary.errors.push(format!(
+                        "atom {} failed integrity verification",
+                        crate::cas::hex_encode(&atom_id)
+                    ));
+                }
+                Err(StoreError::AtomNotFound(_)) => {
+                    summary.missing_atoms += 1;
+                    summary.errors.push(format!(
+                        "atom {} is missing from CAS",
+                        crate::cas::hex_encode(&atom_id)
+                    ));
+                }
+                Err(err) => {
+                    summary.invalid_atoms += 1;
+                    summary.errors.push(format!(
+                        "atom {} verification error: {}",
+                        crate::cas::hex_encode(&atom_id),
+                        err
+                    ));
+                }
+            }
+        }
+
+        Ok(summary)
+    }
+
+    /// Rebuild lexical indexes from live CAS atom payloads.
+    pub fn rebuild_indexes(&mut self) -> Result<RebuildIndexReport, StoreError> {
+        let mut report = RebuildIndexReport::default();
+        let mut rebuilt = InvertedIndex::new(&self.config.index_dir())
+            .map_err(|e| StoreError::Index(e.to_string()))?;
+
+        for atom_id in self.list_atom_ids() {
+            let Some(node_num) = self.get_node_num(&atom_id) else {
+                report.skipped_atoms += 1;
+                report.errors.push(format!(
+                    "atom {} has no node mapping",
+                    crate::cas::hex_encode(&atom_id)
+                ));
+                continue;
+            };
+
+            match self.get_atom_payload(&atom_id) {
+                Ok(payload) => {
+                    let terms = extract_terms_from_payload(&payload);
+                    for term in terms {
+                        let term_id = rebuilt.lexicon_mut().add(term.to_lowercase());
+                        rebuilt.postings_mut().add(term_id, node_num);
+                        report.indexed_terms += 1;
+                    }
+                    report.indexed_atoms += 1;
+                }
+                Err(err) => {
+                    report.skipped_atoms += 1;
+                    report.errors.push(format!(
+                        "atom {} payload read failed: {}",
+                        crate::cas::hex_encode(&atom_id),
+                        err
+                    ));
+                }
+            }
+        }
+
+        rebuilt
+            .save()
+            .map_err(|e| StoreError::Index(e.to_string()))?;
+        self.term_index = TermIndex { index: rebuilt };
+        self.flush()?;
+        Ok(report)
+    }
+
+    /// Run a safe repair pass: verify, rebuild indexes, verify again.
+    pub fn repair(&mut self) -> Result<RepairReport, StoreError> {
+        let before = self.verify_integrity()?;
+        let rebuild = self.rebuild_indexes()?;
+        let after = self.verify_integrity()?;
+        Ok(RepairReport {
+            before,
+            rebuild,
+            after,
+        })
     }
 
     /// Answer a query
