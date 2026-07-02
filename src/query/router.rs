@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::graph::GraphStore;
 use crate::index::{InvertedIndex, Location};
+use crate::query::ann::EmbeddingIndex;
 use crate::store::api::{CostWeights, CtxId, EvidenceRef, Gap, GapId};
 use crate::store::{
     AtomId, AtomType, DomainMask, EdgeType, GapKind, NodeNum, PatternRef, TrustLevel,
@@ -561,6 +562,7 @@ impl GraphBackend {
 pub struct AnnBackend {
     node_to_atom: HashMap<NodeNum, AtomId>,
     node_to_location: HashMap<NodeNum, Location>,
+    embedding_index: Option<Arc<EmbeddingIndex>>,
     /// Metadata cache for atom routing decisions (SKF-1.1)
     metadata_cache: AtomMetadataCache,
 }
@@ -570,8 +572,13 @@ impl AnnBackend {
         AnnBackend {
             node_to_atom: HashMap::new(),
             node_to_location: HashMap::new(),
+            embedding_index: None,
             metadata_cache: AtomMetadataCache::new(),
         }
+    }
+    pub fn with_embedding_index(mut self, index: Arc<EmbeddingIndex>) -> Self {
+        self.embedding_index = Some(index);
+        self
     }
     pub fn register(&mut self, node_num: NodeNum, atom_id: AtomId, location: Location) {
         self.node_to_atom.insert(node_num, atom_id);
@@ -600,8 +607,55 @@ impl AnnBackend {
         gap: &Gap,
         goal_entities: &[crate::store::api::EntityRef],
         domain_mask: DomainMask,
+        goal: &crate::query::solver::GoalSpec,
     ) -> Vec<Candidate> {
         let mut candidates = Vec::new();
+        if let Some(index) = &self.embedding_index {
+            for query_vector in &goal.semantic_vectors {
+                for (node_num, similarity) in index.search(query_vector, 10) {
+                    if let Some(&atom_id) = self.node_to_atom.get(&node_num) {
+                        let loc = self
+                            .node_to_location
+                            .get(&node_num)
+                            .copied()
+                            .unwrap_or(Location::new(0, 0, 0, node_num, 0xFFFF));
+                        if !matches_domain(loc, domain_mask) {
+                            continue;
+                        }
+
+                        let atom_trust = self.metadata_cache.get_trust(node_num);
+                        if atom_trust < goal.trust_min {
+                            continue;
+                        }
+                        let atom_domain = self.metadata_cache.get_domain(node_num);
+                        let atom_evidence = self.metadata_cache.get_evidence(node_num);
+                        let semantic_trust = (similarity.clamp(0.0, 1.0) * 10000.0) as TrustLevel;
+
+                        candidates.push(Candidate {
+                            atom_id,
+                            node_num,
+                            seg_id: loc.seg_id,
+                            offset: loc.offset,
+                            atom_type: AtomType::FACT,
+                            trust: semantic_trust.min(atom_trust),
+                            estimated_io_bytes: loc.len.max(64),
+                            source_backend: BackendKind::Ann,
+                            requires_invariant_check: true,
+                            covers_gaps: vec![gap.id],
+                            source_priority: SourcePriority::Ann,
+                            hard_conflicts: 0,
+                            soft_conflicts: 0,
+                            age_ns: 0,
+                            domain_mask: atom_domain,
+                            evidence_refs: atom_evidence,
+                            derived_claims: Vec::new(),
+                            ann_candidate_requires_filtering: true,
+                            branch_ctx_id: None,
+                        });
+                    }
+                }
+            }
+        }
         for entity_ref in goal_entities {
             if let crate::store::api::EntityRef::Node(node_num) = entity_ref
                 && let Some(&atom_id) = self.node_to_atom.get(node_num)
@@ -939,8 +993,14 @@ impl QueryRouter {
                 candidate_map.entry(c.atom_id).or_insert(c);
             }
         }
-        for c in self.ann.route(gap, &goal.entities, goal.domain_mask) {
-            candidate_map.entry(c.atom_id).or_insert(c);
+        for c in self.ann.route(gap, &goal.entities, goal.domain_mask, goal) {
+            if goal.semantic_vectors.is_empty() {
+                candidate_map.entry(c.atom_id).or_insert(c);
+            } else {
+                // For explicit semantic-vector queries, preserve ANN provenance
+                // instead of hiding it behind broad lexical fallback candidates.
+                candidate_map.insert(c.atom_id, c);
+            }
         }
         candidate_map.into_values().collect()
     }
@@ -979,7 +1039,11 @@ mod tests {
     use super::*;
     use crate::query::Gap;
     use crate::store::api::EntityRef;
-    use crate::store::{ClaimPattern, GapKind};
+    use crate::store::{ClaimPattern, GapKind, Intent};
+
+    fn test_goal() -> crate::query::GoalSpec {
+        crate::query::GoalSpec::new(Intent::LOOKUP)
+    }
 
     #[test]
     fn test_ann_backend_creates_candidates_with_invariant_check() {
@@ -991,7 +1055,7 @@ mod tests {
         let gap = Gap::new(0, GapKind::NEED_FACT, ClaimPattern::default());
         let entities = vec![EntityRef::Node(42)];
 
-        let candidates = backend.route(&gap, &entities, 0xFFFF);
+        let candidates = backend.route(&gap, &entities, 0xFFFF, &test_goal());
 
         assert_eq!(candidates.len(), 1);
         let candidate = &candidates[0];
@@ -1027,7 +1091,7 @@ mod tests {
         let gap = Gap::new(0, GapKind::NEED_FACT, ClaimPattern::default());
         let entities: Vec<EntityRef> = (1..=5).map(EntityRef::Node).collect();
 
-        let candidates = backend.route(&gap, &entities, 0xFFFF);
+        let candidates = backend.route(&gap, &entities, 0xFFFF, &test_goal());
 
         assert_eq!(candidates.len(), 5);
 
@@ -1059,11 +1123,11 @@ mod tests {
         let entities = vec![EntityRef::Node(42)];
 
         // Should match when domain_mask includes domain 1
-        let candidates = backend.route(&gap, &entities, 0x0001);
+        let candidates = backend.route(&gap, &entities, 0x0001, &test_goal());
         assert_eq!(candidates.len(), 1);
 
         // Should not match when domain_mask excludes domain 1
-        let candidates = backend.route(&gap, &entities, 0x0002);
+        let candidates = backend.route(&gap, &entities, 0x0002, &test_goal());
         assert!(candidates.is_empty());
     }
 
@@ -1072,7 +1136,7 @@ mod tests {
         let backend = AnnBackend::new();
         let gap = Gap::new(0, GapKind::NEED_FACT, ClaimPattern::default());
 
-        let candidates = backend.route(&gap, &[], 0xFFFF);
+        let candidates = backend.route(&gap, &[], 0xFFFF, &test_goal());
         assert!(candidates.is_empty());
     }
 
@@ -1083,7 +1147,7 @@ mod tests {
 
         // EntityRef::Sym should not produce candidates
         let entities = vec![EntityRef::Sym(42)];
-        let candidates = backend.route(&gap, &entities, 0xFFFF);
+        let candidates = backend.route(&gap, &entities, 0xFFFF, &test_goal());
         assert!(candidates.is_empty());
     }
 

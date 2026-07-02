@@ -4599,6 +4599,12 @@ impl MemoryX {
                     router.cas.register(atom_id, location);
                     // Also register in inverted backend for node -> atom mapping
                     router.inverted.register(node_num, atom_id, location);
+                    router.register_atom_metadata(
+                        node_num,
+                        metadata.trust_level,
+                        metadata.domain_mask,
+                        metadata.source_id,
+                    );
                 }
             }
         }
@@ -4620,6 +4626,9 @@ impl MemoryX {
         }
 
         // Populate ANN backend
+        router.ann = router
+            .ann
+            .with_embedding_index(Arc::new(self.embedding_index.clone()));
         for (&node_num, &atom_id) in &self.meta.node_to_atom {
             if let Some(metadata) = self.meta.get_meta(&atom_id)
                 && metadata.trust_level > 0
@@ -7814,6 +7823,55 @@ mod tests {
             BackendKind::Ann,
             "Should be from ANN backend"
         );
+    }
+
+    #[test]
+    fn test_query_contract_semantic_vector_reaches_ann_router() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config).unwrap();
+
+        let payload = build_full_test_payload_with_claim(
+            AtomType::FACT,
+            Some(ClaimData {
+                subj: 10,
+                pred: 20,
+                obj_tag: 3,
+                obj_val: 30,
+                qualifiers_mask: 0,
+            }),
+        );
+        let atom_id = store
+            .ingest(
+                &payload,
+                AtomType::FACT,
+                &[ClaimData {
+                    subj: 10,
+                    pred: 20,
+                    obj_tag: 3,
+                    obj_val: 30,
+                    qualifiers_mask: 0,
+                }],
+                &[],
+            )
+            .unwrap();
+        let node_num = store.get_node_num(&atom_id).unwrap();
+        assert!(store.add_embedding(node_num, &[1.0, 0.0, 0.0, 0.0]));
+
+        let contract = QueryContract::new(crate::query::contract::ContractIntent::Lookup)
+            .with_semantic_vector(vec![0.95, 0.05, 0.0, 0.0]);
+        let goal = contract.to_goal_spec().unwrap();
+        let gap = Gap::new(0, GapKind::NEED_FACT, ClaimPattern::default());
+        let router = store.create_router();
+        let candidates = router.route(&gap, &goal);
+
+        let ann_candidate = candidates
+            .iter()
+            .find(|candidate| candidate.atom_id == atom_id)
+            .expect("semantic contract vector should route to ANN candidate");
+        assert_eq!(ann_candidate.source_backend, BackendKind::Ann);
+        assert!(ann_candidate.requires_invariant_check);
+        assert!(ann_candidate.ann_candidate_requires_filtering);
     }
 
     #[test]

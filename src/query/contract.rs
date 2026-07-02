@@ -16,6 +16,8 @@ use crate::store::{DomainMask, Intent};
 pub struct QueryContract {
     pub intent: ContractIntent,
     pub targets: Vec<EntityPattern>,
+    #[serde(default)]
+    pub semantic_vectors: Vec<Vec<f32>>,
     pub relations: Vec<RelationRequirement>,
     pub constraints: Vec<Constraint>,
     pub quantifiers: Vec<QuantifiedCondition>,
@@ -36,6 +38,7 @@ impl QueryContract {
         Self {
             intent,
             targets: Vec::new(),
+            semantic_vectors: Vec::new(),
             relations: Vec::new(),
             constraints: Vec::new(),
             quantifiers: Vec::new(),
@@ -54,6 +57,11 @@ impl QueryContract {
 
     pub fn with_target(mut self, target: EntityPattern) -> Self {
         self.targets.push(target);
+        self
+    }
+
+    pub fn with_semantic_vector(mut self, vector: Vec<f32>) -> Self {
+        self.semantic_vectors.push(vector);
         self
     }
 
@@ -93,8 +101,16 @@ impl QueryContract {
     }
 
     pub fn validate(&self) -> Result<(), QueryContractError> {
-        if self.targets.is_empty() && self.relations.is_empty() && self.constraints.is_empty() {
+        if self.targets.is_empty()
+            && self.semantic_vectors.is_empty()
+            && self.relations.is_empty()
+            && self.constraints.is_empty()
+        {
             return Err(QueryContractError::EmptyContract);
+        }
+
+        if self.semantic_vectors.iter().any(Vec::is_empty) {
+            return Err(QueryContractError::InvalidSemanticVector);
         }
 
         let mut constraint_ids = HashSet::with_capacity(self.constraints.len());
@@ -161,6 +177,10 @@ impl QueryContract {
 
         if !entities.is_empty() {
             goal = goal.with_entities(entities);
+        }
+
+        if !self.semantic_vectors.is_empty() {
+            goal = goal.with_semantic_vectors(self.semantic_vectors.clone());
         }
 
         Ok(goal)
@@ -695,6 +715,7 @@ pub enum QueryContractError {
     UnknownConstraintReference(ConstraintId),
     InvalidShouldWeight { id: ConstraintId, weight: f32 },
     InvalidBudget(&'static str),
+    InvalidSemanticVector,
     InvalidEntityReference(String),
 }
 
@@ -714,6 +735,9 @@ impl fmt::Display for QueryContractError {
                 id.0, weight
             ),
             QueryContractError::InvalidBudget(field) => write!(f, "invalid query budget: {field}"),
+            QueryContractError::InvalidSemanticVector => {
+                write!(f, "semantic vectors must not be empty")
+            }
             QueryContractError::InvalidEntityReference(value) => {
                 write!(f, "invalid entity reference: {value}")
             }

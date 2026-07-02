@@ -18,6 +18,7 @@ const EMB_MAGIC: u32 = 0x454D4231;
 ///
 /// Enforces dimension consistency — all embeddings must have
 /// the same dimension once set.
+#[derive(Clone)]
 pub struct EmbeddingIndex {
     embeddings: HashMap<NodeNum, Vec<f32>>,
     dimension: Option<usize>,

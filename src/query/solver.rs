@@ -356,6 +356,8 @@ pub struct GoalSpec {
     pub domain_mask: DomainMask,
     /// Entity references
     pub entities: Vec<EntityRef>,
+    /// Query embedding vectors for ANN-backed semantic retrieval.
+    pub semantic_vectors: Vec<Vec<f32>>,
     /// Comparison axes
     pub axes: Vec<SymId>,
     /// Allowed atom types bitmask
@@ -379,6 +381,7 @@ impl GoalSpec {
             trust_min: 0,
             domain_mask: 0,
             entities: Vec::new(),
+            semantic_vectors: Vec::new(),
             axes: Vec::new(),
             want: 0xFFFF,
             output_schema: OutputSchema::Flat,
@@ -411,6 +414,13 @@ impl GoalSpec {
     #[inline]
     pub fn with_entities(mut self, entities: Vec<EntityRef>) -> Self {
         self.entities = entities;
+        self
+    }
+
+    /// Add query embedding vectors for semantic ANN retrieval.
+    #[inline]
+    pub fn with_semantic_vectors(mut self, vectors: Vec<Vec<f32>>) -> Self {
+        self.semantic_vectors = vectors;
         self
     }
 
