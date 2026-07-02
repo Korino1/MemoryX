@@ -2832,6 +2832,8 @@ pub enum LimitationCode {
     BudgetExhausted,
     /// Graph traversal incomplete
     TraversalIncomplete,
+    /// Candidates were rejected by hard QueryContract constraints
+    ConstraintRejected,
 }
 
 impl std::fmt::Display for LimitationCode {
@@ -2844,6 +2846,7 @@ impl std::fmt::Display for LimitationCode {
             LimitationCode::DomainMismatch => write!(f, "DOMAIN_MISMATCH"),
             LimitationCode::BudgetExhausted => write!(f, "BUDGET_EXHAUSTED"),
             LimitationCode::TraversalIncomplete => write!(f, "TRAVERSAL_INCOMPLETE"),
+            LimitationCode::ConstraintRejected => write!(f, "CONSTRAINT_REJECTED"),
         }
     }
 }
@@ -3058,6 +3061,17 @@ impl CoverageReport {
     }
 }
 
+/// Candidate rejected before ranking because it failed hard QueryContract constraints.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RejectedCandidateSummary {
+    pub candidate_ref: Option<String>,
+    pub atom_id: Option<AtomId>,
+    pub node_num: Option<NodeNum>,
+    pub source_backend: String,
+    pub reason: String,
+    pub constraint_results: Vec<crate::query::contract::ConstraintResult>,
+}
+
 /// Answer pack containing query results
 ///
 /// # Fields
@@ -3084,6 +3098,8 @@ pub struct AnswerPack {
     pub evidence_records: Vec<EvidenceRecord>,
     /// Query coverage summary.
     pub coverage_report: CoverageReport,
+    /// Candidates rejected before ranking because hard/MUST_NOT constraints failed.
+    pub rejected_candidates: Vec<RejectedCandidateSummary>,
     /// Overall confidence (0.0 - 1.0)
     pub confidence: f32,
     /// Known limitations
@@ -3104,6 +3120,7 @@ impl AnswerPack {
             evidence: Vec::new(),
             evidence_records: Vec::new(),
             coverage_report: CoverageReport::empty(),
+            rejected_candidates: Vec::new(),
             confidence: 0.0,
             limitations: Vec::new(),
             alternates: Vec::new(),
@@ -9320,6 +9337,77 @@ mod tests {
         assert_eq!(ann_candidate.source_backend, BackendKind::Ann);
         assert!(ann_candidate.requires_invariant_check);
         assert!(ann_candidate.ann_candidate_requires_filtering);
+    }
+
+    #[test]
+    fn test_answer_contract_must_not_rejects_candidate_before_graph() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config).unwrap();
+
+        let payload = build_full_test_payload_with_claim(
+            AtomType::FACT,
+            Some(ClaimData {
+                subj: 10,
+                pred: 20,
+                obj_tag: 3,
+                obj_val: 30,
+                qualifiers_mask: 0,
+            }),
+        );
+        let atom_id = store
+            .ingest(
+                &payload,
+                AtomType::FACT,
+                &[ClaimData {
+                    subj: 10,
+                    pred: 20,
+                    obj_tag: 3,
+                    obj_val: 30,
+                    qualifiers_mask: 0,
+                }],
+                &[],
+            )
+            .unwrap();
+        let node_num = store.get_node_num(&atom_id).unwrap();
+        assert!(store.add_embedding(node_num, &[1.0, 0.0, 0.0, 0.0]));
+
+        let contract = QueryContract::new(crate::query::contract::ContractIntent::Lookup)
+            .with_target(crate::query::contract::EntityPattern::label(format!(
+                "node:{node_num}"
+            )))
+            .with_semantic_vector(vec![1.0, 0.0, 0.0, 0.0])
+            .with_constraint(crate::query::contract::Constraint::must_not(
+                "no_ann_backend",
+                crate::query::contract::ConstraintTarget::Custom("backend".to_owned()),
+                crate::query::contract::ConstraintOperator::Eq,
+                crate::query::contract::ConstraintValue::Text("ANN".to_owned()),
+            ));
+
+        let answer = store.answer_contract(contract, 0).unwrap();
+
+        assert!(
+            answer
+                .graph
+                .nodes
+                .iter()
+                .all(|node| node.atom_ref.atom_id != atom_id),
+            "MUST_NOT backend=ANN candidate must not enter final AnswerGraph"
+        );
+        assert!(
+            answer
+                .rejected_candidates
+                .iter()
+                .any(|candidate| candidate.atom_id == Some(atom_id)),
+            "AnswerPack should explain rejected hard/MUST_NOT candidate"
+        );
+        assert!(
+            answer
+                .limitations
+                .iter()
+                .any(|limitation| limitation.code == LimitationCode::ConstraintRejected),
+            "AnswerPack should expose constraint rejection as a limitation"
+        );
     }
 
     #[test]

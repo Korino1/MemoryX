@@ -183,7 +183,7 @@ impl QueryContract {
             goal = goal.with_semantic_vectors(self.semantic_vectors.clone());
         }
 
-        Ok(goal)
+        Ok(goal.with_constraints(self.constraints.clone()))
     }
 
     pub fn domain_mask(&self) -> DomainMask {

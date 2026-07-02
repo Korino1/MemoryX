@@ -15,6 +15,8 @@ use std::sync::Arc;
 use crate::graph::GraphStore;
 use crate::index::{InvertedIndex, Location};
 use crate::query::ann::EmbeddingIndex;
+use crate::query::constraints::ConstraintSubject;
+use crate::query::contract::{ConstraintTarget, ConstraintValue};
 use crate::store::api::{CostWeights, CtxId, EvidenceRef, Gap, GapId};
 use crate::store::{
     AtomId, AtomType, DomainMask, EdgeType, GapKind, NodeNum, PatternRef, TrustLevel,
@@ -402,7 +404,9 @@ impl InvertedBackend {
         if let Some(nodes) = self.local_terms.get(term) {
             results.extend(nodes.iter().copied());
         }
-        if let Some(ref idx) = self.inverted_index && let Some(pl) = idx.search(term) {
+        if let Some(ref idx) = self.inverted_index
+            && let Some(pl) = idx.search(term)
+        {
             for &n in pl {
                 if !results.contains(&n) {
                     results.push(n);
@@ -800,6 +804,68 @@ impl Candidate {
         } else {
             f64::INFINITY
         }
+    }
+}
+
+impl ConstraintSubject for Candidate {
+    fn value_for(&self, target: &ConstraintTarget) -> Option<ConstraintValue> {
+        match target {
+            ConstraintTarget::Entity => Some(ConstraintValue::Text(self.node_num.to_string())),
+            ConstraintTarget::Domain => Some(ConstraintValue::Number(self.domain_mask as f64)),
+            ConstraintTarget::NumericMetric => {
+                Some(ConstraintValue::Number(self.trust as f64 / 10_000.0))
+            }
+            ConstraintTarget::Source => Some(ConstraintValue::Text(
+                self.source_backend.as_str().to_owned(),
+            )),
+            ConstraintTarget::Evidence => Some(ConstraintValue::List(
+                self.evidence_refs
+                    .iter()
+                    .map(|evidence| {
+                        ConstraintValue::Text(format!(
+                            "{}:{}:{}",
+                            crate::cas::hex_encode(&evidence.atom_id),
+                            evidence.offset,
+                            evidence.length
+                        ))
+                    })
+                    .collect(),
+            )),
+            ConstraintTarget::Custom(name) => match name.as_str() {
+                "atom_id" => Some(ConstraintValue::Text(crate::cas::hex_encode(&self.atom_id))),
+                "node_num" => Some(ConstraintValue::Number(self.node_num as f64)),
+                "atom_type" => Some(ConstraintValue::Text(format!("{:?}", self.atom_type))),
+                "backend" | "source_backend" => Some(ConstraintValue::Text(
+                    self.source_backend.as_str().to_owned(),
+                )),
+                "trust" => Some(ConstraintValue::Number(self.trust as f64 / 10_000.0)),
+                "domain" | "domain_mask" => Some(ConstraintValue::Number(self.domain_mask as f64)),
+                "requires_invariant_check" => {
+                    Some(ConstraintValue::Bool(self.requires_invariant_check))
+                }
+                "ann_candidate_requires_filtering" => {
+                    Some(ConstraintValue::Bool(self.ann_candidate_requires_filtering))
+                }
+                _ => None,
+            },
+            ConstraintTarget::EntityType
+            | ConstraintTarget::Predicate
+            | ConstraintTarget::Relation
+            | ConstraintTarget::Time
+            | ConstraintTarget::Context
+            | ConstraintTarget::Text => None,
+        }
+    }
+
+    fn evidence_refs_for(&self, _constraint: &crate::query::contract::Constraint) -> Vec<String> {
+        self.evidence_refs
+            .iter()
+            .map(|evidence| crate::cas::hex_encode(&evidence.atom_id))
+            .collect()
+    }
+
+    fn candidate_ref(&self) -> Option<String> {
+        Some(crate::cas::hex_encode(&self.atom_id))
     }
 }
 

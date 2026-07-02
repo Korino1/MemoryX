@@ -5,14 +5,14 @@
 
 #![allow(dead_code)]
 
-use crate::cas::io::CasStore;
 use crate::cas::CasError;
+use crate::cas::io::CasStore;
 use crate::prelude::*;
+use crate::store::api::ProofStep;
 use crate::store::{
     AtomId, AtomType, ClaimPattern, DomainMask, EdgeType, GapKind, Intent, NodeNum, SymId,
     TrustLevel,
 };
-use crate::store::api::ProofStep;
 use crate::vm;
 use crate::vm::abi::InvariantResult;
 
@@ -25,7 +25,7 @@ pub use crate::store::api::{
     ActiveClaim, AgEdge, AgEdgeType, AgNode, AnswerGraph, AtomRef, ClaimStatus, ClaimView,
     Conflict, ConflictConditions, ConflictSeverity, ConflictType, CostWeights, EntityRef,
     EvidenceRef, Gap, GapId, GapPriority, Limitation, LimitationCode, LimitationSeverity, ObjTag,
-    ResolutionOption,
+    RejectedCandidateSummary, ResolutionOption,
 };
 
 // ============================================================================
@@ -153,6 +153,8 @@ pub struct InvariantFilterResult {
     pub rejected_hard: u32,
     /// Count of soft rejection failures
     pub rejected_soft: u32,
+    /// Contract-level hard/MUST_NOT rejections before invariant evaluation.
+    pub contract_rejections: Vec<RejectedCandidateSummary>,
 }
 
 // ============================================================================
@@ -186,6 +188,8 @@ pub struct SolverState {
     pub fetched_offsets: Vec<(u32, u64, u32)>,
     /// Previous graph hash (for convergence detection)
     pub prev_graph_hash: u64,
+    /// Candidates rejected by query contract constraints before ranking.
+    pub rejected_candidates: Vec<RejectedCandidateSummary>,
 }
 
 impl SolverState {
@@ -205,6 +209,7 @@ impl SolverState {
             loaded_atoms: HashMap::new(),
             fetched_offsets: Vec::new(),
             prev_graph_hash: 0,
+            rejected_candidates: Vec::new(),
         }
     }
 
@@ -358,6 +363,8 @@ pub struct GoalSpec {
     pub entities: Vec<EntityRef>,
     /// Query embedding vectors for ANN-backed semantic retrieval.
     pub semantic_vectors: Vec<Vec<f32>>,
+    /// Hard/soft/negative constraints lowered from the public QueryContract.
+    pub constraints: Vec<crate::query::contract::Constraint>,
     /// Comparison axes
     pub axes: Vec<SymId>,
     /// Allowed atom types bitmask
@@ -382,6 +389,7 @@ impl GoalSpec {
             domain_mask: 0,
             entities: Vec::new(),
             semantic_vectors: Vec::new(),
+            constraints: Vec::new(),
             axes: Vec::new(),
             want: 0xFFFF,
             output_schema: OutputSchema::Flat,
@@ -421,6 +429,16 @@ impl GoalSpec {
     #[inline]
     pub fn with_semantic_vectors(mut self, vectors: Vec<Vec<f32>>) -> Self {
         self.semantic_vectors = vectors;
+        self
+    }
+
+    /// Add public query constraints for pre-ranking candidate validation.
+    #[inline]
+    pub fn with_constraints(
+        mut self,
+        constraints: Vec<crate::query::contract::Constraint>,
+    ) -> Self {
+        self.constraints = constraints;
         self
     }
 
@@ -1695,6 +1713,17 @@ impl FixedPointSolver {
         // Extract claims with full provenance chains
         self.extract_claims(&mut pack, &state);
 
+        pack.rejected_candidates = state.rejected_candidates.clone();
+        if !pack.rejected_candidates.is_empty() {
+            pack.limitations.push(Limitation::info(
+                LimitationCode::ConstraintRejected,
+                format!(
+                    "{} candidates rejected by query contract constraints",
+                    pack.rejected_candidates.len()
+                ),
+            ));
+        }
+
         // Generate alternative answer paths for comparison
         // Re-collect candidates from the final iteration for alternate generation
         let all_candidates = self.collect_final_candidates(&state);
@@ -1722,6 +1751,8 @@ impl FixedPointSolver {
                 candidates.push(candidate);
             }
         }
+
+        candidates = self.filter_by_contract_constraints(candidates, state).0;
 
         // Deduplicate by atom_id
         let mut seen = std::collections::HashSet::new();
@@ -1793,6 +1824,11 @@ impl FixedPointSolver {
                 all_candidates.push(candidate);
             }
         }
+
+        let (filtered_candidates, contract_rejections) =
+            self.filter_by_contract_constraints(all_candidates, state);
+        state.rejected_candidates.extend(contract_rejections);
+        let all_candidates = filtered_candidates;
 
         if all_candidates.is_empty() {
             return Ok(()); // No candidates available
@@ -1923,6 +1959,64 @@ impl FixedPointSolver {
         Ok(())
     }
 
+    /// Enforce QueryContract hard/MUST_NOT constraints before invariant checks and ranking.
+    ///
+    /// `SHOULD` constraints are advisory and therefore never block a candidate
+    /// here. `MUST` and `MUST_NOT` constraints must be explicitly satisfied;
+    /// `UNKNOWN` is treated as a rejection because the solver cannot prove the
+    /// candidate satisfies the hard contract.
+    fn filter_by_contract_constraints(
+        &self,
+        candidates: Vec<Candidate>,
+        state: &SolverState,
+    ) -> (Vec<Candidate>, Vec<RejectedCandidateSummary>) {
+        use crate::query::ConstraintEvaluator;
+        use crate::query::contract::{ConstraintStatus, ConstraintStrength};
+
+        if state.goal.constraints.is_empty() {
+            return (candidates, Vec::new());
+        }
+
+        let mut admitted = Vec::with_capacity(candidates.len());
+        let mut rejected = Vec::new();
+
+        for candidate in candidates {
+            let results: Vec<_> = state
+                .goal
+                .constraints
+                .iter()
+                .map(|constraint| ConstraintEvaluator::evaluate_constraint(constraint, &candidate))
+                .collect();
+
+            let blocking_results: Vec<_> = state
+                .goal
+                .constraints
+                .iter()
+                .zip(results.iter())
+                .filter(|(constraint, result)| {
+                    !matches!(constraint.strength, ConstraintStrength::Should { .. })
+                        && result.status != ConstraintStatus::Satisfied
+                })
+                .map(|(_, result)| result.clone())
+                .collect();
+
+            if blocking_results.is_empty() {
+                admitted.push(candidate);
+            } else {
+                rejected.push(RejectedCandidateSummary {
+                    candidate_ref: Some(crate::cas::hex_encode(&candidate.atom_id)),
+                    atom_id: Some(candidate.atom_id),
+                    node_num: Some(candidate.node_num),
+                    source_backend: candidate.source_backend.as_str().to_owned(),
+                    reason: "query contract hard constraint was not satisfied".to_owned(),
+                    constraint_results: blocking_results,
+                });
+            }
+        }
+
+        (admitted, rejected)
+    }
+
     /// Filter candidates by invariant checks using real INVARIANTS section from atoms.
     ///
     /// SKF-1.1 Section 5.2, Step 2: Admissible = FilterByInvariants(Candidates, CTX_k)
@@ -2034,10 +2128,8 @@ impl FixedPointSolver {
                     //
                     // The VM emits a coarse branch signal, but the solver re-probes the
                     // exact claim signatures so identical claims are not branched.
-                    if let Some((pattern_hash, conflicting_atom_id)) = candidate
-                        .derived_claims
-                        .iter()
-                        .find_map(|claim| {
+                    if let Some((pattern_hash, conflicting_atom_id)) =
+                        candidate.derived_claims.iter().find_map(|claim| {
                             ctx_index.probe_conflict(claim).map(|info| {
                                 let pattern_hash = vm::CtxIndex::claim_pattern_hash(claim);
                                 let conflicting_atom_id = info
@@ -2140,6 +2232,7 @@ impl FixedPointSolver {
             need_branch,
             rejected_hard,
             rejected_soft,
+            contract_rejections: Vec::new(),
         })
     }
 
@@ -2273,7 +2366,9 @@ impl FixedPointSolver {
 
     #[inline]
     fn claim_matches_gap_pattern(claim: &ClaimData, pattern: &ClaimPattern) -> bool {
-        if let Some(obj_tag) = pattern.obj_tag && claim.obj_tag != obj_tag.to_u8() {
+        if let Some(obj_tag) = pattern.obj_tag
+            && claim.obj_tag != obj_tag.to_u8()
+        {
             return false;
         }
 
@@ -2385,11 +2480,17 @@ impl FixedPointSolver {
             .collect()
     }
 
-    fn infer_claim_steps(&self, candidates: &[Candidate], _ctx_id: &CtxId) -> Vec<InferredClaimStep> {
+    fn infer_claim_steps(
+        &self,
+        candidates: &[Candidate],
+        _ctx_id: &CtxId,
+    ) -> Vec<InferredClaimStep> {
         let mut derived: Vec<InferredClaimStep> = Vec::new();
         let inference_decay: f64 = 0.8;
-        let node_to_atom: HashMap<NodeNum, AtomId> =
-            candidates.iter().map(|candidate| (candidate.node_num, candidate.atom_id)).collect();
+        let node_to_atom: HashMap<NodeNum, AtomId> = candidates
+            .iter()
+            .map(|candidate| (candidate.node_num, candidate.atom_id))
+            .collect();
 
         // Collect all direct claims indexed by subject node
         let mut claims_by_subj: HashMap<u64, Vec<(ClaimData, TrustLevel)>> = HashMap::new();
@@ -2595,12 +2696,12 @@ impl FixedPointSolver {
                 .collect();
 
             let mut derived_by_subj: HashMap<u64, Vec<(ClaimData, TrustLevel)>> = HashMap::new();
-                for (claim, trust) in &all_claims {
-                    derived_by_subj
-                        .entry(claim.subj)
-                        .or_default()
-                        .push((claim.clone(), *trust));
-                }
+            for (claim, trust) in &all_claims {
+                derived_by_subj
+                    .entry(claim.subj)
+                    .or_default()
+                    .push((claim.clone(), *trust));
+            }
 
             for (subj, claims) in &derived_by_subj {
                 for (claim_ab, trust_ab) in claims {
@@ -4210,7 +4311,9 @@ mod tests {
             qualifiers_mask: 0,
         };
 
-        assert!(FixedPointSolver::claim_matches_gap_pattern(&claim, &pattern));
+        assert!(FixedPointSolver::claim_matches_gap_pattern(
+            &claim, &pattern
+        ));
     }
 
     #[test]
@@ -4248,14 +4351,25 @@ mod tests {
         solver.apply_inferred_claims(&mut graph, &mut gaps, &[], &[], &[inferred]);
 
         assert!(gaps[0].covered, "inferred claim should cover matching gap");
-        assert!(graph.covers_gap(0), "answer graph should record covered gap");
-        assert_eq!(graph.derived_claims.len(), 1, "graph should retain inferred claim");
+        assert!(
+            graph.covers_gap(0),
+            "answer graph should record covered gap"
+        );
+        assert_eq!(
+            graph.derived_claims.len(),
+            1,
+            "graph should retain inferred claim"
+        );
         assert_eq!(
             graph.nodes[0].derived_claims.len(),
             1,
             "subject node should receive inferred claim"
         );
-        assert_eq!(graph.proof_steps.len(), 1, "proof anchor should be recorded");
+        assert_eq!(
+            graph.proof_steps.len(),
+            1,
+            "proof anchor should be recorded"
+        );
     }
 
     #[test]

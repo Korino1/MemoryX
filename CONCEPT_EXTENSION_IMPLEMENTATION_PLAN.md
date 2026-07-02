@@ -310,6 +310,16 @@ pub struct QueryContract {
 
 ### C1. Явный engine проверки условий
 
+Статус: реализовано.
+
+Факт реализации:
+
+- `QueryContract::to_goal_spec()` переносит constraints в `GoalSpec`.
+- `Candidate` реализует `ConstraintSubject`.
+- `FixedPointSolver` применяет hard/negative constraints до invariant VM и set-cover ranking.
+- `AnswerPack.rejected_candidates` содержит отклонённые кандидаты и `ConstraintResult`.
+- Regression test: ANN candidate с `MUST_NOT backend=ANN` не попадает в финальный `AnswerGraph`.
+
 Файлы:
 
 - добавить `src/query/constraints.rs`

@@ -355,3 +355,21 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Constraint-first candidate gate
+
+Done:
+
+- Connected public `QueryContract` constraints to runtime `GoalSpec`.
+- Added `Candidate` as a `ConstraintSubject` for deterministic constraint evaluation.
+- Added pre-ranking hard/MUST_NOT filtering in `FixedPointSolver` before invariant VM, context update, and set-cover selection.
+- Added `RejectedCandidateSummary` and `AnswerPack.rejected_candidates` so rejected hard/negative candidates remain visible to API/MCP callers.
+- Added regression coverage proving an ANN candidate that violates `MUST_NOT backend=ANN` cannot enter the final `AnswerGraph`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test test_answer_contract_must_not_rejects_candidate_before_graph --quiet`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
