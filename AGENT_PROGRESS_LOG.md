@@ -272,3 +272,30 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- --help`
+
+## 2026-07-02: Source and evidence provenance layer
+
+Done:
+
+- Added durable source registry at `meta/sources.jsonl`.
+- Added public source API:
+  `SourceId`, `SourceKind`, `SourceLocation`, `SourceRecord`,
+  `MemoryX::register_source`, `get_source`, `list_sources`, `set_atom_source`.
+- Added proof-grade evidence API:
+  `EvidenceSpan`, `EvidenceRecord`, `MemoryX::evidence_record_for_ref`.
+- Extended `AnswerPack` with:
+  `evidence_records` and `coverage_report`.
+- `solve_goal` now enriches solver output with source-linked evidence records
+  without changing `FixedPointSolver` semantics.
+- Added MCP tools:
+  `register_source`, `list_sources`, `attach_atom_source`.
+- Updated production README and full MCP example to the 19-tool surface.
+- Added regression coverage for durable source persistence and evidence -> source
+  enrichment, plus MCP source tool flow.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

@@ -47,8 +47,6 @@ pub use crate::store::InvalidSectionKind;
 // VM Types
 // ============================================================================
 
-pub use crate::vm::build_basic_invariant_program;
-pub use crate::vm::build_conflict_probe_program;
 pub use crate::vm::AtomView;
 pub use crate::vm::BytecodeBuilder;
 pub use crate::vm::ClaimData;
@@ -61,6 +59,8 @@ pub use crate::vm::Opcode;
 pub use crate::vm::QueryConstraintsView;
 pub use crate::vm::VmInterpreter;
 pub use crate::vm::VmState;
+pub use crate::vm::build_basic_invariant_program;
+pub use crate::vm::build_conflict_probe_program;
 
 // ============================================================================
 // Query Types
@@ -122,8 +122,8 @@ pub use crate::cas::validate_sections;
 // ============================================================================
 
 pub use crate::utils::BitPackBlockHeader;
-pub use crate::utils::HLCGenerator;
 pub use crate::utils::HLC;
+pub use crate::utils::HLCGenerator;
 
 // CRC32 functions
 pub use crate::utils::crc32;
@@ -132,6 +132,8 @@ pub use crate::utils::crc32_u32;
 pub use crate::utils::crc32_u64;
 
 // Varint functions
+pub use crate::utils::VARINT_MAX_BYTES;
+pub use crate::utils::ZIGZAG_MAX_BYTES;
 pub use crate::utils::decode_varint;
 pub use crate::utils::decode_zigzag;
 pub use crate::utils::decode_zigzag_varint;
@@ -139,15 +141,13 @@ pub use crate::utils::encode_varint;
 pub use crate::utils::encode_varint_fixed;
 pub use crate::utils::encode_zigzag;
 pub use crate::utils::encode_zigzag_varint;
-pub use crate::utils::VARINT_MAX_BYTES;
-pub use crate::utils::ZIGZAG_MAX_BYTES;
 
 // Bit packing functions
+pub use crate::utils::BITPACK_BLOCK_SIZE;
 pub use crate::utils::bitpack_decode;
 pub use crate::utils::bitpack_decode_deltas;
 pub use crate::utils::bitpack_encode;
 pub use crate::utils::bitpack_encode_deltas;
-pub use crate::utils::BITPACK_BLOCK_SIZE;
 
 // Read/write helpers
 pub use crate::utils::read_u16_le;
@@ -169,14 +169,21 @@ pub use crate::store::api::Conflict;
 pub use crate::store::api::ConflictSeverity;
 pub use crate::store::api::ConflictType;
 pub use crate::store::api::ContextBranch;
+pub use crate::store::api::CoverageReport;
 pub use crate::store::api::CtxId;
 pub use crate::store::api::CtxManager;
 pub use crate::store::api::CtxPolicyId;
+pub use crate::store::api::EvidenceRecord;
 pub use crate::store::api::EvidenceRef;
+pub use crate::store::api::EvidenceSpan;
 pub use crate::store::api::Limitation;
 pub use crate::store::api::LimitationCode;
 pub use crate::store::api::LimitationSeverity;
 pub use crate::store::api::MemoryX;
+pub use crate::store::api::SourceId;
+pub use crate::store::api::SourceKind;
+pub use crate::store::api::SourceLocation;
+pub use crate::store::api::SourceRecord;
 pub use crate::store::api::StoreConfig;
 pub use crate::store::api::StoreError;
 
@@ -185,10 +192,10 @@ pub use crate::store::api::StoreError;
 pub use crate::federation::{
     AtomMetadata, AtomTypeInfo, AtomTypeSupport, BaseId, ConstraintType, CrdtConflict,
     CrdtMetadata, DiscoverRequest, DiscoverResponse, DiscoveryResult, EvidenceType,
-    FederationClient, FederationConfig, FederationError, FetchRequest, FetchResponse, FieldMapping,
-    Gateway, MappingConstraint, MappingEvidence, MapsTo, NegotiateRequest, NegotiateResponse,
-    PeerConfig, SchemaAgreement, SyncDirection, SyncRequest, SyncResponse,
-    FEDERATION_PROTOCOL_VERSION,
+    FEDERATION_PROTOCOL_VERSION, FederationClient, FederationConfig, FederationError, FetchRequest,
+    FetchResponse, FieldMapping, Gateway, MappingConstraint, MappingEvidence, MapsTo,
+    NegotiateRequest, NegotiateResponse, PeerConfig, SchemaAgreement, SyncDirection, SyncRequest,
+    SyncResponse,
 };
 
 // Internal types (not part of public API)

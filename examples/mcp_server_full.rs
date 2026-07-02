@@ -1,6 +1,6 @@
 //! MemoryX Full MCP Server v0.2.0
 //!
-//! Complete MCP (Model Context Protocol) server with all 16 tools:
+//! Complete MCP (Model Context Protocol) server with all 19 tools:
 //! - query: Natural language query
 //! - search_lex: Lexical search
 //! - search_graph: Graph search
@@ -10,6 +10,9 @@
 //! - update_atom: Update atom
 //! - delete_atom: Delete atom
 //! - history: Recent operation history
+//! - register_source: Register provenance source
+//! - list_sources: List provenance sources
+//! - attach_atom_source: Attach source to atom
 //! - create_context: Create context
 //! - list_contexts: List contexts
 //! - branch_context: Branch context
@@ -409,7 +412,47 @@ impl MemoryXMcpServer {
                     "required": []
                 }),
             },
-            // 10. create_context - Create context
+            // 10. register_source - Register provenance source
+            Tool {
+                name: "register_source".to_string(),
+                description: "Register a durable provenance source.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string" },
+                        "label": { "type": "string" },
+                        "path": { "type": "string" },
+                        "url": { "type": "string" },
+                        "line_start": { "type": "integer" },
+                        "line_end": { "type": "integer" },
+                        "source_version": { "type": "string" }
+                    },
+                    "required": ["kind", "label"]
+                }),
+            },
+            // 11. list_sources - List provenance sources
+            Tool {
+                name: "list_sources".to_string(),
+                description: "List registered provenance sources.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            // 12. attach_atom_source - Attach source to atom
+            Tool {
+                name: "attach_atom_source".to_string(),
+                description: "Attach a registered source id to an atom.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "atom_id": { "type": "string" },
+                        "source_id": { "type": "integer" }
+                    },
+                    "required": ["atom_id", "source_id"]
+                }),
+            },
+            // 13. create_context - Create context
             Tool {
                 name: "create_context".to_string(),
                 description: "Create a new context branch for hypothesis exploration.".to_string(),
@@ -424,7 +467,7 @@ impl MemoryXMcpServer {
                     "required": []
                 }),
             },
-            // 11. list_contexts - List contexts
+            // 14. list_contexts - List contexts
             Tool {
                 name: "list_contexts".to_string(),
                 description: "List all contexts with status and parent relationships.".to_string(),
@@ -433,7 +476,7 @@ impl MemoryXMcpServer {
                     "properties": {}
                 }),
             },
-            // 12. branch_context - Branch context
+            // 15. branch_context - Branch context
             Tool {
                 name: "branch_context".to_string(),
                 description: "Create a branch from an existing context.".to_string(),
@@ -456,7 +499,7 @@ impl MemoryXMcpServer {
                     "required": ["parent_ctx"]
                 }),
             },
-            // 13. list_conflicts - List conflicts
+            // 16. list_conflicts - List conflicts
             Tool {
                 name: "list_conflicts".to_string(),
                 description: "List conflicts in a context with severity and resolution options.".to_string(),
@@ -869,7 +912,75 @@ impl MemoryXMcpServer {
         }
     }
 
-    /// 10. create_context - Create context
+    /// 10. register_source - Register provenance source
+    async fn register_source(
+        &self,
+        kind: String,
+        label: String,
+        location: SourceLocation,
+    ) -> Result<ToolResult, String> {
+        let source_kind =
+            parse_source_kind(&kind).ok_or_else(|| format!("Invalid source kind: {}", kind))?;
+        let mut store = self.store.write().await;
+        let source = store
+            .register_source(source_kind, label, location)
+            .map_err(|e| format!("Source registration failed: {}", e))?;
+
+        Ok(ToolResult {
+            content: vec![ToolContent::text(format!(
+                "Registered source\nSource ID: {}\nKind: {:?}\nLabel: {}",
+                source.source_id, source.kind, source.label
+            ))],
+            is_error: None,
+        })
+    }
+
+    /// 11. list_sources - List provenance sources
+    async fn list_sources(&self) -> Result<ToolResult, String> {
+        let store = self.store.read().await;
+        let sources = store
+            .list_sources()
+            .map_err(|e| format!("Source list failed: {}", e))?;
+        let mut output = format!("Sources\nTotal: {}", sources.len());
+        for source in &sources {
+            output.push_str(&format!(
+                "\n\nSource ID: {}\nKind: {:?}\nLabel: {}",
+                source.source_id, source.kind, source.label
+            ));
+            if let Some(path) = &source.location.path {
+                output.push_str(&format!("\nPath: {}", path));
+            }
+        }
+
+        Ok(ToolResult {
+            content: vec![ToolContent::text(output)],
+            is_error: None,
+        })
+    }
+
+    /// 12. attach_atom_source - Attach source to atom
+    async fn attach_atom_source(
+        &self,
+        atom_id_str: String,
+        source_id: u32,
+    ) -> Result<ToolResult, String> {
+        let atom_id = parse_atom_id(&atom_id_str)
+            .ok_or_else(|| format!("Invalid atom ID format: {}", atom_id_str))?;
+        let mut store = self.store.write().await;
+        store
+            .set_atom_source(atom_id, source_id)
+            .map_err(|e| format!("Attach source failed: {}", e))?;
+
+        Ok(ToolResult {
+            content: vec![ToolContent::text(format!(
+                "Attached source\nAtom ID: {}\nSource ID: {}",
+                atom_id_str, source_id
+            ))],
+            is_error: None,
+        })
+    }
+
+    /// 13. create_context - Create context
     async fn create_context(&self, policy_id: Option<u64>) -> Result<ToolResult, String> {
         let mut store = self.store.write().await;
         let new_ctx = store.create_context(policy_id.unwrap_or(0) as CtxPolicyId);
@@ -1203,6 +1314,34 @@ impl MemoryXMcpServer {
                 let limit: Option<usize> = extract_arg_opt(&args, "limit");
                 self.history(limit).await
             }
+            "register_source" => {
+                let kind: String = extract_arg(&args, "kind")?;
+                let label: String = extract_arg(&args, "label")?;
+                let path: Option<String> = extract_arg_opt(&args, "path");
+                let url: Option<String> = extract_arg_opt(&args, "url");
+                let line_start: Option<u64> = extract_arg_opt(&args, "line_start");
+                let line_end: Option<u64> = extract_arg_opt(&args, "line_end");
+                let source_version: Option<String> = extract_arg_opt(&args, "source_version");
+                let location = SourceLocation {
+                    path,
+                    url,
+                    commit_hash: None,
+                    byte_range: None,
+                    line_range: match (line_start, line_end) {
+                        (Some(start), Some(end)) => Some((start, end)),
+                        _ => None,
+                    },
+                    timestamp_unix_ns: None,
+                    source_version,
+                };
+                self.register_source(kind, label, location).await
+            }
+            "list_sources" => self.list_sources().await,
+            "attach_atom_source" => {
+                let atom_id: String = extract_arg(&args, "atom_id")?;
+                let source_id: u32 = extract_arg(&args, "source_id")?;
+                self.attach_atom_source(atom_id, source_id).await
+            }
             "create_context" => {
                 let policy_id: Option<u64> = extract_arg_opt(&args, "policy_id");
                 self.create_context(policy_id).await
@@ -1352,6 +1491,22 @@ fn parse_delete_reason(s: &str) -> DeleteReason {
         "DUPLICATE" => DeleteReason::Duplicate,
         "LEGAL" => DeleteReason::Legal,
         _ => DeleteReason::Obsolete,
+    }
+}
+
+fn parse_source_kind(s: &str) -> Option<SourceKind> {
+    match s.to_ascii_lowercase().as_str() {
+        "file" => Some(SourceKind::File),
+        "page" => Some(SourceKind::Page),
+        "repository" => Some(SourceKind::Repository),
+        "commit" => Some(SourceKind::Commit),
+        "api" => Some(SourceKind::Api),
+        "message" => Some(SourceKind::Message),
+        "table" => Some(SourceKind::Table),
+        "measurement" => Some(SourceKind::Measurement),
+        "human" => Some(SourceKind::Human),
+        "agent" => Some(SourceKind::Agent),
+        _ => None,
     }
 }
 
@@ -1644,7 +1799,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  project -> <cwd>/.memoryx/bases/default");
                 println!("  user    -> <home>/.memoryx/bases/default");
                 println!();
-                println!("MCP Tools (16 total):");
+                println!("MCP Tools (19 total):");
                 println!("  1. query           - Natural language query");
                 println!("  2. search_lex      - Lexical search");
                 println!("  3. search_graph    - Graph search");
@@ -1654,13 +1809,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  7. update_atom     - Update atom");
                 println!("  8. delete_atom     - Delete atom");
                 println!("  9. history         - Recent operation history");
-                println!("  10. create_context - Create context");
-                println!("  11. list_contexts  - List contexts");
-                println!("  12. branch_context - Branch context");
-                println!("  13. list_conflicts - List conflicts");
-                println!("  14. graph_neighbors- Graph neighbors");
-                println!("  15. graph_walk     - Graph walk");
-                println!("  16. extract_subgraph- Extract subgraph");
+                println!("  10. register_source - Register provenance source");
+                println!("  11. list_sources    - List provenance sources");
+                println!("  12. attach_atom_source - Attach source to atom");
+                println!("  13. create_context  - Create context");
+                println!("  14. list_contexts   - List contexts");
+                println!("  15. branch_context  - Branch context");
+                println!("  16. list_conflicts  - List conflicts");
+                println!("  17. graph_neighbors - Graph neighbors");
+                println!("  18. graph_walk      - Graph walk");
+                println!("  19. extract_subgraph- Extract subgraph");
                 return Ok(());
             }
             _ => {

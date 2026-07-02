@@ -1031,7 +1031,7 @@ impl ProvenanceChain {
 /// Legacy EvidenceRef for backward compatibility
 ///
 /// Prefer using EvidenceLink for full provenance.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EvidenceRef {
     pub atom_id: AtomId,
     pub section_kind: SectionKind,
@@ -1070,6 +1070,111 @@ impl EvidenceRef {
             self.offset,
             self.length,
         )
+    }
+}
+
+/// Durable source identity.
+pub type SourceId = u32;
+
+/// Source kind for proof-grade provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    File,
+    Page,
+    Repository,
+    Commit,
+    Api,
+    Message,
+    Table,
+    Measurement,
+    Human,
+    Agent,
+}
+
+/// Exact location of an observation inside a source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SourceLocation {
+    pub path: Option<String>,
+    pub url: Option<String>,
+    pub commit_hash: Option<String>,
+    pub byte_range: Option<(u64, u64)>,
+    pub line_range: Option<(u64, u64)>,
+    pub timestamp_unix_ns: Option<u64>,
+    pub source_version: Option<String>,
+}
+
+/// Registered source that evidence can point to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRecord {
+    pub source_id: SourceId,
+    pub kind: SourceKind,
+    pub label: String,
+    pub location: SourceLocation,
+    pub registered_at_unix_ns: u64,
+}
+
+impl SourceRecord {
+    pub fn new(
+        source_id: SourceId,
+        kind: SourceKind,
+        label: impl Into<String>,
+        location: SourceLocation,
+    ) -> Self {
+        SourceRecord {
+            source_id,
+            kind,
+            label: label.into(),
+            location,
+            registered_at_unix_ns: current_unix_ns(),
+        }
+    }
+}
+
+/// Exact span extracted as evidence from a source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceSpan {
+    pub byte_range: Option<(u64, u64)>,
+    pub line_range: Option<(u64, u64)>,
+}
+
+/// Proof-grade evidence object derived from legacy EvidenceRef plus source metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvidenceRecord {
+    pub legacy_ref: EvidenceRef,
+    pub source_id: Option<SourceId>,
+    pub source_location: Option<SourceLocation>,
+    pub extracted_span: EvidenceSpan,
+    pub observed_at_unix_ns: u64,
+    pub extractor: String,
+    pub confidence: f32,
+    pub human_verified: bool,
+}
+
+impl EvidenceRecord {
+    pub fn from_ref(evidence: EvidenceRef) -> Self {
+        EvidenceRecord {
+            extracted_span: EvidenceSpan {
+                byte_range: Some((
+                    evidence.offset,
+                    evidence.offset.saturating_add(evidence.length),
+                )),
+                line_range: None,
+            },
+            confidence: evidence.trust as f32 / 10000.0,
+            legacy_ref: evidence,
+            source_id: None,
+            source_location: None,
+            observed_at_unix_ns: current_unix_ns(),
+            extractor: "legacy_evidence_ref".to_string(),
+            human_verified: false,
+        }
+    }
+
+    pub fn with_source(mut self, source: &SourceRecord) -> Self {
+        self.source_id = Some(source.source_id);
+        self.source_location = Some(source.location.clone());
+        self
     }
 }
 
@@ -1892,6 +1997,12 @@ impl StoreConfig {
     pub fn history_path(&self) -> PathBuf {
         self.meta_dir().join("history.log")
     }
+
+    /// Get append-only source registry path.
+    #[inline]
+    pub fn sources_path(&self) -> PathBuf {
+        self.meta_dir().join("sources.jsonl")
+    }
 }
 
 impl Default for StoreConfig {
@@ -2628,6 +2739,36 @@ impl ActiveClaim {
     }
 }
 
+/// Coverage summary for a fixed-point answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoverageReport {
+    pub total_gaps: usize,
+    pub covered_gaps: usize,
+    pub uncovered_gaps: Vec<GapId>,
+    pub graph_nodes: usize,
+    pub graph_edges: usize,
+    pub claim_count: usize,
+    pub evidence_ref_count: usize,
+    pub evidence_record_count: usize,
+    pub source_link_count: usize,
+}
+
+impl CoverageReport {
+    pub fn empty() -> Self {
+        CoverageReport {
+            total_gaps: 0,
+            covered_gaps: 0,
+            uncovered_gaps: Vec::new(),
+            graph_nodes: 0,
+            graph_edges: 0,
+            claim_count: 0,
+            evidence_ref_count: 0,
+            evidence_record_count: 0,
+            source_link_count: 0,
+        }
+    }
+}
+
 /// Answer pack containing query results
 ///
 /// # Fields
@@ -2648,6 +2789,10 @@ pub struct AnswerPack {
     pub claims: Vec<ClaimView>,
     /// Evidence references
     pub evidence: Vec<EvidenceRef>,
+    /// Proof-grade evidence records enriched with source metadata when available.
+    pub evidence_records: Vec<EvidenceRecord>,
+    /// Query coverage summary.
+    pub coverage_report: CoverageReport,
     /// Overall confidence (0.0 - 1.0)
     pub confidence: f32,
     /// Known limitations
@@ -2665,6 +2810,8 @@ impl AnswerPack {
             selected_ctx: ctx_id,
             claims: Vec::new(),
             evidence: Vec::new(),
+            evidence_records: Vec::new(),
+            coverage_report: CoverageReport::empty(),
             confidence: 0.0,
             limitations: Vec::new(),
             alternates: Vec::new(),
@@ -2782,6 +2929,21 @@ impl AnswerPack {
         let mut pack = AnswerPack::new(ctx_id);
         pack.graph = graph.clone();
         pack.confidence = confidence;
+        pack.coverage_report = CoverageReport {
+            total_gaps,
+            covered_gaps,
+            uncovered_gaps: gaps
+                .iter()
+                .filter(|gap| !gap.covered)
+                .map(|gap| gap.id)
+                .collect(),
+            graph_nodes: graph.node_count(),
+            graph_edges: graph.edge_count(),
+            claim_count: 0,
+            evidence_ref_count: 0,
+            evidence_record_count: 0,
+            source_link_count: 0,
+        };
 
         // === Generate limitations ===
 
@@ -2900,12 +3062,28 @@ impl AnswerPack {
     #[inline]
     pub fn add_claim(&mut self, claim: ClaimView) {
         self.claims.push(claim);
+        self.coverage_report.claim_count = self.claims.len();
     }
 
     /// Add evidence to the answer pack
     #[inline]
     pub fn add_evidence(&mut self, evidence: EvidenceRef) {
+        self.evidence_records
+            .push(EvidenceRecord::from_ref(evidence.clone()));
         self.evidence.push(evidence);
+        self.refresh_coverage_counts();
+    }
+
+    /// Recompute coverage counters that depend on post-solver enrichment.
+    pub fn refresh_coverage_counts(&mut self) {
+        self.coverage_report.claim_count = self.claims.len();
+        self.coverage_report.evidence_ref_count = self.evidence.len();
+        self.coverage_report.evidence_record_count = self.evidence_records.len();
+        self.coverage_report.source_link_count = self
+            .evidence_records
+            .iter()
+            .filter(|record| record.source_id.is_some())
+            .count();
     }
 
     /// Add an alternative answer pack
@@ -4528,6 +4706,124 @@ impl MemoryX {
         Ok(entries)
     }
 
+    fn read_sources(&self) -> Result<Vec<SourceRecord>, StoreError> {
+        let sources_path = self.config.sources_path();
+        if !sources_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(sources_path).map_err(StoreError::from)?;
+        let reader = BufReader::new(file);
+        let mut sources = Vec::new();
+
+        for line in reader.lines() {
+            let line = line.map_err(StoreError::from)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let source: SourceRecord =
+                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
+            sources.push(source);
+        }
+
+        Ok(sources)
+    }
+
+    /// Register a durable source record and return its generated SourceId.
+    pub fn register_source(
+        &mut self,
+        kind: SourceKind,
+        label: impl Into<String>,
+        location: SourceLocation,
+    ) -> Result<SourceRecord, StoreError> {
+        let next_id = self
+            .read_sources()?
+            .iter()
+            .map(|source| source.source_id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let source = SourceRecord::new(next_id, kind, label, location);
+
+        let sources_path = self.config.sources_path();
+        if let Some(parent) = sources_path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&sources_path)
+            .map_err(StoreError::from)?;
+        serde_json::to_writer(&mut file, &source).map_err(|err| StoreError::Io(err.to_string()))?;
+        file.write_all(b"\n").map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_data().map_err(StoreError::from)?;
+
+        Ok(source)
+    }
+
+    /// Get a registered source by id.
+    pub fn get_source(&self, source_id: SourceId) -> Result<Option<SourceRecord>, StoreError> {
+        Ok(self
+            .read_sources()?
+            .into_iter()
+            .rev()
+            .find(|source| source.source_id == source_id))
+    }
+
+    /// List all registered sources in registration order.
+    pub fn list_sources(&self) -> Result<Vec<SourceRecord>, StoreError> {
+        self.read_sources()
+    }
+
+    /// Attach a registered source id to an atom metadata record.
+    pub fn set_atom_source(
+        &mut self,
+        atom_id: AtomId,
+        source_id: SourceId,
+    ) -> Result<(), StoreError> {
+        if self.get_source(source_id)?.is_none() {
+            return Err(StoreError::Io(format!("source {} not found", source_id)));
+        }
+
+        let mut metadata = self
+            .meta
+            .get_meta(&atom_id)
+            .cloned()
+            .ok_or(StoreError::AtomNotFound(atom_id))?;
+        metadata.source_id = source_id;
+        self.meta.put_meta(atom_id, metadata);
+        self.flush()
+    }
+
+    /// Convert a legacy EvidenceRef into a proof-grade EvidenceRecord.
+    pub fn evidence_record_for_ref(
+        &self,
+        evidence: &EvidenceRef,
+    ) -> Result<EvidenceRecord, StoreError> {
+        let mut record = EvidenceRecord::from_ref(evidence.clone());
+        if let Some(metadata) = self.meta.get_meta(&evidence.atom_id)
+            && metadata.source_id != 0
+            && let Some(source) = self.get_source(metadata.source_id)?
+        {
+            record = record.with_source(&source);
+        }
+        Ok(record)
+    }
+
+    fn enrich_answer_sources(&self, pack: &mut AnswerPack) -> Result<(), StoreError> {
+        pack.evidence_records.clear();
+        for evidence in &pack.evidence {
+            pack.evidence_records
+                .push(self.evidence_record_for_ref(evidence)?);
+        }
+        pack.refresh_coverage_counts();
+        for alternate in &mut pack.alternates {
+            self.enrich_answer_sources(alternate)?;
+        }
+        Ok(())
+    }
+
     /// Ingest a new atom into the store
     ///
     /// # Arguments
@@ -4841,9 +5137,11 @@ impl MemoryX {
             .with_timestamp(now_ns)
             .with_cas(Arc::clone(&self.cas.io_store));
 
-        solver
+        let mut pack = solver
             .solve(goal, ctx_policy)
-            .map_err(|e| StoreError::Query(e.to_string()))
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        self.enrich_answer_sources(&mut pack)?;
+        Ok(pack)
     }
 
     /// Create a QueryRouter populated with all current store data.
@@ -7192,6 +7490,56 @@ mod tests {
                 .get("supersedes")
                 .is_some_and(|id| id == &crate::cas::hex_encode(&first_atom))
         );
+    }
+
+    #[test]
+    fn test_source_registry_enriches_evidence_record() {
+        let test_dir = PathBuf::from("./test_sources");
+        let _ = std::fs::remove_dir_all(&test_dir);
+        let config = StoreConfig::new(test_dir);
+        let mut store = MemoryX::new(config.clone()).unwrap();
+
+        let source = store
+            .register_source(
+                SourceKind::File,
+                "concept-spec",
+                SourceLocation {
+                    path: Some("Concept/SKF.txt".to_string()),
+                    line_range: Some((10, 20)),
+                    source_version: Some("draft".to_string()),
+                    ..SourceLocation::default()
+                },
+            )
+            .unwrap();
+
+        let claim = ClaimData {
+            subj: 7,
+            pred: 8,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 9,
+            qualifiers_mask: 0,
+        };
+        let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+        let atom_id = store
+            .ingest(&payload, AtomType::FACT, &[claim], &[])
+            .unwrap();
+        store.set_atom_source(atom_id, source.source_id).unwrap();
+
+        let evidence = EvidenceRef::new(atom_id, SectionKind::CLAIMS, 128, 32, 9000);
+        let record = store.evidence_record_for_ref(&evidence).unwrap();
+        assert_eq!(record.source_id, Some(source.source_id));
+        assert_eq!(
+            record
+                .source_location
+                .as_ref()
+                .and_then(|location| location.path.as_deref()),
+            Some("Concept/SKF.txt")
+        );
+        assert_eq!(record.extracted_span.byte_range, Some((128, 160)));
+
+        let reopened = MemoryX::new(config).unwrap();
+        let persisted = reopened.get_source(source.source_id).unwrap().unwrap();
+        assert_eq!(persisted.label, "concept-spec");
     }
 
     #[test]

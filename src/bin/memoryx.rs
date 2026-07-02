@@ -2951,6 +2951,63 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                         }
                                     },
                                     {
+                                        "name": "register_source",
+                                        "description": "Register a durable provenance source such as a file, page, repository, commit, API response, message, table, measurement, human, or agent.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "kind": { "type": "string" },
+                                                "label": { "type": "string" },
+                                                "path": { "type": "string" },
+                                                "url": { "type": "string" },
+                                                "commit_hash": { "type": "string" },
+                                                "line_start": { "type": "integer" },
+                                                "line_end": { "type": "integer" },
+                                                "source_version": { "type": "string" }
+                                            },
+                                            "required": ["kind", "label"],
+                                            "examples": [
+                                                {
+                                                    "kind": "file",
+                                                    "label": "SKF concept",
+                                                    "path": "Concept/SKF.txt",
+                                                    "line_start": 1,
+                                                    "line_end": 40,
+                                                    "source_version": "draft"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "list_sources",
+                                        "description": "List durable provenance sources registered in the active base with their exact location/version metadata.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "attach_atom_source",
+                                        "description": "Attach an existing registered source id to an atom so future evidence records can trace that atom back to exact source metadata.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "atom_id": { "type": "string" },
+                                                "source_id": { "type": "integer" }
+                                            },
+                                            "required": ["atom_id", "source_id"],
+                                            "examples": [
+                                                {
+                                                    "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                                    "source_id": 1
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
                                         "name": "create_context",
                                         "description": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
                                         "inputSchema": {
@@ -3102,6 +3159,11 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                         "update_atom" => mcp_update_atom_response(store, id, arguments),
                         "delete_atom" => mcp_delete_atom_response(store, id, arguments),
                         "history" => mcp_history_response(store, id, arguments),
+                        "register_source" => mcp_register_source_response(store, id, arguments),
+                        "list_sources" => mcp_list_sources_response(store, id, arguments),
+                        "attach_atom_source" => {
+                            mcp_attach_atom_source_response(store, id, arguments)
+                        }
                         "create_context" => mcp_create_context_response(store, id, arguments),
                         "list_contexts" => mcp_list_contexts_response(store, id, arguments),
                         "branch_context" => mcp_branch_context_response(store, id, arguments),
@@ -3840,6 +3902,137 @@ fn mcp_history_response(
 }
 
 #[cfg(feature = "mcp")]
+fn mcp_register_source_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(kind_str) = args.get("kind").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'kind'");
+    };
+    let Some(label) = args.get("label").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'label'");
+    };
+    let Some(kind) = mcp_parse_source_kind(kind_str) else {
+        return mcp_error(id, -32602, format!("Invalid source kind: {}", kind_str));
+    };
+
+    let line_range = match (
+        args.get("line_start").and_then(|value| value.as_u64()),
+        args.get("line_end").and_then(|value| value.as_u64()),
+    ) {
+        (Some(start), Some(end)) => Some((start, end)),
+        _ => None,
+    };
+    let location = SourceLocation {
+        path: args
+            .get("path")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
+        url: args
+            .get("url")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
+        commit_hash: args
+            .get("commit_hash")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
+        byte_range: None,
+        line_range,
+        timestamp_unix_ns: None,
+        source_version: args
+            .get("source_version")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
+    };
+
+    match store.register_source(kind, label, location) {
+        Ok(source) => mcp_text_result(
+            id,
+            format!(
+                "Registered source\nSource ID: {}\nKind: {:?}\nLabel: {}",
+                source.source_id, source.kind, source.label
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Source registration failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_list_sources_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.list_sources() {
+        Ok(sources) => {
+            let mut output = format!("Sources\nTotal: {}", sources.len());
+            for source in &sources {
+                output.push_str(&format!(
+                    "\n\nSource ID: {}\nKind: {:?}\nLabel: {}",
+                    source.source_id, source.kind, source.label
+                ));
+                if let Some(path) = &source.location.path {
+                    output.push_str(&format!("\nPath: {}", path));
+                }
+                if let Some(url) = &source.location.url {
+                    output.push_str(&format!("\nURL: {}", url));
+                }
+                if let Some((start, end)) = source.location.line_range {
+                    output.push_str(&format!("\nLines: {}-{}", start, end));
+                }
+                if let Some(version) = &source.location.source_version {
+                    output.push_str(&format!("\nVersion: {}", version));
+                }
+            }
+            mcp_text_result(id, output)
+        }
+        Err(e) => mcp_error(id, -32603, format!("Source list failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_attach_atom_source_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(atom_id_str) = args.get("atom_id").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'atom_id'");
+    };
+    let atom_id = match mcp_parse_atom_id(atom_id_str) {
+        Some(id) => id,
+        None => return mcp_error(id, -32602, format!("Invalid atom ID: {}", atom_id_str)),
+    };
+    let Some(source_id) = args
+        .get("source_id")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| SourceId::try_from(value).ok())
+    else {
+        return mcp_error(id, -32602, "Missing or invalid integer field 'source_id'");
+    };
+
+    match store.set_atom_source(atom_id, source_id) {
+        Ok(()) => mcp_text_result(
+            id,
+            format!(
+                "Attached source\nAtom ID: {}\nSource ID: {}",
+                atom_id_str, source_id
+            ),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Attach source failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
 fn mcp_list_contexts_response(
     store: &mut MemoryX,
     id: serde_json::Value,
@@ -4190,6 +4383,23 @@ fn mcp_parse_delete_reason(s: &str) -> DeleteReason {
         "DUPLICATE" => DeleteReason::Duplicate,
         "LEGAL" => DeleteReason::Legal,
         _ => DeleteReason::Obsolete,
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_parse_source_kind(s: &str) -> Option<SourceKind> {
+    match s.to_ascii_lowercase().as_str() {
+        "file" => Some(SourceKind::File),
+        "page" => Some(SourceKind::Page),
+        "repository" => Some(SourceKind::Repository),
+        "commit" => Some(SourceKind::Commit),
+        "api" => Some(SourceKind::Api),
+        "message" => Some(SourceKind::Message),
+        "table" => Some(SourceKind::Table),
+        "measurement" => Some(SourceKind::Measurement),
+        "human" => Some(SourceKind::Human),
+        "agent" => Some(SourceKind::Agent),
+        _ => None,
     }
 }
 
@@ -4717,6 +4927,9 @@ mod tests {
         assert!(names.contains(&"update_atom"));
         assert!(names.contains(&"delete_atom"));
         assert!(names.contains(&"history"));
+        assert!(names.contains(&"register_source"));
+        assert!(names.contains(&"list_sources"));
+        assert!(names.contains(&"attach_atom_source"));
         assert!(names.contains(&"create_context"));
         assert!(names.contains(&"list_contexts"));
         assert!(names.contains(&"branch_context"));
@@ -4724,7 +4937,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 19);
     }
 
     #[cfg(feature = "mcp")]
@@ -4792,6 +5005,56 @@ mod tests {
 
         let atom_id = store.list_atom_ids().into_iter().next().unwrap();
         let atom_node = store.get_node_num(&atom_id).unwrap();
+
+        let register_source_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {
+                "name": "register_source",
+                "arguments": {
+                    "kind": "file",
+                    "label": "test source",
+                    "path": "Concept/SKF.txt",
+                    "line_start": 1,
+                    "line_end": 3
+                }
+            }
+        })
+        .to_string();
+        let register_source_response =
+            process_mcp_request(&mut store, &register_source_request).await;
+        assert!(register_source_response.contains("Registered source"));
+        assert!(register_source_response.contains("Source ID: 1"));
+
+        let attach_source_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": {
+                "name": "attach_atom_source",
+                "arguments": {
+                    "atom_id": atom_id_to_hex(&atom_id),
+                    "source_id": 1
+                }
+            }
+        })
+        .to_string();
+        let attach_source_response = process_mcp_request(&mut store, &attach_source_request).await;
+        assert!(attach_source_response.contains("Attached source"));
+
+        let list_sources_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "tools/call",
+            "params": {
+                "name": "list_sources",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let list_sources_response = process_mcp_request(&mut store, &list_sources_request).await;
+        assert!(list_sources_response.contains("test source"));
 
         let search_graph_request = serde_json::json!({
             "jsonrpc": "2.0",
