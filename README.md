@@ -251,6 +251,7 @@ MemoryX uses unstable Rust features in `src/lib.rs`, so build it with nightly Ru
 - Rust nightly
 - Windows 10/11 or Linux
 - On Linux, `io_uring` is available for the storage layer; on Windows, the Windows async I/O stack is used.
+- Release binaries are portable by default and are not tied to the build machine's Zen4 CPU.
 
 ## Quick Start
 
@@ -258,6 +259,8 @@ MemoryX uses unstable Rust features in `src/lib.rs`, so build it with nightly Ru
 rustup toolchain install nightly
 cargo +nightly build --release
 ```
+
+For local CPU-specific benchmarking you may set `RUSTFLAGS="-C target-cpu=native"`, but do not publish that binary as a generic release. See `docs/PORTABLE_CPU_BUILDS.md`.
 
 Initialize a base:
 

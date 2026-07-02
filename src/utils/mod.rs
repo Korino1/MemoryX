@@ -6,9 +6,11 @@
 //! - Bit packing utilities for blocks of 128 elements
 //! - CRC32 calculation wrappers
 //! - Cross-platform async I/O abstraction (io module)
+//! - Runtime CPU capability detection for portable accelerated builds
 
 #![allow(dead_code)]
 
+pub mod cpu;
 pub mod io;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -483,9 +485,7 @@ pub fn bitpack_decode(buf: &[u8], output: &mut [u64]) -> Option<usize> {
             let byte_idx = (bit_offset + bit_pos as usize) / 8;
             let bit_idx = (bit_offset + bit_pos as usize) % 8;
 
-            if byte_idx < data_buf.len()
-                && (data_buf[byte_idx] >> bit_idx) & 1 != 0
-            {
+            if byte_idx < data_buf.len() && (data_buf[byte_idx] >> bit_idx) & 1 != 0 {
                 value |= 1u64 << bit_pos;
             }
         }
