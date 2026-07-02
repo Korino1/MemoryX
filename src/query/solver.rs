@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 // Re-export API types for convenience
 pub use crate::store::api::{
-    ActiveClaim, AgEdge, AgEdgeType, AgNode, AnswerGraph, AtomRef, ClaimView, Conflict,
-    ConflictConditions, ConflictSeverity, ConflictType, CostWeights, EntityRef, EvidenceRef, Gap,
-    GapId, GapPriority, Limitation, LimitationCode, LimitationSeverity, ObjTag,
+    ActiveClaim, AgEdge, AgEdgeType, AgNode, AnswerGraph, AtomRef, ClaimStatus, ClaimView,
+    Conflict, ConflictConditions, ConflictSeverity, ConflictType, CostWeights, EntityRef,
+    EvidenceRef, Gap, GapId, GapPriority, Limitation, LimitationCode, LimitationSeverity, ObjTag,
     ResolutionOption,
 };
 
@@ -2866,6 +2866,11 @@ impl FixedPointSolver {
         for (node_idx, node) in state.answer_graph.nodes.iter().enumerate() {
             // Extract direct claims from the node's derived_claims
             for claim_data in &node.derived_claims {
+                let claim_status = if node.evidence_refs.is_empty() {
+                    ClaimStatus::InsufficientEvidence
+                } else {
+                    ClaimStatus::Verified
+                };
                 let claim = ClaimView::new(
                     EntityRef::Node(node.atom_ref.node_num),
                     claim_data.pred as SymId,
@@ -2874,6 +2879,11 @@ impl FixedPointSolver {
                     claim_data.qualifiers_mask,
                     node.trust,
                     node.atom_ref.atom_id,
+                )
+                .with_provenance(
+                    claim_status,
+                    node.evidence_refs.clone(),
+                    node.evidence_refs.clone(),
                 );
                 pack.add_claim(claim.clone());
 
@@ -2889,10 +2899,13 @@ impl FixedPointSolver {
                 0,
                 node.trust,
                 node.atom_ref.atom_id,
+            )
+            .with_provenance(
+                ClaimStatus::Structural,
+                node.evidence_refs.clone(),
+                node.evidence_refs.clone(),
             );
             pack.add_claim(structural_claim);
-
-
 
             // Add all evidence references to the pack
             for ev in &node.evidence_refs {
@@ -2910,6 +2923,11 @@ impl FixedPointSolver {
                         0,
                         node.trust,
                         node.atom_ref.atom_id,
+                    )
+                    .with_provenance(
+                        ClaimStatus::Derived,
+                        node.evidence_refs.clone(),
+                        node.evidence_refs.clone(),
                     );
                     pack.add_claim(gap_claim);
                 }
@@ -2932,6 +2950,11 @@ impl FixedPointSolver {
                             0,
                             edge.confidence,
                             node.atom_ref.atom_id,
+                        )
+                        .with_provenance(
+                            ClaimStatus::Derived,
+                            node.evidence_refs.clone(),
+                            node.evidence_refs.clone(),
                         );
                         pack.add_claim(edge_claim);
                     }
@@ -2946,6 +2969,11 @@ impl FixedPointSolver {
                 .iter()
                 .find(|node| node.atom_ref.node_num == claim_data.subj)
             {
+                let claim_status = if subject_node.evidence_refs.is_empty() {
+                    ClaimStatus::InsufficientEvidence
+                } else {
+                    ClaimStatus::Derived
+                };
                 let claim = ClaimView::new(
                     EntityRef::Node(claim_data.subj),
                     claim_data.pred as SymId,
@@ -2954,6 +2982,11 @@ impl FixedPointSolver {
                     claim_data.qualifiers_mask,
                     subject_node.trust,
                     subject_node.atom_ref.atom_id,
+                )
+                .with_provenance(
+                    claim_status,
+                    subject_node.evidence_refs.clone(),
+                    subject_node.evidence_refs.clone(),
                 );
                 pack.add_claim(claim);
             }

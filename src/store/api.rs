@@ -1268,6 +1268,18 @@ pub struct ClaimView {
     pub qualifiers_mask: u32,
     pub trust: TrustLevel,
     pub atom_id: AtomId,
+    pub status: ClaimStatus,
+    pub evidence_refs: Vec<EvidenceRef>,
+    pub provenance_path: Vec<EvidenceRef>,
+}
+
+/// Epistemic status of a claim returned in an AnswerPack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClaimStatus {
+    Verified,
+    Derived,
+    Structural,
+    InsufficientEvidence,
 }
 
 impl ClaimView {
@@ -1289,7 +1301,23 @@ impl ClaimView {
             qualifiers_mask,
             trust,
             atom_id,
+            status: ClaimStatus::InsufficientEvidence,
+            evidence_refs: Vec::new(),
+            provenance_path: Vec::new(),
         }
+    }
+
+    #[inline]
+    pub fn with_provenance(
+        mut self,
+        status: ClaimStatus,
+        evidence_refs: Vec<EvidenceRef>,
+        provenance_path: Vec<EvidenceRef>,
+    ) -> Self {
+        self.status = status;
+        self.evidence_refs = evidence_refs;
+        self.provenance_path = provenance_path;
+        self
     }
 }
 
@@ -6168,6 +6196,35 @@ mod tests {
         assert!(config.mmap_mode);
         assert!(!config.io_uring);
         assert_eq!(config.io_buffer_size, 64 * 1024);
+    }
+
+    #[test]
+    fn test_claim_view_carries_status_and_provenance() {
+        let atom_id = [7u8; 32];
+        let evidence = EvidenceRef::new(atom_id, SectionKind::EVIDENCE, 8, 16, 9000);
+        let claim = ClaimView::new(
+            EntityRef::Node(1),
+            2,
+            ObjTag::U64,
+            ConstValue::u64(3),
+            0,
+            9000,
+            atom_id,
+        );
+
+        assert_eq!(claim.status, ClaimStatus::InsufficientEvidence);
+        assert!(claim.evidence_refs.is_empty());
+
+        let claim = claim.with_provenance(
+            ClaimStatus::Verified,
+            vec![evidence.clone()],
+            vec![evidence.clone()],
+        );
+
+        assert_eq!(claim.status, ClaimStatus::Verified);
+        assert_eq!(claim.evidence_refs.len(), 1);
+        assert_eq!(claim.provenance_path.len(), 1);
+        assert_eq!(claim.evidence_refs[0].offset, evidence.offset);
     }
 
     #[test]
