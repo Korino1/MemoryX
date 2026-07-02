@@ -209,3 +209,39 @@ Known dirty working tree at hook creation time:
 Next recommended step:
 
 - Before implementation Milestone 1, stabilize or commit/park the existing dirty tree.
+
+## 2026-07-02: Audit remediation completed
+
+Done:
+
+- Closed P0 MCP stdio stdout pollution.
+- Closed P0 hardcoded federation `BaseId` by persisting per-base ID under `base/meta/federation_base_id.hex`.
+- Closed P1 contract-first query path for public answers.
+- Closed P1 semantic ANN live solver path:
+  `QueryContract.semantic_vectors -> GoalSpec.semantic_vectors -> QueryRouter::AnnBackend`.
+- Closed P1 per-claim AnswerPack provenance/status:
+  `ClaimStatus`, `evidence_refs`, `provenance_path`.
+- Closed P1 federation discovery scope:
+  direct `atom:<hex>` discovery, `atom_id` results, query constraints, valid `MapsTo` attachment.
+- Closed P1 README overclaim:
+  production MCP source of truth is now documented as `memoryx serve --stdio`; `examples/mcp_server_full.rs` is documented as demonstrational.
+- Closed P2 public repair/rebuild surface:
+  `MemoryX::verify_integrity`, `MemoryX::rebuild_indexes`, `MemoryX::repair`;
+  CLI commands `verify-integrity`, `rebuild-index`, `repair`.
+
+Commits:
+
+- `de85be8 Keep MCP stdio diagnostics off stdout`
+- `cb983d3 Persist unique federation base id`
+- `2910de5 Route public answers through query contracts`
+- `1dbff1a Add answer claim provenance status`
+- `fa46007 Route semantic query contracts through ANN`
+- `f050923 Make federation discovery atom aware`
+- `b60e4d5 Expose base repair operations`
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`

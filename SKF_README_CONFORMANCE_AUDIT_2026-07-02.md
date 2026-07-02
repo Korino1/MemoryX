@@ -11,6 +11,26 @@
 
 Цель: проверить не планы и не намерения, а фактическую реализацию текущего кода относительно базового SKF-концепта и публичных заявлений README.
 
+## Статус Закрытия 2026-07-02
+
+Статус: все найденные P0/P1/P2 замечания этого аудита закрыты до дальнейшей разработки.
+
+- P0 MCP stdio stdout pollution: закрыто в `de85be8`.
+- P0 hardcoded federation `BaseId`: закрыто в `cb983d3`.
+- P1 contract-first public answer path: закрыто в `2910de5`.
+- P1 AnswerPack per-claim provenance/status: закрыто в `1dbff1a`.
+- P1 semantic ANN live solver path: закрыто в `fa46007`.
+- P1 federation discovery too narrow: закрыто в `f050923`.
+- P1 README overclaim по `examples/mcp_server_full.rs`: закрыто в `b60e4d5`; production MCP source of truth теперь описан как `memoryx serve --stdio`.
+- P2 public repair/rebuild surface: закрыто в `b60e4d5`; добавлены Store API и CLI commands `verify-integrity`, `rebuild-index`, `repair`.
+
+Проверка после закрытия:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- --help`
+
 ## Краткий Итог
 
 Проект не является пустой заготовкой: ядро CAS/atoms, контексты, конфликты, VM/CTX_PROBE, fixed-point solver, AnswerGraph, индексы, CRDT/WAL/snapshot и MCP/CLI surface реально присутствуют в коде.
@@ -329,4 +349,3 @@ clippy -D warnings completed without diagnostics
 6. Расширить federation discovery до atom/mapping-aware discovery.
 7. Исправить README по `examples/mcp_server_full.rs` или сделать example реально production-parity.
 8. Добавить public check/repair/rebuild surface.
-
