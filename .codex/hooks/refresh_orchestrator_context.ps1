@@ -102,6 +102,19 @@ Never remove, bypass, or weaken:
 - `gpt-5.4`: integration across solver/store/CAS/federation/MCP write paths.
 - `gpt-5.5`: architecture gates, safety review, release audit only.
 
+## CodeGraph Rule
+
+CodeGraph is installed and initialized in this workspace. Use it before manual
+rg/file-reading for architecture, symbol lookup, call flow, impact analysis, or
+refactor planning.
+
+- codegraph_explore first for architecture/flow questions.
+- codegraph_search for quick symbol locations.
+- codegraph_impact before changing central APIs.
+- Ignore duplicate primary evidence under MemoryX_as knoladge base unless that
+  copied project is the explicit target.
+- CodeGraph does not replace cargo fmt/clippy/test.
+
 ## Current Git Log
 
 ~~~text

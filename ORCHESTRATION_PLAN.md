@@ -93,6 +93,37 @@
 
 ## 3. Роли агентов
 
+### CodeGraph Context Rule
+
+CodeGraph установлен и проиндексирован в проекте. Он должен использоваться как
+основной инструмент ориентации по коду перед ручным `rg`/чтением файлов, если
+задача связана с архитектурой, потоком вызовов, поиском символов, impact-анализом
+или refactor planning.
+
+Проверенное состояние на момент интеграции:
+
+- indexed files: 93;
+- nodes: 8108;
+- edges: 29631;
+- backend: SQLite/WAL/FTS5;
+- languages: Rust and Python.
+
+Правила:
+
+- `codegraph_explore` первым для "как работает X", flow, architecture, bug area survey.
+- `codegraph_search` только для быстрого поиска символа.
+- `codegraph_callers`/`codegraph_callees` для точечных связей.
+- `codegraph_impact` перед изменением центральных API.
+- После edits учитывать задержку индексации примерно 1 секунду.
+- Если CodeGraph возвращает `MemoryX_as knoladge base/...`, считать это копией проекта и не использовать как primary source, если задача не про эту папку.
+- CodeGraph не заменяет `cargo fmt`, `cargo clippy`, `cargo test`.
+
+Модельная экономия:
+
+- mini-agents должны начинать с CodeGraph для локализации файлов и символов;
+- `gpt-5.4` должен использовать `codegraph_impact` перед интеграционными правками;
+- `gpt-5.5` должен использовать CodeGraph для architecture gates вместо широкого чтения файлов.
+
 ### Оркестратор
 
 Модель: `gpt-5.5`, reasoning `high`; для спорных решений `max`.
@@ -497,4 +528,3 @@ cargo test --all-targets --all-features --quiet
 cargo build --release --features mcp
 git status --short
 ```
-

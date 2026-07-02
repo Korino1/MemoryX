@@ -1,5 +1,6 @@
 /target/
 /.memoryx/
+/.codegraph/
 /build/
 /data/
 /memoryx_data/

@@ -63,6 +63,23 @@ Purpose:
 
 - After session start or `/compact`, Codex should immediately recover the orchestrator role, current plans, non-regression invariants, model routing, and progress history.
 
+## 2026-07-02: CodeGraph orchestration integration
+
+Done:
+
+- Verified local CodeGraph index:
+  93 indexed files, 8108 nodes, 29631 edges, SQLite/WAL/FTS5 backend.
+- Confirmed CodeGraph is useful for MemoryX because the project has large Rust subsystems:
+  solver, store, CAS, graph, query router, VM, CRDT, federation, and MCP.
+- Added CodeGraph usage rules to `AGENTS.md`.
+- Added CodeGraph orchestration rules to `ORCHESTRATION_PLAN.md`.
+- Added `.codegraph/` to `.gitignore`; local index DB must not be published.
+
+Important caveat:
+
+- The current index can return duplicate results under `MemoryX_as knoladge base/`.
+  Treat that folder as a copied project unless the task explicitly targets it.
+
 ## Open State
 
 Known dirty working tree at hook creation time:
@@ -74,4 +91,3 @@ Known dirty working tree at hook creation time:
 Next recommended step:
 
 - Before implementation Milestone 1, stabilize or commit/park the existing dirty tree.
-

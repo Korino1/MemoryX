@@ -55,6 +55,25 @@ Use `ORCHESTRATION_PLAN.md` as the authority:
 - use `gpt-5.4` for solver/store/CAS/federation/MCP write-path integration;
 - use `gpt-5.5` only for architecture gates, safety reviews, and release audits.
 
+## CodeGraph Usage
+
+CodeGraph is installed and initialized for this workspace. Use it before manual
+`rg`/file-reading when the task is about architecture, symbol location, call
+flow, blast radius, or refactoring.
+
+Required pattern:
+
+- Start with `codegraph_status` if index freshness is uncertain.
+- Use `codegraph_explore` first for architecture/flow questions.
+- Use `codegraph_search` only for quick symbol location.
+- Use `codegraph_impact` before changing central symbols such as
+  `MemoryX::answer`, `FixedPointSolver`, `AnswerPack`, `CtxManager`,
+  `CasStore`, `GraphStore`, MCP handlers, CRDT, federation, or integrity code.
+- Do not use CodeGraph as correctness proof. Still run `cargo fmt`,
+  `cargo clippy`, and `cargo test`.
+- Ignore duplicate results under `MemoryX_as knoladge base/` unless the task
+  explicitly targets that copied project.
+
 ## Required End-of-Task Evidence
 
 Every substantial task should report:
@@ -64,4 +83,3 @@ Every substantial task should report:
 - test results;
 - remaining risks;
 - whether any non-regression invariant was touched.
-
