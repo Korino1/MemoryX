@@ -278,8 +278,13 @@ benchmarks/            Honest RAG-comparison scaffold
 
 ## License
 
-This project is not published under an open-source license. Default terms are
-proprietary / all rights reserved. See `LICENSE.md`.
+MemoryX is licensed under `AGPL-3.0-or-later` for open-source use.
+
+Commercial licensing is available separately for organizations that cannot use
+AGPL software. See `LICENSE.md` and `COMMERCIAL_LICENSE.md`.
+
+Future external contributions require a CLA or equivalent agreement so the
+project can preserve dual licensing.
 
 ---
 
@@ -482,5 +487,11 @@ CLI и MCP открывают одну и ту же durable store layout. `updat
 
 ## Лицензия
 
-Проект не публикуется под open-source лицензией. Условия по умолчанию:
-proprietary / all rights reserved. См. `LICENSE.md`.
+MemoryX лицензируется как open source под `AGPL-3.0-or-later`.
+
+Для компаний и продуктов, которым не подходит AGPL, возможна отдельная
+коммерческая лицензия по письменному соглашению. См. `LICENSE.md` и
+`COMMERCIAL_LICENSE.md`.
+
+Для будущих внешних вкладов потребуется CLA или аналогичное соглашение, чтобы
+сохранить возможность двойного лицензирования.
