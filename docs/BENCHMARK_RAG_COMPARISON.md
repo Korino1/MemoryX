@@ -3,6 +3,10 @@
 This benchmark scaffold is for honest comparison, not marketing claims. It
 does not contain results or superiority claims.
 
+For the broader product-level benchmark plan covering accuracy, recall,
+groundedness, latency, support deflection, conflicts, temporal correctness, and
+RAG weakness coverage, see `docs/BENCHMARK_EFFECTIVENESS_PLAN.md`.
+
 ## Dataset
 
 Seed cases live in `benchmarks/rag_comparison_cases.json` and cover:
@@ -45,4 +49,3 @@ all compared systems, freeze the dataset, and store raw outputs.
 - Do not compare MemoryX against an intentionally weak RAG baseline.
 - Do report failures and unsupported cases.
 - Do keep query contracts and answer snapshots with the result files.
-
