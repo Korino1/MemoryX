@@ -3,9 +3,9 @@
 This benchmark scaffold is for honest comparison, not marketing claims. It
 does not contain results or superiority claims.
 
-For the broader product-level benchmark plan covering accuracy, recall,
-groundedness, latency, support deflection, conflicts, temporal correctness, and
-RAG weakness coverage, see `docs/BENCHMARK_EFFECTIVENESS_PLAN.md`.
+The public benchmark must remain evidence-backed: do not publish numbers until
+the dataset, baselines, raw outputs, judge rubric, and exact commands are
+frozen.
 
 ## Dataset
 
