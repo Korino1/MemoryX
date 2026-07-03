@@ -263,6 +263,7 @@ benchmarks/            Honest RAG-comparison scaffold
 - Authoring API: `docs/AUTHORING_API.md`
 - LLM boundary: `docs/LLM_BOUNDARY.md`
 - Portable CPU builds: `docs/PORTABLE_CPU_BUILDS.md`
+- MemoryX vs RAG: `docs/MEMORYX_VS_RAG.md`
 - Benchmark scaffold: `docs/BENCHMARK_RAG_COMPARISON.md`
 - Effectiveness benchmark plan: `docs/BENCHMARK_EFFECTIVENESS_PLAN.md`
 
