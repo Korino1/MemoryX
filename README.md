@@ -1,37 +1,289 @@
 # MemoryX
 
-MemoryX - локальная knowledge fabric система по концепту `SKF-1.1`, которая хранит знания не в виде чанков текста, а в виде атомов знания с provenance, claims, contexts и graph links. Ответ строится не как "похожие куски текста", а как согласованный `AnswerGraph`, который можно проверить и проследить.
+MemoryX is a local-first knowledge base for cases where simple text search or
+classic RAG is not enough. It stores knowledge as small verifiable atoms with
+claims, evidence, provenance, contexts, graph links, and conflict handling.
 
-Этот репозиторий предназначен для тех, кому недостаточно обычного RAG: для конфликтующих источников, временных срезов, разных юрисдикций, инженерных и исследовательских баз знаний, где важны объяснимость, provenance и контроль контекста.
+Instead of returning only "similar text chunks", MemoryX tries to assemble an
+answer from a consistent proof-like subgraph. This makes it useful for project
+memory, engineering decisions, research notes, audit trails, timelines,
+contradicting sources, and assistant-accessible knowledge bases.
+
+## What MemoryX Is
+
+MemoryX is not a hosted SaaS product and not just a wrapper around a vector
+database. It is a Rust knowledge-store engine with:
+
+- Knowledge atoms with content-addressed identity.
+- Claims with evidence, status, confidence components, and provenance.
+- Contexts and branches for alternative assumptions or project-specific views.
+- Explicit conflict tracking instead of silently merging contradictions.
+- Lexical, semantic, and graph retrieval.
+- A fixed-point solver that builds a structured `AnswerPack` and `AnswerGraph`.
+- Durable local storage with history, tombstones, repair, and rebuild commands.
+- MCP support so AI assistants can query and write to the knowledge base.
+- Federation primitives for connecting compatible bases.
+
+If you only need semantic search over document chunks, MemoryX is probably more
+complex than necessary. If you need traceable answers, conflict visibility,
+context control, and durable project memory, MemoryX is the intended tool.
+
+## MemoryX vs Classic RAG
+
+| Aspect | Classic RAG | MemoryX |
+| --- | --- | --- |
+| Storage unit | Text chunks | Knowledge atoms with claims and evidence |
+| Main goal | Retrieve similar passages | Assemble a consistent answer graph |
+| Contradictions | Often hidden or blended | Stored as conflicts or branches |
+| Context | Usually implicit and global | Explicit contexts and policies |
+| Explainability | "Found in document X" | Provenance plus supporting graph |
+| Best fit | FAQ, documentation search | Research, engineering, audit, timelines, decision memory |
+
+## Build Requirements
+
+MemoryX currently uses nightly Rust.
+
+```bash
+rustup toolchain install nightly
+cargo +nightly build --release
+```
+
+Portable release builds are the default. For local CPU-specific benchmarking you
+may set `RUSTFLAGS="-C target-cpu=native"`, but do not publish that binary as a
+generic release. See `docs/PORTABLE_CPU_BUILDS.md`.
+
+## Quick Start
+
+Create a local base:
+
+```bash
+cargo +nightly run --release --bin memoryx -- init --base default
+```
+
+Ingest data:
+
+```bash
+cargo +nightly run --release --bin memoryx -- ingest --base default facts.json
+```
+
+Query the base:
+
+```bash
+cargo +nightly run --release --bin memoryx -- query --base default "what does the base know about Rust ownership?"
+```
+
+Compile an editable query contract without executing it:
+
+```bash
+cargo +nightly run --release --bin memoryx -- --format json query --emit-contract "Explain MemoryX MCP"
+```
+
+Run a saved query contract and return structured output:
+
+```bash
+cargo +nightly run --release --bin memoryx -- --format json query --contract contract.json
+```
+
+Show base statistics:
+
+```bash
+cargo +nightly run --release --bin memoryx -- stats --base default
+```
+
+## CLI
+
+The main binary is `memoryx`.
+
+Common commands:
+
+- `init`
+- `ingest`
+- `query`
+- `import`
+- `export`
+- `stats`
+- `compact`
+- `verify-integrity`
+- `rebuild-index`
+- `repair`
+- `history`
+- `snapshot`
+- `serve`
+
+Help:
+
+```bash
+cargo +nightly run --release --bin memoryx -- --help
+```
+
+Useful examples:
+
+```bash
+# Create a project-scoped base
+cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
+
+# Import atoms from JSON
+cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
+
+# Export atoms to CSV
+cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
+
+# Verify and repair a base
+cargo +nightly run --release --bin memoryx -- verify-integrity --base default
+cargo +nightly run --release --bin memoryx -- rebuild-index --base default
+cargo +nightly run --release --bin memoryx -- repair --base default
+```
+
+## MCP For Assistants
+
+Production MCP entry point:
+
+```bash
+cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
+```
+
+`memoryx serve --stdio` exposes the store-backed MCP surface. It currently
+provides 33 tools for querying, ingestion, updates, provenance, entities,
+relations, contexts, conflicts, graph traversal, and history.
+
+Important distinction:
+
+- `memoryx serve --stdio` is the production MCP transport.
+- `memoryx serve` without `--stdio` starts the HTTP federation server, not MCP.
+- `examples/mcp_server_full.rs` is a demonstration example, not the production entry point.
+
+Example MCP tool calls:
+
+```json
+{"name":"compile_query_contract","arguments":{"query_text":"Explain MemoryX MCP"}}
+```
+
+```json
+{"name":"query","arguments":{"query_text":"What decisions mention persistence?","ctx_id":0}}
+```
+
+```json
+{"name":"get_provenance_path","arguments":{"atom_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+```
+
+## Storage Layout
+
+MemoryX keeps bases in explicit scoped roots:
+
+- Project scope: `<repo>/.memoryx/bases/<name>`
+- User scope: `<home>/.memoryx/bases/<name>`
+
+`memoryx init` creates a structure like:
+
+```text
+.memoryx/bases/default/
+  cas/
+  index/
+  graph/
+  meta/
+    history.log
+    sources.jsonl
+    entities.jsonl
+    relations.jsonl
+  inverted/
+```
+
+CLI and MCP open the same durable store layout. `update_atom` writes a new
+version and links it with `SUPERSEDES`; `delete_atom` creates a tombstone instead
+of physically erasing data. Successful write operations are appended to
+`meta/history.log`.
+
+```bash
+cargo +nightly run --release --bin memoryx -- history --base default --limit 20
+```
+
+## Repository Structure
+
+```text
+src/bin/memoryx.rs     CLI and MCP/federation server entry point
+src/store/             High-level store API
+src/cas/               Content-addressed atom storage
+src/query/             Contracts, retrieval, solver, answer assembly
+src/graph/             Graph store
+src/crdt/              CRDT metadata, WAL, snapshots
+src/federation/        Federation protocol
+docs/                  User and integration documentation
+examples/              CLI, MCP, native API examples
+tests/                 Regression tests
+benchmarks/            Honest RAG-comparison scaffold
+```
+
+## Documentation
+
+- Query contracts: `docs/QUERY_CONTRACT.md`
+- Answer packs: `docs/ANSWER_PACK.md`
+- Authoring API: `docs/AUTHORING_API.md`
+- LLM boundary: `docs/LLM_BOUNDARY.md`
+- Portable CPU builds: `docs/PORTABLE_CPU_BUILDS.md`
+- Benchmark scaffold: `docs/BENCHMARK_RAG_COMPARISON.md`
+
+## Status
+
+- Current crate version: `0.1.0`.
+- Public API and wire formats are pre-1.0 and may change.
+- The codebase is store-backed and tested, but the project should still be
+  treated as early-stage software.
+- MCP is optional and requires the `mcp` feature.
+- Administrative base maintenance commands such as `import`, `export`,
+  `verify-integrity`, `rebuild-index`, and `repair` are CLI commands.
+
+## License
+
+This project is not published under an open-source license. Default terms are
+proprietary / all rights reserved. See `LICENSE.md`.
+
+---
+
+# MemoryX на русском
+
+MemoryX - локальная база знаний для случаев, где обычного поиска по тексту или
+классического RAG недостаточно. Она хранит знания не большими текстовыми
+чанками, а небольшими проверяемыми атомами: с утверждениями, доказательствами,
+источниками, контекстами, связями графа и явной обработкой противоречий.
+
+Вместо ответа из "похожих фрагментов текста" MemoryX пытается собрать ответ из
+согласованного доказательного подграфа. Это полезно для памяти проекта,
+инженерных решений, исследовательских заметок, аудита, временных линий,
+конфликтующих источников и баз знаний, к которым подключается AI-ассистент.
 
 ## Что Это Такое
 
-MemoryX - не hosted SaaS и не обёртка над vector database. Это Rust-движок базы знаний с:
+MemoryX - не облачный SaaS и не просто оболочка над vector database. Это
+Rust-движок базы знаний с:
 
-- content-addressed atoms и provenance
-- contexts и conflicts как объектами первого класса
-- lexical, semantic и graph retrieval
-- fixed-point solver, который собирает `AnswerGraph`
-- `ClaimViewV2` с epistemic status, confidence vector, modality, polarity, evidence и provenance
-- import/export, stats, compaction и federation
-- MCP surface для интеграции с ассистентами
+- атомами знания с content-addressed identity;
+- утверждениями, evidence, статусом, confidence components и provenance;
+- контекстами и ветками для разных предположений или проектов;
+- явным хранением конфликтов вместо сглаживания противоречий;
+- lexical, semantic и graph retrieval;
+- solver-ом, который собирает структурированный `AnswerPack` и `AnswerGraph`;
+- локальным durable storage, историей операций, tombstones, repair и rebuild;
+- MCP-интерфейсом, чтобы ассистенты могли читать и вести базу;
+- примитивами federation для совместимых баз.
 
-Если нужна только похожесть текстовых фрагментов по embedding, это обычно не тот инструмент. Если нужна работа с противоречиями, объяснимый ответ и трассировка происхождения знания, то это как раз целевой сценарий.
+Если нужен только semantic search по чанкам документов, MemoryX, скорее всего,
+избыточен. Если нужны проверяемые ответы, видимые конфликты, контроль контекста
+и долговременная память проекта, это целевой сценарий.
 
-## MemoryX И RAG
+## MemoryX И Обычный RAG
 
 | Аспект | Обычный RAG | MemoryX |
 | --- | --- | --- |
-| Единица хранения | Чанки текста | Атомы знания с claims и evidence |
-| Цель retrieval | Найти похожие фрагменты | Собрать согласованный answer graph |
-| Противоречия | Часто сглаживаются или теряются | Явно хранятся как conflicts или branches |
-| Контекст | Обычно неявный и глобальный | Явные contexts с policy |
-| Объяснимость | "Это было в документе X" | Provenance плюс supporting subgraph |
-| Подходящий сценарий | FAQ, документация, шаблонные ответы | Исследования, право, инженерия, аудит, timeline knowledge |
+| Единица хранения | Текстовые чанки | Атомы знания с claims и evidence |
+| Цель | Найти похожие фрагменты | Собрать согласованный answer graph |
+| Противоречия | Часто скрываются или смешиваются | Хранятся как conflicts или branches |
+| Контекст | Обычно неявный и общий | Явные contexts и policies |
+| Объяснимость | "Найдено в документе X" | Provenance плюс supporting graph |
+| Лучший сценарий | FAQ, поиск по документации | Исследования, инженерия, аудит, timelines, память решений |
 
 ## Быстрый Старт
 
-MemoryX использует nightly Rust.
+MemoryX сейчас собирается nightly Rust.
 
 ```bash
 rustup toolchain install nightly
@@ -56,40 +308,15 @@ cargo +nightly run --release --bin memoryx -- ingest --base default facts.json
 cargo +nightly run --release --bin memoryx -- query --base default "что известно про Rust ownership?"
 ```
 
-Скомпилировать редактируемый `QueryContract` без выполнения:
-
-```bash
-cargo +nightly run --release --bin memoryx -- --format json query --emit-contract "Explain MemoryX MCP"
-```
-
-Выполнить сохранённый contract и получить структурированный `AnswerPack`:
-
-```bash
-cargo +nightly run --release --bin memoryx -- --format json query --contract contract.json
-```
-
-Посмотреть статистику:
+Получить статистику:
 
 ```bash
 cargo +nightly run --release --bin memoryx -- stats --base default
 ```
 
-## Как Запускать
+## CLI
 
-### CLI
-
-Основной бинарник - `src/bin/memoryx.rs`.
-
-Поддерживаемые команды:
-
-- `init`
-- `ingest`
-- `query`
-- `compact`
-- `export`
-- `import`
-- `stats`
-- `serve`
+Основной бинарник - `memoryx`.
 
 Справка:
 
@@ -97,10 +324,10 @@ cargo +nightly run --release --bin memoryx -- stats --base default
 cargo +nightly run --release --bin memoryx -- --help
 ```
 
-Практические команды:
+Примеры:
 
 ```bash
-# Инициализировать project-scoped базу
+# Создать базу в папке проекта
 cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
 
 # Импортировать atoms из JSON
@@ -109,468 +336,65 @@ cargo +nightly run --release --bin memoryx -- import --base default --format jso
 # Экспортировать atoms в CSV
 cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
 
-# Поднять production MCP по stdio
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
-```
-
-### MCP через core runtime
-
-`memoryx serve --stdio` запускает store-backed MCP transport. Для этого нужен feature `mcp`.
-
-Он открывает полный production surface из 33 инструментов для query,
-authoring, provenance, context branching, graph operations и безопасных
-write-операций базы:
-
-Доступные инструменты:
-
-- `query`
-- `compile_query_contract`
-- `validate_query_contract`
-- `explain_answer_graph`
-- `get_provenance_path`
-- `search_lex`
-- `search_graph`
-- `search_semantic`
-- `ingest`
-- `batch_ingest`
-- `update_atom`
-- `supersede_claim`
-- `correct_claim`
-- `delete_atom`
-- `history`
-- `register_source`
-- `list_sources`
-- `attach_atom_source`
-- `create_entity`
-- `list_entities`
-- `alias_entity`
-- `merge_entities`
-- `split_entity`
-- `add_claim`
-- `assert_relation`
-- `correct_relation`
-- `create_context`
-- `list_contexts`
-- `branch_context`
-- `list_conflicts`
-- `graph_neighbors`
-- `graph_walk`
-- `extract_subgraph`
-
-Пример:
-
-```bash
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
-```
-
-Примеры MCP calls:
-
-```json
-{"name":"compile_query_contract","arguments":{"query_text":"Explain MemoryX MCP"}}
-```
-
-```json
-{"name":"query","arguments":{"query_text":"What decisions mention persistence?","ctx_id":0}}
-```
-
-```json
-{"name":"explain_answer_graph","arguments":{"query_text":"Find facts about MemoryX persistence","ctx_id":0}}
-```
-
-### Полный MCP example
-
-`examples/mcp_server_full.rs` - демонстрационный stdio MCP server. Он полезен
-как пример интеграции, но не является production entrypoint и может иметь
-меньший/устаревающий набор инструментов. Источник истины для production MCP -
-`memoryx serve --stdio`.
-
-Пример:
-
-```bash
-cargo +nightly run --release --features mcp --example mcp_server_full -- --base-scope project --base-name default
-```
-
-### HTTP federation server
-
-`memoryx serve` без `--stdio` запускает HTTP federation server. Это не MCP transport. Он обслуживает маршруты вроде `/fetch`, `/negotiate`, `/sync`, `/discover` и `/health`.
-
-Пример:
-
-```bash
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --host 127.0.0.1 --port 8080
-```
-
-## Где Хранится База
-
-MemoryX не пишет базу в произвольный `./data` по умолчанию. Базы разрешаются только в scoped roots:
-
-- project scope: `<repo>/.memoryx/bases/<name>`
-- user scope: `<home>/.memoryx/bases/<name>`
-
-Если указан простой base name, корень выбирается через scope. Если указан полный путь, он должен оставаться внутри одного из этих корней.
-
-После `memoryx init` структура базы выглядит так:
-
-```text
-.memoryx/bases/default/
-  cas/
-  index/
-  graph/
-  meta/
-    history.log
-    sources.jsonl
-    entities.jsonl
-    relations.jsonl
-  inverted/
-```
-
-CLI и MCP открывают одну и ту же durable store layout, поэтому повторные запуски работают с одной и той же базой.
-`update_atom` создаёт новую версию атома и связь `SUPERSEDES`, `delete_atom` создаёт tombstone вместо физического удаления, а успешные write-операции дополнительно попадают в append-only `meta/history.log`. Последние записи можно посмотреть через CLI:
-Зарегистрированные источники для доказательной provenance-модели хранятся в `meta/sources.jsonl`; через MCP доступны `register_source`, `list_sources` и `attach_atom_source`.
-Высокоуровневое authoring API хранит entity/relation registry в `meta/entities.jsonl` и `meta/relations.jsonl`, но relation assertions всё равно создают реальные atoms/claims.
-
-```bash
-cargo +nightly run --release --bin memoryx -- history --base default --limit 20
-```
-
-## Статус Проекта
-
-- Версия crate сейчас `0.1.0`, то есть это ещё pre-1.0 проект.
-- Кодовая база рабочая и store-backed, но публичный API и wire formats проектно-специфичны.
-- `mcp` - опциональный feature. Без него `serve` не поднимет MCP surface.
-- `memoryx serve --stdio` уже даёт полный production MCP surface из 33 tools для работы с базой.
-- `examples/mcp_server_full.rs` остаётся демонстрационной example-обвязкой, а не production entry point.
-- MCP имеет write/authoring tools (`ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `register_source`, `create_entity`, `branch_context` и другие). Bulk/base maintenance операции вроде `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index` и `repair` остаются CLI-командами; MCP имеет `history` tool для просмотра последних write-операций базы.
-
-## Для Дальнейшего Чтения
-
-- CLI entry point: `src/bin/memoryx.rs`
-- Query contract: `docs/QUERY_CONTRACT.md`
-- Answer pack: `docs/ANSWER_PACK.md`
-- Authoring API: `docs/AUTHORING_API.md`
-- LLM boundary: `docs/LLM_BOUNDARY.md`
-- Полный MCP example: `examples/mcp_server_full.rs`
-- Нативное API: `examples/native_api.rs` и `examples/basic.rs`
-- Общая структура crate: `src/lib.rs`
-
-## Лицензия
-
-Проект публикуется без open-source лицензии. Условия по умолчанию:
-proprietary / all rights reserved. См. `LICENSE.md`.
-
----
-
-English summary below.
-
-MemoryX is a local-first knowledge fabric built around the SKF-1.1 concept. It stores knowledge as atoms with provenance, claims, contexts, and graph links so answers can be assembled from a consistent subgraph instead of a pile of text chunks.
-
-This repository is for people who need more than "similar text retrieval": conflicting sources, timelines, jurisdictional differences, auditable answers, and a knowledge base that can be queried from Rust or through MCP.
-
-## What It Is
-
-MemoryX is not a hosted app or a generic vector database wrapper. It is a Rust knowledge store with:
-
-- content-addressed atoms and provenance
-- context branching for conflicting claims
-- lexical, semantic, and graph-backed retrieval
-- a fixed-point query solver that builds an AnswerGraph
-- `ClaimViewV2` output with epistemic status, confidence vector, modality, polarity, evidence, and provenance
-- import/export, stats, compaction, and federation support
-- MCP surfaces for assistant integrations
-
-If you only need document search over chunks, MemoryX is usually the wrong tool. If you need answerability, provenance, and conflict handling, it is a better fit.
-
-## MemoryX vs RAG
-
-| Aspect | RAG | MemoryX |
-| --- | --- | --- |
-| Storage unit | Text chunks | Knowledge atoms with claims and evidence |
-| Retrieval goal | Similar passages | Consistent answer graph |
-| Contradictions | Often flattened or ignored | Kept as explicit conflicts or branches |
-| Context | Usually global and fuzzy | Explicit contexts with policies |
-| Explainability | "Found in document X" | Provenance plus supporting subgraph |
-| Good fit | FAQ, docs, templated answers | Timelines, law, research, engineering, audit trails |
-
-## Key Capabilities
-
-- Knowledge atoms with BLAKE3-based content addressing.
-- Contexts and conflicts as first-class objects.
-- Heptapod-style query solving: backward wave, forward wave, fixed-point assembly.
-- CAS storage with append-only segments and zero-copy reads.
-- GraphStore, inverted index, and invariant checks.
-- CRDT-backed metadata and federation support.
-- MCP server modes for local assistants.
-
-## Build Requirements
-
-MemoryX uses unstable Rust features in `src/lib.rs`, so build it with nightly Rust.
-
-- Rust nightly
-- Windows 10/11 or Linux
-- On Linux, `io_uring` is available for the storage layer; on Windows, the Windows async I/O stack is used.
-- Release binaries are portable by default and are not tied to the build machine's Zen4 CPU.
-
-## Quick Start
-
-```bash
-rustup toolchain install nightly
-cargo +nightly build --release
-```
-
-For local CPU-specific benchmarking you may set `RUSTFLAGS="-C target-cpu=native"`, but do not publish that binary as a generic release. See `docs/PORTABLE_CPU_BUILDS.md`.
-
-Initialize a base:
-
-```bash
-cargo +nightly run --release --bin memoryx -- init --base default
-```
-
-Ingest a file:
-
-```bash
-cargo +nightly run --release --bin memoryx -- ingest --base default facts.json
-```
-
-Query the base:
-
-```bash
-cargo +nightly run --release --bin memoryx -- query --base default "what does the base know about Rust ownership?"
-```
-
-Show stats:
-
-```bash
-cargo +nightly run --release --bin memoryx -- stats --base default
-```
-
-## Real Launch Modes
-
-### CLI
-
-The CLI binary is `src/bin/memoryx.rs`. It supports:
-
-- `init`
-- `ingest`
-- `query`
-- `compact`
-- `export`
-- `import`
-- `stats`
-- `serve`
-
-Example:
-
-```bash
-cargo +nightly run --release --bin memoryx -- --help
-```
-
-Practical commands:
-
-```bash
-# Initialize a project-scoped base
-cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
-
-# Import atoms from JSON
-cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
-
-# Export atoms to CSV
-cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
-
-# Start the production MCP server over stdio
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
-```
-
-### MCP core surface
-
-`memoryx serve --stdio` is the core store-backed MCP transport. Build it with the `mcp` feature.
-
-It exposes the full 33-tool production surface:
-
-- `query`
-- `compile_query_contract`
-- `validate_query_contract`
-- `explain_answer_graph`
-- `get_provenance_path`
-- `search_lex`
-- `search_graph`
-- `search_semantic`
-- `ingest`
-- `batch_ingest`
-- `update_atom`
-- `supersede_claim`
-- `correct_claim`
-- `delete_atom`
-- `history`
-- `register_source`
-- `list_sources`
-- `attach_atom_source`
-- `create_entity`
-- `list_entities`
-- `alias_entity`
-- `merge_entities`
-- `split_entity`
-- `add_claim`
-- `assert_relation`
-- `correct_relation`
-- `create_context`
-- `list_contexts`
-- `branch_context`
-- `list_conflicts`
-- `graph_neighbors`
-- `graph_walk`
-- `extract_subgraph`
-
-Example:
-
-```bash
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
-```
-
-MCP call examples:
-
-```json
-{"name":"compile_query_contract","arguments":{"query_text":"Explain MemoryX MCP"}}
-```
-
-```json
-{"name":"query","arguments":{"query_text":"What decisions mention persistence?","ctx_id":0}}
-```
-
-```json
-{"name":"get_provenance_path","arguments":{"atom_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
-```
-
-### Full MCP example
-
-`examples/mcp_server_full.rs` is a demonstrational stdio MCP server. It is useful
-as an integration example, but it is not the production entry point and may have
-a smaller or older tool set. The production MCP source of truth is
-`memoryx serve --stdio`.
-
-Example:
-
-```bash
-cargo +nightly run --release --features mcp --example mcp_server_full -- --base-scope project --base-name default
-```
-
-### HTTP federation server
-
-`memoryx serve` without `--stdio` starts the HTTP federation server. This is not the MCP transport. It serves federation routes such as `/fetch`, `/negotiate`, `/sync`, `/discover`, and `/health`.
-
-Example:
-
-```bash
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --host 127.0.0.1 --port 8080
-```
-
-## Storage Layout
-
-MemoryX does not use a generic `./data` default. Bases are resolved into scoped roots:
-
-- project scope: `<repo>/.memoryx/bases/<name>`
-- user scope: `<home>/.memoryx/bases/<name>`
-
-If you pass a simple base name, the selected scope decides the root. If you pass a full path, it must stay inside one of those roots.
-
-`memoryx init` creates this directory structure:
-
-```text
-.memoryx/bases/default/
-  cas/
-  index/
-  graph/
-  meta/
-    history.log
-    sources.jsonl
-    entities.jsonl
-    relations.jsonl
-  inverted/
-```
-
-The full MCP example and the CLI both open the same store layout, so repeated runs against the same base load the same knowledge.
-`update_atom` creates a new atom version with a `SUPERSEDES` edge, `delete_atom` creates a tombstone instead of physically erasing data, and successful write operations are appended to `meta/history.log`. Inspect recent operations with:
-Registered sources for proof-grade provenance are stored in `meta/sources.jsonl`; MCP exposes `register_source`, `list_sources`, and `attach_atom_source`.
-The high-level authoring API stores entity/relation registries in `meta/entities.jsonl` and `meta/relations.jsonl`, while relation assertions still create real atoms/claims.
-
-```bash
-cargo +nightly run --release --bin memoryx -- history --base default --limit 20
-```
-
-## Typical Commands
-
-```bash
-# Build the crate
-cargo +nightly build --release
-
-# Create a project-scoped base
-cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
-
-# Import data from JSON
-cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
-
-# Export data as CSV
-cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
-
-# Verify and repair a base
+# Проверить и восстановить базу
 cargo +nightly run --release --bin memoryx -- verify-integrity --base default
 cargo +nightly run --release --bin memoryx -- rebuild-index --base default
 cargo +nightly run --release --bin memoryx -- repair --base default
-cargo +nightly run --release --bin memoryx -- history --base default --limit 20
-
-# Run the full MCP example
-cargo +nightly run --release --features mcp --example mcp_server_full -- --base-scope project --base-name default
 ```
 
-## Repository Structure
+## MCP Для Ассистентов
+
+Production MCP запускается так:
+
+```bash
+cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
+```
+
+`memoryx serve --stdio` открывает MCP surface базы. Сейчас доступно 33
+инструмента для query, ingestion, updates, provenance, entities, relations,
+contexts, conflicts, graph traversal и history.
+
+Важно:
+
+- `memoryx serve --stdio` - production MCP transport.
+- `memoryx serve` без `--stdio` запускает HTTP federation server, это не MCP.
+- `examples/mcp_server_full.rs` - демонстрационный пример, не production entry point.
+
+## Где Хранится База
+
+MemoryX хранит базы в явных scoped roots:
+
+- Project scope: `<repo>/.memoryx/bases/<name>`
+- User scope: `<home>/.memoryx/bases/<name>`
+
+После `memoryx init` структура выглядит так:
 
 ```text
-README.md
-Cargo.toml
-src/
-  lib.rs
-  prelude.rs
-  bin/memoryx.rs
+.memoryx/bases/default/
   cas/
-  crdt/
-  federation/
-  graph/
   index/
-  query/
-  store/
-  utils/
-  vm/
-examples/
-  basic.rs
-  mcp_server.rs
-  mcp_server_full.rs
-  native_api.rs
-  rag_python.py
+  graph/
+  meta/
+    history.log
+    sources.jsonl
+    entities.jsonl
+    relations.jsonl
+  inverted/
 ```
 
-## Status And Limits
+CLI и MCP открывают одну и ту же durable store layout. `update_atom` создаёт
+новую версию и связь `SUPERSEDES`; `delete_atom` создаёт tombstone вместо
+физического удаления. Успешные write-операции пишутся в `meta/history.log`.
 
-- The crate version is `0.1.0`, so treat this as pre-1.0 software.
-- The codebase is functional and store-backed, but the API and wire formats are project-specific.
-- `mcp` is an optional feature. Without it, `serve` will fail with a feature error.
-- `memoryx serve --stdio` now exposes the full 33-tool production MCP surface for working with the knowledge base.
-- `examples/mcp_server_full.rs` remains a demonstrational example server, not the production entry point.
-- MCP includes write/authoring tools (`ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `register_source`, `create_entity`, `branch_context`, and others). Bulk/base maintenance operations such as `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index`, and `repair` remain CLI commands rather than standalone MCP tools.
+## Статус
 
-## Native Rust API
+- Текущая версия crate: `0.1.0`.
+- Public API и wire formats пока pre-1.0 и могут меняться.
+- Кодовая база рабочая и покрыта тестами, но проект всё ещё ранней стадии.
+- MCP опционален и требует feature `mcp`.
+- Административные операции обслуживания базы остаются CLI-командами.
 
-The crate exposes a native Rust API under `memoryx::store::api` and related modules. See `examples/native_api.rs` and `examples/basic.rs` for direct usage patterns.
+## Лицензия
 
-## Further Reading
-
-- CLI entry point: `src/bin/memoryx.rs`
-- Query contract: `docs/QUERY_CONTRACT.md`
-- Answer pack: `docs/ANSWER_PACK.md`
-- Authoring API: `docs/AUTHORING_API.md`
-- LLM boundary: `docs/LLM_BOUNDARY.md`
-- Full MCP example: `examples/mcp_server_full.rs`
-- Full crate layout: `src/lib.rs`
-
-## License
-
-This project is not published under an open-source license. Default terms are
-proprietary / all rights reserved. See `LICENSE.md`.
+Проект не публикуется под open-source лицензией. Условия по умолчанию:
+proprietary / all rights reserved. См. `LICENSE.md`.
