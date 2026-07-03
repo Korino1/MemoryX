@@ -292,6 +292,12 @@ benchmarks/            Honest RAG-comparison scaffold
 - Administrative base maintenance commands such as `import`, `export`,
   `verify-integrity`, `rebuild-index`, and `repair` are CLI commands.
 
+## Maintainer And Development Assistance
+
+- Project creator and maintainer: Korino1.
+- Development assistance: OpenAI Codex was used for implementation, review,
+  documentation, testing, and release preparation.
+
 ## License
 
 MemoryX is licensed under `AGPL-3.0-or-later` for open-source use.
@@ -515,6 +521,12 @@ CLI и MCP открывают одну и ту же durable store layout. `updat
   проверять поведение на своих workload-ах.
 - MCP опционален и требует feature `mcp`.
 - Административные операции обслуживания базы остаются CLI-командами.
+
+## Мейнтейнер И Участие В Разработке
+
+- Автор и мейнтейнер проекта: Korino1.
+- Помощь в разработке: OpenAI Codex использовался для реализации, review,
+  документации, тестирования и подготовки release.
 
 ## Лицензия
 
