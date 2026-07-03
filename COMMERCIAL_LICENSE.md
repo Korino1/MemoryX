@@ -13,5 +13,6 @@ the copyright holder.
 ## Contributor Requirement
 
 To preserve the option of commercial licensing, external contributions should be
-accepted only after the contributor has agreed to a CLA or equivalent inbound
-license agreement that allows the project owner to continue dual licensing.
+accepted only after the contributor has agreed to the inbound license terms in
+`CLA.md`. Pull requests must include the CLA confirmation described in
+`CONTRIBUTING.md`.

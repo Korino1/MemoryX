@@ -278,6 +278,8 @@ benchmarks/            Honest RAG-comparison scaffold
 - Portable CPU builds: `docs/PORTABLE_CPU_BUILDS.md`
 - MemoryX vs RAG: `docs/MEMORYX_VS_RAG.md`
 - Benchmark scaffold: `docs/BENCHMARK_RAG_COMPARISON.md`
+- Contributing: `CONTRIBUTING.md`
+- Security policy: `SECURITY.md`
 
 ## Status
 
@@ -297,7 +299,7 @@ Commercial licensing is available separately for organizations that cannot use
 AGPL software. See `LICENSE.md` and `COMMERCIAL_LICENSE.md`.
 
 Future external contributions require a CLA or equivalent agreement so the
-project can preserve dual licensing.
+project can preserve dual licensing. See `CLA.md` and `CONTRIBUTING.md`.
 
 ---
 

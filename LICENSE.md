@@ -21,6 +21,6 @@ separate written agreement.
 ## Contributions
 
 External contributions require a contribution policy that preserves the ability
-to keep MemoryX dual-licensed. Until a CLA or equivalent contributor agreement
-is published and accepted, maintainers should not merge external contributions
-that would compromise dual licensing.
+to keep MemoryX dual-licensed. The contributor license agreement is published
+in `CLA.md`. Maintainers may review and merge external pull requests when the
+pull request includes the CLA confirmation required by `CONTRIBUTING.md`.
