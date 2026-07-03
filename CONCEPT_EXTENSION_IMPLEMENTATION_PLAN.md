@@ -1013,6 +1013,18 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### K2. RAG comparison benchmark
 
+Статус: реализовано как честный scaffold без результатов.
+
+Результат:
+
+- Добавлен `benchmarks/rag_comparison_cases.json` с конфликтами, temporal
+  changes, multi-hop facts и missing evidence cases.
+- Добавлен `benchmarks/run_rag_comparison.ps1` для воспроизводимого сбора
+  scaffold records.
+- Добавлен `docs/BENCHMARK_RAG_COMPARISON.md` с метриками и правилами без
+  неподтверждённых marketing claims.
+- `benchmarks/results/` добавлен в `.gitignore`.
+
 Файлы:
 
 - добавить `benchmarks/`

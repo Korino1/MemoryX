@@ -697,3 +697,21 @@ Verification:
 - `cargo fmt --check`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
+
+## 2026-07-02: RAG comparison benchmark scaffold
+
+Done:
+
+- Added `benchmarks/rag_comparison_cases.json`.
+- Added `benchmarks/run_rag_comparison.ps1`.
+- Added `docs/BENCHMARK_RAG_COMPARISON.md`.
+- Added `/benchmarks/results/` to `.gitignore`.
+- Kept benchmark wording as scaffold-only: no unverified performance or
+  superiority claims.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo run --quiet -- init --help`

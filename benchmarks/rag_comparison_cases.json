@@ -1,0 +1,46 @@
+{
+  "name": "memoryx_rag_comparison_seed",
+  "version": 1,
+  "notes": "Small deterministic seed dataset for comparing constraint handling, conflict visibility, provenance completeness, gap reporting, and reproducibility. It contains no benchmark results.",
+  "cases": [
+    {
+      "id": "conflict_visibility",
+      "query": "Which deployment target is approved for MemoryX?",
+      "expected_capability": "Conflicting claims must be surfaced instead of merged into one answer.",
+      "facts": [
+        "MemoryX deployment target is project-scoped base.",
+        "MemoryX deployment target is user-global base."
+      ],
+      "metrics": ["conflict_visibility", "provenance_completeness"]
+    },
+    {
+      "id": "temporal_change",
+      "query": "What is the current MemoryX storage policy?",
+      "expected_capability": "Temporal policy must distinguish superseded and current claims.",
+      "facts": [
+        "Earlier policy allowed arbitrary data path.",
+        "Current policy restricts base path to project or user scoped roots."
+      ],
+      "metrics": ["hard_constraint_accuracy", "reproducibility"]
+    },
+    {
+      "id": "multi_hop_fact",
+      "query": "Why can MCP query MemoryX?",
+      "expected_capability": "Answer should connect MCP tool call to QueryContract and AnswerPack.",
+      "facts": [
+        "MCP query accepts query_text or contract.",
+        "QueryContract lowers to GoalSpec.",
+        "FixedPointSolver returns AnswerPack."
+      ],
+      "metrics": ["provenance_completeness", "gap_reporting"]
+    },
+    {
+      "id": "missing_evidence",
+      "query": "Does MemoryX guarantee external benchmark superiority?",
+      "expected_capability": "Unsupported marketing claim must be rejected or marked insufficient evidence.",
+      "facts": [],
+      "metrics": ["gap_reporting", "hard_constraint_accuracy"]
+    }
+  ]
+}
+
