@@ -1,5 +1,5 @@
 # MemoryX
-
+                    It is NOT a RAG
 MemoryX is a local-first knowledge base for cases where simple text search or
 classic RAG is not enough. It stores knowledge as small verifiable atoms with
 claims, evidence, provenance, contexts, graph links, and conflict handling.
