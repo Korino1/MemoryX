@@ -29,6 +29,8 @@
 
 #![recursion_limit = "256"]
 
+#[cfg(feature = "mcp")]
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
@@ -1575,6 +1577,226 @@ enum DiagnosticSink {
 }
 
 #[cfg(feature = "mcp")]
+#[derive(Clone, Debug, Serialize)]
+struct McpBaseInfo {
+    base_ref: String,
+    scope: String,
+    name: String,
+    path: PathBuf,
+    connected: bool,
+    active: bool,
+}
+
+#[cfg(feature = "mcp")]
+struct McpServerState {
+    active_base_ref: String,
+    bases: BTreeMap<String, McpBaseInfo>,
+    stores: HashMap<String, MemoryX>,
+}
+
+#[cfg(feature = "mcp")]
+impl McpServerState {
+    fn new(active_path: PathBuf, store: MemoryX) -> CliResult<Self> {
+        let active_path = absolute_or_cwd(&active_path)?;
+        let active_name = active_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("active")
+            .to_string();
+        let active_info = McpBaseInfo {
+            base_ref: "active".to_string(),
+            scope: infer_base_scope_label(&active_path),
+            name: active_name,
+            path: active_path,
+            connected: true,
+            active: true,
+        };
+
+        let mut bases = BTreeMap::new();
+        bases.insert(active_info.base_ref.clone(), active_info);
+
+        let mut stores = HashMap::new();
+        stores.insert("active".to_string(), store);
+
+        Ok(Self {
+            active_base_ref: "active".to_string(),
+            bases,
+            stores,
+        })
+    }
+
+    fn active_base(&self) -> Option<&McpBaseInfo> {
+        self.bases.get(&self.active_base_ref)
+    }
+
+    fn base_for_args(
+        &mut self,
+        args: Option<&serde_json::Value>,
+    ) -> Result<(String, &mut MemoryX), String> {
+        let requested = args
+            .and_then(|value| value.as_object())
+            .and_then(|args| args.get("base_ref"))
+            .and_then(|value| value.as_str())
+            .unwrap_or(&self.active_base_ref)
+            .to_string();
+
+        self.store_for_ref(&requested)
+    }
+
+    fn store_for_ref(&mut self, base_ref: &str) -> Result<(String, &mut MemoryX), String> {
+        if !self.stores.contains_key(base_ref) {
+            let info = self
+                .bases
+                .get(base_ref)
+                .ok_or_else(|| format!("Unknown base_ref '{}'", base_ref))?
+                .clone();
+            let store = MemoryX::new(StoreConfig::new(info.path.clone()))
+                .map_err(|err| format!("Failed to open base '{}': {}", base_ref, err))?;
+            self.stores.insert(base_ref.to_string(), store);
+            if let Some(base) = self.bases.get_mut(base_ref) {
+                base.connected = true;
+            }
+        }
+
+        self.stores
+            .get_mut(base_ref)
+            .map(|store| (base_ref.to_string(), store))
+            .ok_or_else(|| format!("Failed to access base_ref '{}'", base_ref))
+    }
+
+    fn connect_base(
+        &mut self,
+        base_ref: Option<&str>,
+        scope: Option<BaseScope>,
+        name: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<McpBaseInfo, String> {
+        let path = if let Some(path) = path {
+            validate_allowed_base_path(Path::new(path)).map_err(|err| err.to_string())?
+        } else {
+            let scope = scope.unwrap_or(BaseScope::Project);
+            let name = name.unwrap_or("default");
+            scoped_base_path(scope, name).map_err(|err| err.to_string())?
+        };
+
+        let path = absolute_or_cwd(&path).map_err(|err| err.to_string())?;
+        let name = name
+            .map(str::to_string)
+            .or_else(|| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "base".to_string());
+        let inferred_scope = scope
+            .map(|scope| scope.as_str().to_string())
+            .unwrap_or_else(|| infer_base_scope_label(&path));
+        let base_ref = base_ref
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{}:{}", inferred_scope, name));
+
+        let store = MemoryX::new(StoreConfig::new(path.clone()))
+            .map_err(|err| format!("Failed to open base '{}': {}", base_ref, err))?;
+        let info = McpBaseInfo {
+            base_ref: base_ref.clone(),
+            scope: inferred_scope,
+            name,
+            path,
+            connected: true,
+            active: base_ref == self.active_base_ref,
+        };
+        self.stores.insert(base_ref.clone(), store);
+        self.bases.insert(base_ref, info.clone());
+        self.refresh_active_markers();
+        Ok(info)
+    }
+
+    fn switch_base(&mut self, base_ref: &str) -> Result<McpBaseInfo, String> {
+        self.store_for_ref(base_ref)?;
+        self.active_base_ref = base_ref.to_string();
+        self.refresh_active_markers();
+        self.bases
+            .get(base_ref)
+            .cloned()
+            .ok_or_else(|| format!("Unknown base_ref '{}'", base_ref))
+    }
+
+    fn list_bases(&mut self) -> Vec<McpBaseInfo> {
+        self.discover_scoped_bases(BaseScope::Project);
+        self.discover_scoped_bases(BaseScope::User);
+        self.refresh_active_markers();
+        self.bases.values().cloned().collect()
+    }
+
+    fn discover_scoped_bases(&mut self, scope: BaseScope) {
+        let Ok(root) = (match scope {
+            BaseScope::Project => project_base_root(),
+            BaseScope::User => user_base_root(),
+        }) else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let scope_label = scope.as_str().to_string();
+            let base_ref = format!("{}:{}", scope_label, name);
+            self.bases.entry(base_ref.clone()).or_insert(McpBaseInfo {
+                base_ref,
+                scope: scope_label,
+                name,
+                path: entry.path(),
+                connected: false,
+                active: false,
+            });
+        }
+    }
+
+    fn refresh_active_markers(&mut self) {
+        for base in self.bases.values_mut() {
+            base.connected = base.connected || self.stores.contains_key(&base.base_ref);
+            base.active = base.base_ref == self.active_base_ref;
+        }
+    }
+}
+
+impl BaseScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            BaseScope::Project => "project",
+            BaseScope::User => "user",
+        }
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn infer_base_scope_label(path: &Path) -> String {
+    let project_root = project_base_root().ok();
+    let user_root = user_base_root().ok();
+    if project_root
+        .as_ref()
+        .is_some_and(|root| path.starts_with(root))
+    {
+        "project".to_string()
+    } else if user_root
+        .as_ref()
+        .is_some_and(|root| path.starts_with(root))
+    {
+        "user".to_string()
+    } else {
+        "path".to_string()
+    }
+}
+
+#[cfg(feature = "mcp")]
 fn serve_diagnostic_sink(stdio: bool) -> DiagnosticSink {
     if stdio {
         DiagnosticSink::Stderr
@@ -3023,8 +3245,9 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
         print_info_to(diagnostic_sink, &format!("Listener: {}:{}", host, port));
     }
 
-    let mut store = MemoryX::new(StoreConfig::new(base.to_path_buf()))
+    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))
         .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
+    let mut mcp_state = McpServerState::new(base.to_path_buf(), store)?;
 
     let rt = Runtime::new().map_err(CliError::Io)?;
 
@@ -3044,7 +3267,7 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
-                        let response = process_mcp_request(&mut store, &line).await;
+                        let response = process_mcp_request(&mut mcp_state, &line).await;
                         stdout
                             .write_all(response.as_bytes())
                             .await
@@ -3066,7 +3289,9 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             let base_id = load_or_create_federation_base_id(base)?;
             let config = FederationConfig::new(base_id);
             let gateway = Arc::new(tokio::sync::RwLock::new(Gateway::new(
-                std::sync::Arc::new(store),
+                std::sync::Arc::new(mcp_state.stores.remove("active").ok_or_else(|| {
+                    CliError::Store("Active federation store missing".to_string())
+                })?),
                 config,
             )));
 
@@ -3109,7 +3334,7 @@ fn cmd_serve(_base: &Path, _port: u16, _host: &str, _stdio: bool) -> CliResult<(
 
 /// Process MCP JSON-RPC request
 #[cfg(feature = "mcp")]
-async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
+async fn process_mcp_request(state: &mut McpServerState, request: &str) -> String {
     let result: serde_json::Result<serde_json::Value> = serde_json::from_str(request);
     match result {
         Ok(req) => {
@@ -3136,13 +3361,14 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                 "tools": [
                                     {
                                         "name": "query",
-                                        "description": "Run the fixed-point solver against the active or selected context. Input must provide either query_text/question for natural-language compilation or contract for strict QueryContract execution. Returns an AnswerPack-shaped JSON payload, not a free-form text answer.",
+                                        "description": "Run the fixed-point solver against the active base or a base selected by optional base_ref. Input must provide either query_text/question for natural-language compilation or contract for strict QueryContract execution. Returns an AnswerPack-shaped JSON payload, not a free-form text answer.",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
                                                 "query_text": { "type": "string" },
                                                 "question": { "type": "string" },
                                                 "contract": { "type": "object" },
+                                                "base_ref": { "type": "string" },
                                                 "ctx_id": { "type": "integer" }
                                             },
                                             "examples": [
@@ -3161,6 +3387,73 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                                                     },
                                                     "ctx_id": 0
                                                 }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "list_bases",
+                                        "description": "List project/user bases visible to this MCP process plus bases already connected in the multi-base registry.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [{}]
+                                        }
+                                    },
+                                    {
+                                        "name": "active_base",
+                                        "description": "Return the currently active base_ref used by tools when base_ref is omitted.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [{}]
+                                        }
+                                    },
+                                    {
+                                        "name": "connect_base",
+                                        "description": "Connect a project/user/path base to this MCP process. Use base_ref later to query or write that base without starting another MCP server.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "base_ref": { "type": "string" },
+                                                "scope": { "type": "string", "enum": ["project", "user"] },
+                                                "name": { "type": "string" },
+                                                "path": { "type": "string" }
+                                            },
+                                            "examples": [
+                                                { "base_ref": "project:client-a", "scope": "project", "name": "client-a" },
+                                                { "base_ref": "global", "scope": "user", "name": "default" }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "switch_base",
+                                        "description": "Switch the active base_ref for subsequent MCP calls that omit base_ref.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "base_ref": { "type": "string" }
+                                            },
+                                            "required": ["base_ref"],
+                                            "examples": [
+                                                { "base_ref": "project:client-a" }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "query_base",
+                                        "description": "Explicit multi-base query. Requires base_ref and otherwise accepts the same arguments as query.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "base_ref": { "type": "string" },
+                                                "query_text": { "type": "string" },
+                                                "question": { "type": "string" },
+                                                "contract": { "type": "object" },
+                                                "ctx_id": { "type": "integer" }
+                                            },
+                                            "required": ["base_ref"],
+                                            "examples": [
+                                                { "base_ref": "project:client-a", "query_text": "What decisions mention persistence?", "ctx_id": 0 }
                                             ]
                                         }
                                     },
@@ -3862,49 +4155,178 @@ async fn process_mcp_request(store: &mut MemoryX, request: &str) -> String {
                     let arguments = req.get("params").and_then(|p| p.get("arguments"));
 
                     match tool_name {
-                        "query" => mcp_query_response(store, id, arguments),
+                        "list_bases" => mcp_list_bases_response(state, id),
+                        "active_base" => mcp_active_base_response(state, id),
+                        "connect_base" => mcp_connect_base_response(state, id, arguments),
+                        "switch_base" => mcp_switch_base_response(state, id, arguments),
+                        "query" => match mcp_store_for_arguments(state, id.clone(), arguments) {
+                            Ok((_base_ref, store)) => mcp_query_response(store, id, arguments),
+                            Err(err) => err,
+                        },
+                        "query_base" => {
+                            if let Some(args) = arguments.and_then(|value| value.as_object()) {
+                                if !args.get("base_ref").is_some_and(|value| value.is_string()) {
+                                    mcp_error(
+                                        id,
+                                        -32602,
+                                        "Missing required string field 'base_ref'",
+                                    )
+                                } else {
+                                    match mcp_store_for_arguments(state, id.clone(), arguments) {
+                                        Ok((_base_ref, store)) => {
+                                            mcp_query_response(store, id, arguments)
+                                        }
+                                        Err(err) => err,
+                                    }
+                                }
+                            } else {
+                                mcp_error(id, -32602, "Missing tool arguments")
+                            }
+                        }
                         "compile_query_contract" => {
-                            mcp_compile_query_contract_response(store, id, arguments)
+                            mcp_compile_query_contract_response(id, arguments)
                         }
                         "validate_query_contract" => {
-                            mcp_validate_query_contract_response(store, id, arguments)
+                            mcp_validate_query_contract_response(id, arguments)
                         }
-                        "explain_answer_graph" => {
-                            mcp_explain_answer_graph_response(store, id, arguments)
+                        "explain_answer_graph" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_explain_answer_graph_response,
+                        ),
+                        "get_provenance_path" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_get_provenance_path_response,
+                        ),
+                        "search_lex" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_search_lex_response)
                         }
-                        "get_provenance_path" => {
-                            mcp_get_provenance_path_response(store, id, arguments)
+                        "search_graph" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_search_graph_response)
                         }
-                        "search_lex" => mcp_search_lex_response(store, id, arguments),
-                        "search_graph" => mcp_search_graph_response(store, id, arguments),
-                        "search_semantic" => mcp_search_semantic_response(store, id, arguments),
-                        "ingest" => mcp_ingest_response(store, id, arguments),
-                        "batch_ingest" => mcp_batch_ingest_response(store, id, arguments),
-                        "update_atom" => mcp_update_atom_response(store, id, arguments),
-                        "supersede_claim" => mcp_update_atom_response(store, id, arguments),
-                        "correct_claim" => mcp_update_atom_response(store, id, arguments),
-                        "delete_atom" => mcp_delete_atom_response(store, id, arguments),
-                        "history" => mcp_history_response(store, id, arguments),
-                        "register_source" => mcp_register_source_response(store, id, arguments),
-                        "list_sources" => mcp_list_sources_response(store, id, arguments),
-                        "attach_atom_source" => {
-                            mcp_attach_atom_source_response(store, id, arguments)
+                        "search_semantic" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_search_semantic_response,
+                        ),
+                        "ingest" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_ingest_response)
                         }
-                        "create_entity" => mcp_create_entity_response(store, id, arguments),
-                        "list_entities" => mcp_list_entities_response(store, id, arguments),
-                        "alias_entity" => mcp_alias_entity_response(store, id, arguments),
-                        "merge_entities" => mcp_merge_entities_response(store, id, arguments),
-                        "split_entity" => mcp_split_entity_response(store, id, arguments),
-                        "add_claim" => mcp_add_claim_response(store, id, arguments),
-                        "assert_relation" => mcp_assert_relation_response(store, id, arguments),
-                        "correct_relation" => mcp_correct_relation_response(store, id, arguments),
-                        "create_context" => mcp_create_context_response(store, id, arguments),
-                        "list_contexts" => mcp_list_contexts_response(store, id, arguments),
-                        "branch_context" => mcp_branch_context_response(store, id, arguments),
-                        "list_conflicts" => mcp_list_conflicts_response(store, id, arguments),
-                        "graph_neighbors" => mcp_graph_neighbors_response(store, id, arguments),
-                        "graph_walk" => mcp_graph_walk_response(store, id, arguments),
-                        "extract_subgraph" => mcp_extract_subgraph_response(store, id, arguments),
+                        "batch_ingest" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_batch_ingest_response)
+                        }
+                        "update_atom" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_update_atom_response)
+                        }
+                        "supersede_claim" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_update_atom_response)
+                        }
+                        "correct_claim" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_update_atom_response)
+                        }
+                        "delete_atom" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_delete_atom_response)
+                        }
+                        "history" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_history_response)
+                        }
+                        "register_source" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_register_source_response,
+                        ),
+                        "list_sources" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_list_sources_response)
+                        }
+                        "attach_atom_source" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_attach_atom_source_response,
+                        ),
+                        "create_entity" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_create_entity_response,
+                        ),
+                        "list_entities" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_list_entities_response,
+                        ),
+                        "alias_entity" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_alias_entity_response)
+                        }
+                        "merge_entities" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_merge_entities_response,
+                        ),
+                        "split_entity" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_split_entity_response)
+                        }
+                        "add_claim" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_add_claim_response)
+                        }
+                        "assert_relation" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_assert_relation_response,
+                        ),
+                        "correct_relation" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_correct_relation_response,
+                        ),
+                        "create_context" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_create_context_response,
+                        ),
+                        "list_contexts" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_list_contexts_response,
+                        ),
+                        "branch_context" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_branch_context_response,
+                        ),
+                        "list_conflicts" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_list_conflicts_response,
+                        ),
+                        "graph_neighbors" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_graph_neighbors_response,
+                        ),
+                        "graph_walk" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_graph_walk_response)
+                        }
+                        "extract_subgraph" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_extract_subgraph_response,
+                        ),
                         _ => serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": id,
@@ -3961,6 +4383,117 @@ fn mcp_arguments_object(
     arguments
         .and_then(serde_json::Value::as_object)
         .ok_or_else(|| mcp_error(id, -32602, "Tool arguments must be an object"))
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_store_for_arguments<'a>(
+    state: &'a mut McpServerState,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> Result<(String, &'a mut MemoryX), serde_json::Value> {
+    state
+        .base_for_args(arguments)
+        .map_err(|err| mcp_error(id, -32602, err))
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_with_selected_store(
+    state: &mut McpServerState,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+    handler: fn(&mut MemoryX, serde_json::Value, Option<&serde_json::Value>) -> serde_json::Value,
+) -> serde_json::Value {
+    match mcp_store_for_arguments(state, id.clone(), arguments) {
+        Ok((_base_ref, store)) => handler(store, id, arguments),
+        Err(err) => err,
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_list_bases_response(state: &mut McpServerState, id: serde_json::Value) -> serde_json::Value {
+    let bases = state.list_bases();
+    mcp_text_result(
+        id,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "active_base_ref": state.active_base_ref,
+            "bases": bases,
+        }))
+        .unwrap_or_default(),
+    )
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_active_base_response(state: &McpServerState, id: serde_json::Value) -> serde_json::Value {
+    mcp_text_result(
+        id,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "active_base_ref": state.active_base_ref,
+            "active_base": state.active_base(),
+        }))
+        .unwrap_or_default(),
+    )
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_parse_scope_arg(value: Option<&serde_json::Value>) -> Result<Option<BaseScope>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Some(scope) = value.as_str() else {
+        return Err("scope must be 'project' or 'user'".to_string());
+    };
+    match scope.to_ascii_lowercase().as_str() {
+        "project" => Ok(Some(BaseScope::Project)),
+        "user" => Ok(Some(BaseScope::User)),
+        _ => Err(format!(
+            "Invalid scope '{}'. Expected 'project' or 'user'",
+            scope
+        )),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_connect_base_response(
+    state: &mut McpServerState,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let scope = match mcp_parse_scope_arg(args.get("scope")) {
+        Ok(scope) => scope,
+        Err(err) => return mcp_error(id, -32602, err),
+    };
+    let base_ref = args.get("base_ref").and_then(|value| value.as_str());
+    let name = args.get("name").and_then(|value| value.as_str());
+    let path = args.get("path").and_then(|value| value.as_str());
+
+    match state.connect_base(base_ref, scope, name, path) {
+        Ok(base) => mcp_text_result(id, serde_json::to_string_pretty(&base).unwrap_or_default()),
+        Err(err) => mcp_error(id, -32602, err),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_switch_base_response(
+    state: &mut McpServerState,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(base_ref) = args.get("base_ref").and_then(|value| value.as_str()) else {
+        return mcp_error(id, -32602, "Missing required string field 'base_ref'");
+    };
+
+    match state.switch_base(base_ref) {
+        Ok(base) => mcp_text_result(id, serde_json::to_string_pretty(&base).unwrap_or_default()),
+        Err(err) => mcp_error(id, -32602, err),
+    }
 }
 
 #[cfg(feature = "mcp")]
@@ -4143,7 +4676,6 @@ fn mcp_query_response(
 
 #[cfg(feature = "mcp")]
 fn mcp_compile_query_contract_response(
-    _store: &mut MemoryX,
     id: serde_json::Value,
     arguments: Option<&serde_json::Value>,
 ) -> serde_json::Value {
@@ -4163,7 +4695,6 @@ fn mcp_compile_query_contract_response(
 
 #[cfg(feature = "mcp")]
 fn mcp_validate_query_contract_response(
-    _store: &mut MemoryX,
     id: serde_json::Value,
     arguments: Option<&serde_json::Value>,
 ) -> serde_json::Value {
@@ -5973,6 +6504,17 @@ mod tests {
             .to_string()
     }
 
+    #[cfg(feature = "mcp")]
+    fn test_mcp_state(base: PathBuf) -> McpServerState {
+        let store = MemoryX::new(StoreConfig::new(base.clone())).unwrap();
+        McpServerState::new(base, store).unwrap()
+    }
+
+    #[cfg(feature = "mcp")]
+    fn test_mcp_active_store_mut(state: &mut McpServerState) -> &mut MemoryX {
+        state.stores.get_mut("active").unwrap()
+    }
+
     #[test]
     fn test_atom_type_parsing() {
         assert_eq!(parse_atom_type("fact").unwrap(), AtomType::FACT);
@@ -6127,7 +6669,7 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_tools_list_reports_real_core_surface() {
         let dir = tempdir().unwrap();
-        let mut store = MemoryX::new(StoreConfig::new(dir.path().join("memoryx"))).unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -6135,7 +6677,7 @@ mod tests {
         })
         .to_string();
 
-        let response = process_mcp_request(&mut store, &request).await;
+        let response = process_mcp_request(&mut state, &request).await;
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         let tools = value["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools
@@ -6162,6 +6704,11 @@ mod tests {
         }
 
         assert!(names.contains(&"query"));
+        assert!(names.contains(&"list_bases"));
+        assert!(names.contains(&"active_base"));
+        assert!(names.contains(&"connect_base"));
+        assert!(names.contains(&"switch_base"));
+        assert!(names.contains(&"query_base"));
         assert!(names.contains(&"compile_query_contract"));
         assert!(names.contains(&"validate_query_contract"));
         assert!(names.contains(&"explain_answer_graph"));
@@ -6194,14 +6741,127 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 33);
+        assert_eq!(names.len(), 38);
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn test_mcp_multi_base_registry_and_query_base_are_store_backed() {
+        let dir = tempdir().unwrap();
+        let primary = dir.path().join("primary");
+        let mut state = test_mcp_state(primary.clone());
+        let secondary_name = format!("multi_base_test_{}", std::process::id());
+
+        let active_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 101,
+            "method": "tools/call",
+            "params": {
+                "name": "active_base",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let active_response = process_mcp_request(&mut state, &active_request).await;
+        assert!(mcp_text(&active_response).contains("\"active_base_ref\": \"active\""));
+
+        let connect_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 102,
+            "method": "tools/call",
+            "params": {
+                "name": "connect_base",
+                "arguments": {
+                    "base_ref": "secondary",
+                    "scope": "project",
+                    "name": secondary_name
+                }
+            }
+        })
+        .to_string();
+        let connect_response = process_mcp_request(&mut state, &connect_request).await;
+        let connect_text = mcp_text(&connect_response);
+        assert!(connect_text.contains("\"base_ref\": \"secondary\""));
+        assert!(connect_text.contains("\"connected\": true"));
+
+        let list_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 103,
+            "method": "tools/call",
+            "params": {
+                "name": "list_bases",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let list_response = process_mcp_request(&mut state, &list_request).await;
+        let list_text = mcp_text(&list_response);
+        assert!(list_text.contains("\"active_base_ref\": \"active\""));
+        assert!(list_text.contains("\"base_ref\": \"secondary\""));
+
+        let missing_base_ref_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1035,
+            "method": "tools/call",
+            "params": {
+                "name": "query_base",
+                "arguments": {
+                    "query_text": "This should fail without an explicit base_ref"
+                }
+            }
+        })
+        .to_string();
+        let missing_base_ref_response =
+            process_mcp_request(&mut state, &missing_base_ref_request).await;
+        assert!(missing_base_ref_response.contains("Missing required string field 'base_ref'"));
+
+        let query_base_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 104,
+            "method": "tools/call",
+            "params": {
+                "name": "query_base",
+                "arguments": {
+                    "base_ref": "secondary",
+                    "query_text": "What is stored here?",
+                    "ctx_id": 0
+                }
+            }
+        })
+        .to_string();
+        let query_base_response = process_mcp_request(&mut state, &query_base_request).await;
+        let query_base_text = mcp_text(&query_base_response);
+        let query_base_value: serde_json::Value = serde_json::from_str(&query_base_text).unwrap();
+        assert!(query_base_value.get("selected_ctx").is_some());
+        assert_eq!(state.active_base_ref, "active");
+
+        let switch_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 105,
+            "method": "tools/call",
+            "params": {
+                "name": "switch_base",
+                "arguments": {
+                    "base_ref": "secondary"
+                }
+            }
+        })
+        .to_string();
+        let switch_response = process_mcp_request(&mut state, &switch_request).await;
+        assert!(mcp_text(&switch_response).contains("\"active\": true"));
+        assert_eq!(state.active_base_ref, "secondary");
+
+        let secondary_path = project_base_root().unwrap().join(&secondary_name);
+        if secondary_path.exists() {
+            std::fs::remove_dir_all(secondary_path).unwrap();
+        }
     }
 
     #[cfg(feature = "mcp")]
     #[tokio::test]
     async fn test_mcp_create_context_and_query_are_store_backed() {
         let dir = tempdir().unwrap();
-        let mut store = MemoryX::new(StoreConfig::new(dir.path().join("memoryx"))).unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
 
         let create_request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6213,7 +6873,7 @@ mod tests {
             }
         })
         .to_string();
-        let create_response = process_mcp_request(&mut store, &create_request).await;
+        let create_response = process_mcp_request(&mut state, &create_request).await;
         assert!(create_response.contains("created_ctx="));
         assert!(create_response.contains("policy_id=7"));
 
@@ -6227,7 +6887,7 @@ mod tests {
             }
         })
         .to_string();
-        let query_response = process_mcp_request(&mut store, &query_request).await;
+        let query_response = process_mcp_request(&mut state, &query_request).await;
         let query_text = mcp_text(&query_response);
         let query_value: serde_json::Value = serde_json::from_str(&query_text).unwrap();
         assert!(query_value.get("selected_ctx").is_some());
@@ -6244,7 +6904,7 @@ mod tests {
             }
         })
         .to_string();
-        let compile_response = process_mcp_request(&mut store, &compile_request).await;
+        let compile_response = process_mcp_request(&mut state, &compile_request).await;
         let contract_text = mcp_text(&compile_response);
         assert!(contract_text.contains("\"intent\": \"explain\""));
 
@@ -6260,7 +6920,7 @@ mod tests {
             }
         })
         .to_string();
-        let validate_response = process_mcp_request(&mut store, &validate_request).await;
+        let validate_response = process_mcp_request(&mut state, &validate_request).await;
         assert!(mcp_text(&validate_response).contains("\"valid\":true"));
 
         let explain_request = serde_json::json!({
@@ -6273,7 +6933,7 @@ mod tests {
             }
         })
         .to_string();
-        let explain_response = process_mcp_request(&mut store, &explain_request).await;
+        let explain_response = process_mcp_request(&mut state, &explain_request).await;
         let explain_text = mcp_text(&explain_response);
         assert!(explain_text.contains("\"coverage_report\""));
         assert!(explain_text.contains("\"snapshot\""));
@@ -6283,7 +6943,7 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_ingest_search_graph_and_neighbors_are_store_backed() {
         let dir = tempdir().unwrap();
-        let mut store = MemoryX::new(StoreConfig::new(dir.path().join("memoryx"))).unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
 
         let ingest_request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6303,11 +6963,15 @@ mod tests {
             }
         })
         .to_string();
-        let ingest_response = process_mcp_request(&mut store, &ingest_request).await;
+        let ingest_response = process_mcp_request(&mut state, &ingest_request).await;
         assert!(ingest_response.contains("Successfully ingested atom"));
 
-        let atom_id = store.list_atom_ids().into_iter().next().unwrap();
-        let atom_node = store.get_node_num(&atom_id).unwrap();
+        let (atom_id, atom_node) = {
+            let store = test_mcp_active_store_mut(&mut state);
+            let atom_id = store.list_atom_ids().into_iter().next().unwrap();
+            let atom_node = store.get_node_num(&atom_id).unwrap();
+            (atom_id, atom_node)
+        };
 
         let provenance_request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6321,7 +6985,7 @@ mod tests {
             }
         })
         .to_string();
-        let provenance_response = process_mcp_request(&mut store, &provenance_request).await;
+        let provenance_response = process_mcp_request(&mut state, &provenance_request).await;
         let provenance_text = mcp_text(&provenance_response);
         assert!(provenance_text.contains("\"root_atom_id\""));
         assert!(provenance_text.contains("\"overall_trust\""));
@@ -6343,7 +7007,7 @@ mod tests {
         })
         .to_string();
         let register_source_response =
-            process_mcp_request(&mut store, &register_source_request).await;
+            process_mcp_request(&mut state, &register_source_request).await;
         assert!(register_source_response.contains("Registered source"));
         assert!(register_source_response.contains("Source ID: 1"));
 
@@ -6360,7 +7024,7 @@ mod tests {
             }
         })
         .to_string();
-        let attach_source_response = process_mcp_request(&mut store, &attach_source_request).await;
+        let attach_source_response = process_mcp_request(&mut state, &attach_source_request).await;
         assert!(attach_source_response.contains("Attached source"));
 
         let list_sources_request = serde_json::json!({
@@ -6373,7 +7037,7 @@ mod tests {
             }
         })
         .to_string();
-        let list_sources_response = process_mcp_request(&mut store, &list_sources_request).await;
+        let list_sources_response = process_mcp_request(&mut state, &list_sources_request).await;
         assert!(list_sources_response.contains("test source"));
 
         let create_entity_a_request = serde_json::json!({
@@ -6390,7 +7054,7 @@ mod tests {
         })
         .to_string();
         let create_entity_a_response =
-            process_mcp_request(&mut store, &create_entity_a_request).await;
+            process_mcp_request(&mut state, &create_entity_a_request).await;
         assert!(create_entity_a_response.contains("Entity ID: 1"));
 
         let create_entity_b_request = serde_json::json!({
@@ -6407,7 +7071,7 @@ mod tests {
         })
         .to_string();
         let create_entity_b_response =
-            process_mcp_request(&mut store, &create_entity_b_request).await;
+            process_mcp_request(&mut state, &create_entity_b_request).await;
         assert!(create_entity_b_response.contains("Entity ID: 2"));
 
         let alias_entity_request = serde_json::json!({
@@ -6423,7 +7087,7 @@ mod tests {
             }
         })
         .to_string();
-        let alias_entity_response = process_mcp_request(&mut store, &alias_entity_request).await;
+        let alias_entity_response = process_mcp_request(&mut state, &alias_entity_request).await;
         assert!(alias_entity_response.contains("rust-lang"));
 
         let add_claim_request = serde_json::json!({
@@ -6442,7 +7106,7 @@ mod tests {
             }
         })
         .to_string();
-        let add_claim_response = process_mcp_request(&mut store, &add_claim_request).await;
+        let add_claim_response = process_mcp_request(&mut state, &add_claim_request).await;
         assert!(add_claim_response.contains("Added entity claim"));
         assert!(add_claim_response.contains("Atom ID:"));
 
@@ -6460,7 +7124,7 @@ mod tests {
             }
         })
         .to_string();
-        let split_entity_response = process_mcp_request(&mut store, &split_entity_request).await;
+        let split_entity_response = process_mcp_request(&mut state, &split_entity_request).await;
         assert!(split_entity_response.contains("Split entity"));
         assert!(split_entity_response.contains("New Entity ID: 3"));
 
@@ -6478,7 +7142,7 @@ mod tests {
         })
         .to_string();
         let merge_entities_response =
-            process_mcp_request(&mut store, &merge_entities_request).await;
+            process_mcp_request(&mut state, &merge_entities_request).await;
         assert!(merge_entities_response.contains("Merged entities"));
         assert!(merge_entities_response.contains("Merged from"));
 
@@ -6498,7 +7162,7 @@ mod tests {
         })
         .to_string();
         let assert_relation_response =
-            process_mcp_request(&mut store, &assert_relation_request).await;
+            process_mcp_request(&mut state, &assert_relation_request).await;
         assert!(assert_relation_response.contains("Asserted relation"));
         assert!(assert_relation_response.contains("Relation ID: 1"));
 
@@ -6515,7 +7179,7 @@ mod tests {
             }
         })
         .to_string();
-        let search_graph_response = process_mcp_request(&mut store, &search_graph_request).await;
+        let search_graph_response = process_mcp_request(&mut state, &search_graph_request).await;
         assert!(search_graph_response.contains("match_count=1"));
         assert!(search_graph_response.contains(&format!("{} --DEPENDS_ON--> 99", atom_node)));
 
@@ -6532,7 +7196,7 @@ mod tests {
             }
         })
         .to_string();
-        let neighbors_response = process_mcp_request(&mut store, &neighbors_request).await;
+        let neighbors_response = process_mcp_request(&mut state, &neighbors_request).await;
         assert!(neighbors_response.contains("incoming"));
         assert!(neighbors_response.contains(&atom_node.to_string()));
     }
@@ -6541,7 +7205,7 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_context_tools_are_store_backed() {
         let dir = tempdir().unwrap();
-        let mut store = MemoryX::new(StoreConfig::new(dir.path().join("memoryx"))).unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
 
         let create_request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6553,7 +7217,7 @@ mod tests {
             }
         })
         .to_string();
-        let create_response = process_mcp_request(&mut store, &create_request).await;
+        let create_response = process_mcp_request(&mut state, &create_request).await;
         assert!(create_response.contains("created_ctx="));
 
         let branch_request = serde_json::json!({
@@ -6570,7 +7234,7 @@ mod tests {
             }
         })
         .to_string();
-        let branch_response = process_mcp_request(&mut store, &branch_request).await;
+        let branch_response = process_mcp_request(&mut state, &branch_request).await;
         assert!(branch_response.contains("Created branch context"));
         assert!(branch_response.contains("Reason: Hypothesis"));
 
@@ -6584,7 +7248,7 @@ mod tests {
             }
         })
         .to_string();
-        let list_response = process_mcp_request(&mut store, &list_request).await;
+        let list_response = process_mcp_request(&mut state, &list_request).await;
         assert!(list_response.contains("Total: 2"));
         assert!(list_response.contains("Branch reason: hypothesis"));
     }
@@ -6593,20 +7257,24 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_update_delete_and_extract_subgraph_are_store_backed() {
         let dir = tempdir().unwrap();
-        let mut store = MemoryX::new(StoreConfig::new(dir.path().join("memoryx"))).unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
 
-        let claims = vec![ClaimData {
-            subj: 11,
-            pred: 22,
-            obj_tag: ObjTag::U64.to_u8(),
-            obj_val: 33,
-            qualifiers_mask: 0,
-        }];
-        let payload = create_minimal_atom_body(AtomType::FACT, &claims);
-        let atom_id = store
-            .ingest(&payload, AtomType::FACT, &claims, &[])
-            .unwrap();
-        let atom_node = store.get_node_num(&atom_id).unwrap();
+        let (atom_id, atom_node) = {
+            let claims = vec![ClaimData {
+                subj: 11,
+                pred: 22,
+                obj_tag: ObjTag::U64.to_u8(),
+                obj_val: 33,
+                qualifiers_mask: 0,
+            }];
+            let payload = create_minimal_atom_body(AtomType::FACT, &claims);
+            let store = test_mcp_active_store_mut(&mut state);
+            let atom_id = store
+                .ingest(&payload, AtomType::FACT, &claims, &[])
+                .unwrap();
+            let atom_node = store.get_node_num(&atom_id).unwrap();
+            (atom_id, atom_node)
+        };
 
         let extract_request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6622,7 +7290,7 @@ mod tests {
             }
         })
         .to_string();
-        let extract_response = process_mcp_request(&mut store, &extract_request).await;
+        let extract_response = process_mcp_request(&mut state, &extract_request).await;
         assert!(extract_response.contains("Nodes: 2"));
         assert!(extract_response.contains("Edges: 1"));
 
@@ -6645,7 +7313,7 @@ mod tests {
             }
         })
         .to_string();
-        let update_response = process_mcp_request(&mut store, &update_request).await;
+        let update_response = process_mcp_request(&mut state, &update_request).await;
         assert!(update_response.contains("Successfully updated atom"));
         assert!(update_response.contains("Supersedes"));
 
@@ -6662,7 +7330,7 @@ mod tests {
             }
         })
         .to_string();
-        let delete_response = process_mcp_request(&mut store, &delete_request).await;
+        let delete_response = process_mcp_request(&mut state, &delete_request).await;
         assert!(delete_response.contains("Successfully deleted atom"));
         assert!(delete_response.contains("Tombstone ID"));
 
@@ -6676,7 +7344,7 @@ mod tests {
             }
         })
         .to_string();
-        let history_response = process_mcp_request(&mut store, &history_request).await;
+        let history_response = process_mcp_request(&mut state, &history_request).await;
         assert!(history_response.contains("Operation history"));
         assert!(history_response.contains("DeleteAtom"));
         assert!(history_response.contains("UpdateAtom"));

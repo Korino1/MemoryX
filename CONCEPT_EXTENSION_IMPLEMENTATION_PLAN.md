@@ -974,7 +974,8 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 Результат:
 
 - README актуализирован под executable knowledge fabric, contract query,
-  AnswerPack output и 33-tool MCP surface.
+  AnswerPack output и тогдашний 33-tool MCP surface; после Phase 19
+  production MCP surface расширен до 38 tools.
 - Добавлены docs:
   `docs/QUERY_CONTRACT.md`,
   `docs/ANSWER_PACK.md`,
@@ -1274,7 +1275,8 @@ release-readiness работу поверх уже реализованного 
 - Убрать устаревшие заявления про демонстрационные MCP examples как
   production entrypoint.
 - Зафиксировать, что production MCP entrypoint - `memoryx serve --stdio`.
-- Зафиксировать фактический production MCP surface: 33 store-backed tools.
+- Зафиксировать фактический production MCP surface: после Multi-Base MCP
+  extension production entrypoint exposes 38 tools.
 - Чётко разделить MCP write/authoring tools и CLI-only base maintenance
   operations (`import`, `export`, `verify-integrity`, `rebuild-index`,
   `repair`, release/admin scripts).
@@ -1303,3 +1305,79 @@ release-readiness работу поверх уже реализованного 
 
 - Рабочая копия чистая, release gate проходит, в корне нет мусорных runtime
   баз или архивов.
+
+## 19. Multi-Base MCP Layer
+
+Цель: один MCP процесс должен уметь работать не только с одной активной базой,
+но и с несколькими базами из разных проектов или из общей пользовательской
+области.
+
+### M1. Registry баз внутри MCP процесса
+
+Статус: реализовано.
+
+Результат:
+
+- Добавлен `McpServerState` с registry подключённых баз.
+- Есть active base marker и lazy/opened store cache.
+- Старые MCP tools без `base_ref` продолжают работать с active base.
+- Store-backed tools маршрутизируются через выбранный `MemoryX` store.
+
+Задачи:
+
+- Ввести MCP-level registry баз с `base_ref`, scope, name/path и active marker.
+- Сохранить совместимость: старые tools без `base_ref` работают с active base.
+- Добавить lazy/opened store cache для подключённых баз.
+- Не смешивать данные разных баз: каждый tool должен явно маршрутизироваться в
+  выбранный `MemoryX` store.
+
+Критерий готовности:
+
+- MCP может перечислить known bases и показать active base.
+
+### M2. Multi-base MCP tools
+
+Статус: реализовано.
+
+Результат:
+
+- Добавлены MCP tools: `list_bases`, `active_base`, `connect_base`,
+  `switch_base`, `query_base`.
+- `query` и store-backed tools поддерживают optional `base_ref`.
+- `query_base` выполняет query/contract в указанной базе без смены active base.
+- `switch_base` меняет active base для последующих вызовов без `base_ref`.
+
+Задачи:
+
+- `list_bases`: показать project/user bases и подключённые bases.
+- `connect_base`: подключить named или path base к текущему MCP процессу.
+- `switch_base`: сменить active base.
+- `active_base`: показать active base.
+- `query_base`: выполнить query/contract в указанной базе без смены active.
+- Existing tools получают optional `base_ref` routing.
+
+Критерий готовности:
+
+- Один MCP процесс может явно обращаться к нескольким базам.
+
+### M3. Docs and tests
+
+Статус: реализовано.
+
+Результат:
+
+- README обновлён под 38 MCP tools и multi-base workflow.
+- Добавлен regression test на `list_bases`, `connect_base`, `query_base`,
+  `switch_base` и сохранение active base.
+- `tools/list` проверен: новые tools присутствуют, stdout остаётся JSON-RPC.
+
+Задачи:
+
+- Обновить README с multi-base MCP workflow.
+- Добавить regression tests на list/connect/switch/query routing.
+- Прогнать `cargo fmt`, `cargo clippy -D warnings`, `cargo test`,
+  `cargo build --release --features mcp`.
+
+Критерий готовности:
+
+- Multi-base MCP documented, tested, and does not break one-base behavior.

@@ -143,8 +143,9 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 ```
 
 `memoryx serve --stdio` exposes the store-backed MCP surface. It currently
-provides 33 tools for querying, ingestion, updates, provenance, entities,
-relations, contexts, conflicts, graph traversal, and history.
+provides 38 tools for querying, ingestion, updates, provenance, entities,
+relations, contexts, conflicts, graph traversal, history, and multi-base
+routing.
 
 Important distinction:
 
@@ -165,6 +166,28 @@ Example MCP tool calls:
 ```json
 {"name":"get_provenance_path","arguments":{"atom_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 ```
+
+Multi-base MCP workflow:
+
+```json
+{"name":"list_bases","arguments":{}}
+```
+
+```json
+{"name":"connect_base","arguments":{"base_ref":"project:client-a","scope":"project","name":"client-a"}}
+```
+
+```json
+{"name":"query_base","arguments":{"base_ref":"project:client-a","query_text":"What decisions mention persistence?","ctx_id":0}}
+```
+
+```json
+{"name":"switch_base","arguments":{"base_ref":"project:client-a"}}
+```
+
+Existing store-backed MCP tools use the active base by default. Most of them can
+also accept `base_ref` to operate on a connected base without changing the
+active base.
 
 ## Storage Layout
 
@@ -371,15 +394,37 @@ Production MCP запускается так:
 cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
 ```
 
-`memoryx serve --stdio` открывает MCP surface базы. Сейчас доступно 33
-инструмента для query, ingestion, updates, provenance, entities, relations,
-contexts, conflicts, graph traversal и history.
+`memoryx serve --stdio` открывает MCP surface базы. Сейчас доступно 38
+инструментов для query, ingestion, updates, provenance, entities, relations,
+contexts, conflicts, graph traversal, history и multi-base routing.
 
 Важно:
 
 - `memoryx serve --stdio` - production MCP transport.
 - `memoryx serve` без `--stdio` запускает HTTP federation server, это не MCP.
 - `examples/mcp_server_full.rs` - демонстрационный пример, не production entry point.
+
+Multi-base MCP workflow:
+
+```json
+{"name":"list_bases","arguments":{}}
+```
+
+```json
+{"name":"connect_base","arguments":{"base_ref":"project:client-a","scope":"project","name":"client-a"}}
+```
+
+```json
+{"name":"query_base","arguments":{"base_ref":"project:client-a","query_text":"What decisions mention persistence?","ctx_id":0}}
+```
+
+```json
+{"name":"switch_base","arguments":{"base_ref":"project:client-a"}}
+```
+
+Старые MCP tools используют active base по умолчанию. Большинство
+store-backed tools также могут принять `base_ref`, чтобы работать с
+подключённой базой без смены active base.
 
 ## Где Хранится База
 
