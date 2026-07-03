@@ -2,12 +2,13 @@
 
 ## Supported Versions
 
-MemoryX is currently pre-1.0.
+MemoryX follows the public release line published in this repository.
 
 | Version | Supported |
 | --- | --- |
 | `main` | Security fixes accepted |
-| `0.1.x` releases | Best-effort security fixes |
+| `1.0.x` releases | Security fixes accepted |
+| `< 1.0` releases | Best-effort only |
 | Older commits | Not supported |
 
 ## Reporting A Vulnerability
