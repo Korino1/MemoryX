@@ -1768,6 +1768,7 @@ impl McpServerState {
     }
 }
 
+#[cfg(feature = "mcp")]
 impl BaseScope {
     fn as_str(self) -> &'static str {
         match self {
