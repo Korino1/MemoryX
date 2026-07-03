@@ -14,13 +14,12 @@
 use crate::cas::invariants::InvariantsSection;
 use crate::cas::{AtomBodyHeader, SectionDesc};
 use crate::prelude::*;
-use crate::vm::interpreter::{
-    AtomView, ClaimData, ConflictProbe, ConflictSeverity, ConstValue, CtxIndex,
-    CtxView, ExecutionContext, Instruction as VmInstruction, Opcode, QueryConstraintsView,
-    VmInterpreter,
-};
 #[cfg(test)]
 use crate::vm::interpreter::BytecodeBuilder;
+use crate::vm::interpreter::{
+    AtomView, ClaimData, ConflictProbe, ConflictSeverity, ConstValue, CtxIndex, CtxView,
+    ExecutionContext, Instruction as VmInstruction, Opcode, QueryConstraintsView, VmInterpreter,
+};
 
 // ============================================================================
 // ABI Result Type
@@ -197,7 +196,7 @@ fn parse_raw_instructions(code: &[u8]) -> Option<Vec<VmInstruction>> {
     }
     let count = code.len() / 16;
     let mut instrs = Vec::with_capacity(count);
-    for chunk in code.chunks_exact(16) {
+    for chunk in code.as_chunks::<16>().0 {
         let op = u16::from_le_bytes(chunk[0..2].try_into().unwrap());
         let a = u16::from_le_bytes(chunk[2..4].try_into().unwrap());
         let b = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
@@ -452,7 +451,7 @@ pub fn eval_invariants(
         Err(_) => {
             return InvariantResult::FailHard {
                 reason: ReasonCode::CORRUPT_SECTION as u16,
-            }
+            };
         }
     };
 
@@ -480,7 +479,7 @@ pub fn eval_invariants(
         Err(_) => {
             return InvariantResult::FailHard {
                 reason: ReasonCode::CORRUPT_SECTION as u16,
-            }
+            };
         }
     };
 
@@ -561,7 +560,7 @@ pub fn eval_invariants(
         Err(_) => {
             return InvariantResult::FailHard {
                 reason: ReasonCode::CORRUPT_SECTION as u16,
-            }
+            };
         }
     };
 

@@ -10,15 +10,15 @@
 
 #![allow(dead_code)]
 
-mod embedding;
-mod index;
-mod hnsw;
 mod backend;
+mod embedding;
+mod hnsw;
+mod index;
 
-pub use embedding::cosine_similarity;
-pub use index::EmbeddingIndex;
-pub use hnsw::HnswGraph;
 pub use backend::AnnBackend;
+pub use embedding::cosine_similarity;
+pub use hnsw::HnswGraph;
+pub use index::EmbeddingIndex;
 
 // ============================================================================
 // Tests
@@ -33,7 +33,11 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0];
         let b = vec![1.0f32, 2.0, 3.0];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim - 1.0).abs() < 1e-6, "Identical vectors should have similarity 1.0, got {}", sim);
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "Identical vectors should have similarity 1.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -41,7 +45,11 @@ mod tests {
         let a = vec![1.0f32, 0.0, 0.0];
         let b = vec![0.0f32, 1.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-6, "Orthogonal vectors should have similarity 0.0, got {}", sim);
+        assert!(
+            sim.abs() < 1e-6,
+            "Orthogonal vectors should have similarity 0.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -49,7 +57,11 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0];
         let b = vec![-1.0f32, -2.0, -3.0];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim - (-1.0)).abs() < 1e-6, "Opposite vectors should have similarity -1.0, got {}", sim);
+        assert!(
+            (sim - (-1.0)).abs() < 1e-6,
+            "Opposite vectors should have similarity -1.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -57,7 +69,11 @@ mod tests {
         let a = vec![1.0f32, 2.0, 3.0];
         let b = vec![1.0f32, 2.0];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim - 0.0).abs() < 1e-6, "Different length vectors should have similarity 0.0, got {}", sim);
+        assert!(
+            (sim - 0.0).abs() < 1e-6,
+            "Different length vectors should have similarity 0.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -65,7 +81,11 @@ mod tests {
         let a: Vec<f32> = vec![];
         let b: Vec<f32> = vec![];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim - 0.0).abs() < 1e-6, "Empty vectors should have similarity 0.0, got {}", sim);
+        assert!(
+            (sim - 0.0).abs() < 1e-6,
+            "Empty vectors should have similarity 0.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -123,7 +143,11 @@ mod tests {
         assert!(!results.is_empty());
         // Node 0 or 3 should be closest
         let top_id = results[0].0;
-        assert!(top_id == 0 || top_id == 3, "Expected node 0 or 3, got {}", top_id);
+        assert!(
+            top_id == 0 || top_id == 3,
+            "Expected node 0 or 3, got {}",
+            top_id
+        );
     }
 
     #[test]

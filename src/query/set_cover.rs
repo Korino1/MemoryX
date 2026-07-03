@@ -572,9 +572,11 @@ mod tests {
             create_gap(1, GapKind::NEED_DEFINITION, 150),
         ];
 
-        let candidates = vec![AtomCandidate::new(create_atom_id(1), AtomType::DATASET)
-            .with_covers_gaps(vec![0, 1]) // Covers all gaps
-            .with_trust(9000)];
+        let candidates = vec![
+            AtomCandidate::new(create_atom_id(1), AtomType::DATASET)
+                .with_covers_gaps(vec![0, 1]) // Covers all gaps
+                .with_trust(9000),
+        ];
 
         let weights = CostWeights::default();
         let result = SetCoverSolver::solve(&gaps, &candidates, &weights);

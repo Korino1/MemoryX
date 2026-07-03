@@ -56,16 +56,15 @@ use tokio::sync::RwLock;
 
 // MemoryX imports
 use memoryx::cas::{
+    AtomBodyHeader, SectionDesc,
     claims::ClaimsSection,
     evidence::EvidenceSection,
     invariants::InvariantsSection,
     meta::{MetaField, MetaFieldKind, MetaSection, MetaValue},
     symbols::SymbolsSection,
-    AtomBodyHeader,
-    SectionDesc,
 };
 use memoryx::prelude::*;
-use memoryx::store::api::{MemoryX, StoreConfig, StoreError, CtxId, CtxPolicyId};
+use memoryx::store::api::{CtxId, CtxPolicyId, MemoryX, StoreConfig, StoreError};
 
 fn project_base_root() -> Result<PathBuf, String> {
     std::env::current_dir()
@@ -87,7 +86,7 @@ fn scoped_base_path(scope: &str, base_name: &str) -> Result<PathBuf, String> {
             return Err(format!(
                 "Invalid --base-scope '{}'. Expected 'project' or 'user'",
                 other
-            ))
+            ));
         }
     };
     Ok(root.join(base_name))
@@ -181,29 +180,53 @@ struct RpcError {
 
 impl RpcError {
     fn parse_error(message: String) -> Self {
-        RpcError { code: -32700, message, data: None }
+        RpcError {
+            code: -32700,
+            message,
+            data: None,
+        }
     }
 
     #[allow(dead_code)]
     fn invalid_request(message: String) -> Self {
-        RpcError { code: -32600, message, data: None }
+        RpcError {
+            code: -32600,
+            message,
+            data: None,
+        }
     }
 
     fn method_not_found(message: String) -> Self {
-        RpcError { code: -32601, message, data: None }
+        RpcError {
+            code: -32601,
+            message,
+            data: None,
+        }
     }
 
     fn invalid_params(message: String) -> Self {
-        RpcError { code: -32602, message, data: None }
+        RpcError {
+            code: -32602,
+            message,
+            data: None,
+        }
     }
 
     #[allow(dead_code)]
     fn internal_error(message: String) -> Self {
-        RpcError { code: -32603, message, data: None }
+        RpcError {
+            code: -32603,
+            message,
+            data: None,
+        }
     }
 
     fn tool_error(code: i32, message: String, data: Option<serde_json::Value>) -> Self {
-        RpcError { code, message, data }
+        RpcError {
+            code,
+            message,
+            data,
+        }
     }
 }
 
@@ -352,10 +375,7 @@ impl NativeApi {
     }
 
     /// Batch ingest multiple atoms
-    async fn batch_ingest(
-        &self,
-        items: Vec<BatchIngestItem>,
-    ) -> Result<Vec<AtomId>, StoreError> {
+    async fn batch_ingest(&self, items: Vec<BatchIngestItem>) -> Result<Vec<AtomId>, StoreError> {
         let mut store = self.store.write().await;
         let mut results = Vec::with_capacity(items.len());
 
@@ -390,8 +410,7 @@ impl NativeApi {
 impl MemoryXServer {
     /// Create a new MemoryX MCP server
     fn new(data_dir: PathBuf, config: ServerConfig) -> Result<Self, String> {
-        let store_config = StoreConfig::new(data_dir.clone())
-            .with_mmap_mode(config.mmap_mode);
+        let store_config = StoreConfig::new(data_dir.clone()).with_mmap_mode(config.mmap_mode);
 
         let store = MemoryX::new(store_config)
             .map_err(|e| format!("Failed to create MemoryX store: {}", e))?;
@@ -606,7 +625,9 @@ impl MemoryXServer {
         match store.answer(&question, ctx) {
             Ok(answer) => {
                 let formatted = format_answer(&answer);
-                let limitations: Vec<String> = answer.limitations.iter()
+                let limitations: Vec<String> = answer
+                    .limitations
+                    .iter()
                     .map(|l| format!("{}: {}", l.code, l.description))
                     .collect();
 
@@ -655,7 +676,10 @@ Atom ID: {}
 Type: {}
 Text symbols indexed: {}
 Structured claims: 0",
-                        title, hex_id, atom_type, symbols.len()
+                        title,
+                        hex_id,
+                        atom_type,
+                        symbols.len()
                     ))]),
                     data: Some(serde_json::json!({
                         "atom_id": hex_id,
@@ -676,8 +700,12 @@ Structured claims: 0",
 
     /// Retrieve atom by ID
     async fn get_atom(&self, atom_id_str: String) -> Result<ToolResult, String> {
-        let atom_id = parse_atom_id(&atom_id_str)
-            .ok_or_else(|| format!("Invalid atom ID format: {}. Expected 32-byte hex string", atom_id_str))?;
+        let atom_id = parse_atom_id(&atom_id_str).ok_or_else(|| {
+            format!(
+                "Invalid atom ID format: {}. Expected 32-byte hex string",
+                atom_id_str
+            )
+        })?;
 
         let store = self.store.read().await;
         match store.get_atom(&atom_id) {
@@ -689,7 +717,7 @@ Structured claims: 0",
                 writeln!(output, "Claims: {}", view.claims.len()).unwrap();
 
                 writeln!(output, "Claims: {}", view.claims.len()).unwrap();
-                
+
                 for (i, claim) in view.claims.iter().enumerate() {
                     writeln!(output, "  [{}] {:?}", i, claim).unwrap();
                 }
@@ -717,15 +745,21 @@ Structured claims: 0",
     async fn search_lex(&self, query: String, limit: Option<u32>) -> Result<ToolResult, String> {
         let limit = limit.unwrap_or(100);
         let store = self.store.read().await;
-        
+
         let node_nums = store.search_lex(&query, None);
         let total_matches = node_nums.len();
         let limited: Vec<_> = node_nums.into_iter().take(limit as usize).collect();
 
         let mut output = String::new();
         writeln!(output, "Search results for '{}':", query).unwrap();
-        writeln!(output, "Found {} matches (showing {})", total_matches, limited.len()).unwrap();
-        
+        writeln!(
+            output,
+            "Found {} matches (showing {})",
+            total_matches,
+            limited.len()
+        )
+        .unwrap();
+
         for (i, &node_num) in limited.iter().enumerate() {
             writeln!(output, "  [{}] Node: {}", i, node_num).unwrap();
         }
@@ -752,10 +786,15 @@ Structured claims: 0",
         edge_types: Vec<String>,
         depth: u8,
     ) -> Result<ToolResult, String> {
-        let depth = if depth == 0 { 3 } else { depth.min(self.config.max_query_depth) };
-        
+        let depth = if depth == 0 {
+            3
+        } else {
+            depth.min(self.config.max_query_depth)
+        };
+
         // Parse edge types
-        let parsed_types: Vec<EdgeType> = edge_types.iter()
+        let parsed_types: Vec<EdgeType> = edge_types
+            .iter()
             .filter_map(|s| parse_edge_type(s))
             .collect();
 
@@ -771,13 +810,22 @@ Structured claims: 0",
 
         let mut output = String::new();
         writeln!(output, "Graph walk from {} seed nodes:", seed_nodes.len()).unwrap();
-        writeln!(output, "Edge types: {:?}", edge_types.iter().map(|e| format!("{:?}", e)).collect::<Vec<_>>().join(", ")).unwrap();
+        writeln!(
+            output,
+            "Edge types: {:?}",
+            edge_types
+                .iter()
+                .map(|e| format!("{:?}", e))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .unwrap();
         writeln!(output, "Depth: {}, Found edges: {}", depth, edges.len()).unwrap();
-        
+
         for (i, (src, dst, etype)) in edges.iter().take(50).enumerate() {
             writeln!(output, "  [{}] {} --{:?}--> {}", i, src, etype, dst).unwrap();
         }
-        
+
         if edges.len() > 50 {
             writeln!(output, "  ... and {} more", edges.len() - 50).unwrap();
         }
@@ -879,7 +927,12 @@ Structured claims: 0",
                 writeln!(output, "Derivation edges: {}", chain.derivation_edges.len()).unwrap();
                 writeln!(output, "Direct evidence: {}", chain.direct_evidence.len()).unwrap();
                 writeln!(output, "Max depth: {}", chain.max_depth).unwrap();
-                writeln!(output, "Overall confidence: {:.4}", chain.overall_confidence).unwrap();
+                writeln!(
+                    output,
+                    "Overall confidence: {:.4}",
+                    chain.overall_confidence
+                )
+                .unwrap();
                 writeln!(output, "Overall trust: {}/10000", chain.overall_trust).unwrap();
                 writeln!(output).unwrap();
 
@@ -900,7 +953,8 @@ Structured claims: 0",
                         .unwrap();
                     }
                     if chain.nodes.len() > 10 {
-                        writeln!(output, "  ... and {} more nodes", chain.nodes.len() - 10).unwrap();
+                        writeln!(output, "  ... and {} more nodes", chain.nodes.len() - 10)
+                            .unwrap();
                     }
                     writeln!(output).unwrap();
                 }
@@ -923,7 +977,12 @@ Structured claims: 0",
                         .unwrap();
                     }
                     if chain.direct_evidence.len() > 10 {
-                        writeln!(output, "  ... and {} more evidence links", chain.direct_evidence.len() - 10).unwrap();
+                        writeln!(
+                            output,
+                            "  ... and {} more evidence links",
+                            chain.direct_evidence.len() - 10
+                        )
+                        .unwrap();
                     }
                     writeln!(output).unwrap();
                 }
@@ -945,7 +1004,12 @@ Structured claims: 0",
                         .unwrap();
                     }
                     if chain.derivation_edges.len() > 10 {
-                        writeln!(output, "  ... and {} more derivation edges", chain.derivation_edges.len() - 10).unwrap();
+                        writeln!(
+                            output,
+                            "  ... and {} more derivation edges",
+                            chain.derivation_edges.len() - 10
+                        )
+                        .unwrap();
                     }
                     writeln!(output).unwrap();
                 }
@@ -1009,7 +1073,10 @@ Structured claims: 0",
         match store.verify_atom(&atom_id) {
             Ok(valid) => {
                 let status = if valid { "VALID" } else { "INVALID/CORRUPTED" };
-                let output = format!("Atom {}\nStatus: {}\nVerification: CRC, magic, bounds checks", atom_id_str, status);
+                let output = format!(
+                    "Atom {}\nStatus: {}\nVerification: CRC, magic, bounds checks",
+                    atom_id_str, status
+                );
 
                 Ok(ToolResult {
                     content: Some(vec![ToolContent::text(output)]),
@@ -1036,15 +1103,24 @@ Structured claims: 0",
         let mut output = String::new();
         writeln!(output, "Conflicts in context {}:", ctx_id).unwrap();
         writeln!(output, "Total conflicts: {}", conflicts.len()).unwrap();
-        
+
         if conflicts.is_empty() {
             writeln!(output, "No conflicts detected").unwrap();
         } else {
             for (i, conflict) in conflicts.iter().enumerate() {
-                writeln!(output, "  [{}] Type: {:?}, Severity: {:?}", 
-                    i, conflict.conflict_type, conflict.severity).unwrap();
-                writeln!(output, "      Atoms: {:?} vs {:?}", 
-                    hex_encode(&conflict.atom_a), hex_encode(&conflict.atom_b)).unwrap();
+                writeln!(
+                    output,
+                    "  [{}] Type: {:?}, Severity: {:?}",
+                    i, conflict.conflict_type, conflict.severity
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "      Atoms: {:?} vs {:?}",
+                    hex_encode(&conflict.atom_a),
+                    hex_encode(&conflict.atom_b)
+                )
+                .unwrap();
             }
         }
 
@@ -1086,7 +1162,8 @@ Structured claims: 0",
             "ingest_text" => {
                 let title: String = extract_arg(&args, "title")?;
                 let content: String = extract_arg(&args, "content")?;
-                let atom_type: String = extract_arg(&args, "atom_type").unwrap_or_else(|_| "FACT".to_string());
+                let atom_type: String =
+                    extract_arg(&args, "atom_type").unwrap_or_else(|_| "FACT".to_string());
                 self.ingest_text(title, content, atom_type).await
             }
             "get_atom" => {
@@ -1108,9 +1185,7 @@ Structured claims: 0",
                 let policy_id: u64 = extract_arg(&args, "policy_id").unwrap_or(0);
                 self.create_context(policy_id).await
             }
-            "list_contexts" => {
-                self.list_contexts().await
-            }
+            "list_contexts" => self.list_contexts().await,
             "get_provenance" => {
                 let atom_id: String = extract_arg(&args, "atom_id")?;
                 self.get_provenance(atom_id).await
@@ -1130,23 +1205,21 @@ Structured claims: 0",
     /// Handle JSON-RPC request
     async fn handle_request(&mut self, request: JsonRpcRequest) -> JsonRpcResponse {
         match request.method.as_str() {
-            "initialize" => {
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: request.id,
-                    result: Some(serde_json::json!({
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {
-                            "tools": {}
-                        },
-                        "serverInfo": {
-                            "name": "memoryx",
-                            "version": "0.1.0"
-                        }
-                    })),
-                    error: None,
-                }
-            }
+            "initialize" => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: Some(serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "memoryx",
+                        "version": "0.1.0"
+                    }
+                })),
+                error: None,
+            },
             "tools/list" => {
                 let tools = Self::define_tools();
                 JsonRpcResponse {
@@ -1161,16 +1234,18 @@ Structured claims: 0",
             "tools/call" => {
                 let name: String = match extract_arg(&request.params, "name") {
                     Ok(n) => n,
-                    Err(e) => return JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: request.id,
-                        result: None,
-                        error: Some(RpcError::invalid_params(e)),
-                    },
+                    Err(e) => {
+                        return JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: request.id,
+                            result: None,
+                            error: Some(RpcError::invalid_params(e)),
+                        };
+                    }
                 };
-                
-                let arguments: serde_json::Value = extract_arg(&request.params, "arguments")
-                    .unwrap_or(serde_json::json!({}));
+
+                let arguments: serde_json::Value =
+                    extract_arg(&request.params, "arguments").unwrap_or(serde_json::json!({}));
 
                 match self.handle_tool_call(name, arguments).await {
                     Ok(result) => JsonRpcResponse {
@@ -1191,7 +1266,10 @@ Structured claims: 0",
                 jsonrpc: "2.0".to_string(),
                 id: request.id,
                 result: None,
-                error: Some(RpcError::method_not_found(format!("Unknown method: {}", request.method))),
+                error: Some(RpcError::method_not_found(format!(
+                    "Unknown method: {}",
+                    request.method
+                ))),
             },
         }
     }
@@ -1199,7 +1277,7 @@ Structured claims: 0",
     /// Run the MCP server (stdio transport)
     async fn run_stdio(&mut self) -> Result<(), String> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        
+
         let stdin = tokio::io::stdin();
         let mut reader = BufReader::new(stdin);
         let mut stdout = tokio::io::stdout();
@@ -1224,12 +1302,18 @@ Structured claims: 0",
                             let response = self.handle_request(request).await;
                             let response_json = serde_json::to_string(&response)
                                 .map_err(|e| format!("Failed to serialize response: {}", e))?;
-                            
-                            stdout.write_all(response_json.as_bytes()).await
+
+                            stdout
+                                .write_all(response_json.as_bytes())
+                                .await
                                 .map_err(|e| format!("Failed to write response: {}", e))?;
-                            stdout.write_all(b"\n").await
+                            stdout
+                                .write_all(b"\n")
+                                .await
                                 .map_err(|e| format!("Failed to write newline: {}", e))?;
-                            stdout.flush().await
+                            stdout
+                                .flush()
+                                .await
                                 .map_err(|e| format!("Failed to flush: {}", e))?;
                         }
                         Err(e) => {
@@ -1261,14 +1345,14 @@ Structured claims: 0",
 /// Format answer for human-readable output
 fn format_answer(answer: &AnswerPack) -> String {
     let mut output = String::new();
-    
+
     writeln!(output, "=== Answer ===").unwrap();
     writeln!(output).unwrap();
-    
+
     // Confidence
     writeln!(output, "**Confidence**: {:.1}%", answer.confidence * 100.0).unwrap();
     writeln!(output).unwrap();
-    
+
     // Claims
     if !answer.claims.is_empty() {
         writeln!(output, "**Claims** ({} found):", answer.claims.len()).unwrap();
@@ -1280,20 +1364,26 @@ fn format_answer(answer: &AnswerPack) -> String {
         }
         writeln!(output).unwrap();
     }
-    
+
     // Evidence
     if !answer.evidence.is_empty() {
         writeln!(output, "**Evidence** ({} sources):", answer.evidence.len()).unwrap();
         for (i, ev) in answer.evidence.iter().take(5).enumerate() {
-            writeln!(output, "  {}. {:?} (trust: {}/10000)", 
-                i + 1, ev.section_kind, ev.trust).unwrap();
+            writeln!(
+                output,
+                "  {}. {:?} (trust: {}/10000)",
+                i + 1,
+                ev.section_kind,
+                ev.trust
+            )
+            .unwrap();
         }
         if answer.evidence.len() > 5 {
             writeln!(output, "  ... and {} more", answer.evidence.len() - 5).unwrap();
         }
         writeln!(output).unwrap();
     }
-    
+
     // Limitations
     if !answer.limitations.is_empty() {
         writeln!(output, "**Limitations**:").unwrap();
@@ -1302,26 +1392,37 @@ fn format_answer(answer: &AnswerPack) -> String {
         }
         writeln!(output).unwrap();
     }
-    
+
     // Alternatives
     if !answer.alternates.is_empty() {
-        writeln!(output, "**Alternative Answers** ({} available):", answer.alternates.len()).unwrap();
+        writeln!(
+            output,
+            "**Alternative Answers** ({} available):",
+            answer.alternates.len()
+        )
+        .unwrap();
         for (i, alt) in answer.alternates.iter().take(3).enumerate() {
-            writeln!(output, "  {}. Confidence: {:.1}%, Claims: {}", 
-                i + 1, alt.confidence * 100.0, alt.claims.len()).unwrap();
+            writeln!(
+                output,
+                "  {}. Confidence: {:.1}%, Claims: {}",
+                i + 1,
+                alt.confidence * 100.0,
+                alt.claims.len()
+            )
+            .unwrap();
         }
         if answer.alternates.len() > 3 {
             writeln!(output, "  ... and {} more", answer.alternates.len() - 3).unwrap();
         }
         writeln!(output).unwrap();
     }
-    
+
     // Graph info
     writeln!(output, "**Provenance Graph**").unwrap();
     writeln!(output, "  Nodes: {}", answer.graph.node_count()).unwrap();
     writeln!(output, "  Edges: {}", answer.graph.edge_count()).unwrap();
     writeln!(output, "  Cost: {:.2}", answer.graph.total_cost).unwrap();
-    
+
     output
 }
 
@@ -1516,10 +1617,13 @@ fn extract_arg<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
     key: &str,
 ) -> Result<T, String> {
-    value.get(key)
+    value
+        .get(key)
         .ok_or_else(|| format!("Missing required argument: {}", key))
-        .and_then(|v| serde_json::from_value(v.clone())
-            .map_err(|e| format!("Invalid argument '{}': {}", key, e)))
+        .and_then(|v| {
+            serde_json::from_value(v.clone())
+                .map_err(|e| format!("Invalid argument '{}': {}", key, e))
+        })
 }
 
 /// Extract optional argument from JSON value
@@ -1527,7 +1631,9 @@ fn extract_arg_opt<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
     key: &str,
 ) -> Option<T> {
-    value.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
+    value
+        .get(key)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
 // ============================================================================
@@ -1538,13 +1644,13 @@ fn extract_arg_opt<T: serde::de::DeserializeOwned>(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::env;
-    
+
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
     let mut data_dir_arg: Option<PathBuf> = None;
     let mut base_scope = "project".to_string();
     let mut base_name: Option<String> = None;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1583,7 +1689,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Options:");
                 println!("  -d, --data-dir <PATH|NAME>  Base path or base name");
                 println!("      --base-scope <SCOPE>    project|user (default: project)");
-                println!("      --base-name <NAME>      Base name when no path is provided (default: default)");
+                println!(
+                    "      --base-name <NAME>      Base name when no path is provided (default: default)"
+                );
                 println!("  -h, --help                  Show this help message");
                 println!();
                 println!("Resolved defaults:");
@@ -1617,27 +1725,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
-    
+
     // Create data directory if it doesn't exist
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("Failed to create data directory: {}", e))?;
-    
+
     // Create server
     let config = ServerConfig::default();
-    let mut server = MemoryXServer::new(data_dir.clone(), config)
-        .map_err(|e| {
-            eprintln!("Failed to create server: {}", e);
-            std::process::exit(1);
-        })?;
-    
+    let mut server = MemoryXServer::new(data_dir.clone(), config).map_err(|e| {
+        eprintln!("Failed to create server: {}", e);
+        std::process::exit(1);
+    })?;
+
     eprintln!("Data directory: {}", data_dir.display());
-    
+
     // Run server
     server.run_stdio().await.map_err(|e| {
         eprintln!("Server error: {}", e);
         std::process::exit(1);
     })?;
-    
+
     Ok(())
 }
 
@@ -1679,12 +1786,12 @@ mod tests {
         let result = parse_atom_id(hex);
         assert!(result.is_some());
         assert_eq!(result.unwrap(), [0u8; 32]);
-        
+
         // With 0x prefix
         let hex_prefix = format!("0x{}", hex);
         let result = parse_atom_id(&hex_prefix);
         assert!(result.is_some());
-        
+
         // Invalid length
         assert!(parse_atom_id("abc").is_none());
         assert!(parse_atom_id(&hex[..30]).is_none());
@@ -1713,7 +1820,8 @@ mod tests {
 
         let symbols_start = symbols_desc.off as usize;
         let symbols_end = symbols_start + symbols_desc.len as usize;
-        let symbols_section = SymbolsSection::from_bytes(&payload[symbols_start..symbols_end]).unwrap();
+        let symbols_section =
+            SymbolsSection::from_bytes(&payload[symbols_start..symbols_end]).unwrap();
         assert!(symbols_section.find("Test Title").is_some());
         assert!(symbols_section.find("test").is_some());
         assert!(symbols_section.find("sentence").is_some());

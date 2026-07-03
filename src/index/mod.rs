@@ -538,7 +538,7 @@ impl Location {
             deleted: false,
         }
     }
-    
+
     /// Create location with deleted flag
     #[inline]
     pub fn with_deleted(mut self, deleted: bool) -> Self {
@@ -1309,7 +1309,7 @@ impl Lexicon {
 
     /// Sort terms in place (required for front-coding)
     pub fn sort_terms(&mut self) {
-        let mut sorted: Vec<String> = self.terms.drain(..).collect();
+        let mut sorted: Vec<String> = std::mem::take(&mut self.terms);
         sorted.sort();
         self.term_to_id.clear();
         for (id, term) in sorted.into_iter().enumerate() {
@@ -1480,7 +1480,8 @@ impl Lexicon {
             if offset + anchor_len > blocks_data.len() {
                 return Err(IndexError::CorruptData("Truncated anchor data".into()));
             }
-            let anchor = String::from_utf8_lossy(&blocks_data[offset..offset + anchor_len]).to_string();
+            let anchor =
+                String::from_utf8_lossy(&blocks_data[offset..offset + anchor_len]).to_string();
             offset += anchor_len;
 
             // Add anchor term
@@ -1490,7 +1491,8 @@ impl Lexicon {
             if offset + 2 > blocks_data.len() {
                 return Err(IndexError::CorruptData("Truncated entry count".into()));
             }
-            let entry_count = u16::from_le_bytes([blocks_data[offset], blocks_data[offset + 1]]) as usize;
+            let entry_count =
+                u16::from_le_bytes([blocks_data[offset], blocks_data[offset + 1]]) as usize;
             offset += 2;
 
             // Read front-coded entries
@@ -1498,14 +1500,17 @@ impl Lexicon {
                 if offset + 4 > blocks_data.len() {
                     return Err(IndexError::CorruptData("Truncated entry header".into()));
                 }
-                let prefix_len = u16::from_le_bytes([blocks_data[offset], blocks_data[offset + 1]]) as usize;
-                let suffix_len = u16::from_le_bytes([blocks_data[offset + 2], blocks_data[offset + 3]]) as usize;
+                let prefix_len =
+                    u16::from_le_bytes([blocks_data[offset], blocks_data[offset + 1]]) as usize;
+                let suffix_len =
+                    u16::from_le_bytes([blocks_data[offset + 2], blocks_data[offset + 3]]) as usize;
                 offset += 4;
 
                 if offset + suffix_len > blocks_data.len() {
                     return Err(IndexError::CorruptData("Truncated suffix".into()));
                 }
-                let suffix = String::from_utf8_lossy(&blocks_data[offset..offset + suffix_len]).to_string();
+                let suffix =
+                    String::from_utf8_lossy(&blocks_data[offset..offset + suffix_len]).to_string();
                 offset += suffix_len;
 
                 // Reconstruct term: prefix from anchor + suffix

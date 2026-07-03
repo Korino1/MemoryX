@@ -1118,4 +1118,3 @@ mod tests {
         assert!(body.is_empty()); // Body builder returns empty for now
     }
 }
-

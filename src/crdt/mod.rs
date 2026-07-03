@@ -18,9 +18,9 @@ pub mod snapshot;
 pub mod wal;
 
 pub use wal::{CrdtError, RecordHeader};
-pub use wal::{WalIterator, WalKey, WalReader, WalRecord, WalWriter};
 pub use wal::{KEY_KIND_ATOM, KEY_KIND_NODE};
 pub use wal::{OP_MERGE_STATE, OP_REMOVE, OP_TOMBSTONE, OP_UPSERT};
+pub use wal::{WalIterator, WalKey, WalReader, WalRecord, WalWriter};
 
 pub use snapshot::{FieldRecordHeader, FieldState, NodeIterator, NodeState};
 pub use snapshot::{IndexEntry, SnapshotBuilder, SnapshotHeader, SnapshotReader};
@@ -440,10 +440,7 @@ where
     /// Add an element
     pub fn add(&mut self, actor: ActorId, element: T) {
         let dot = self.new_dot(actor);
-        self.elements
-            .entry(element)
-            .or_default()
-            .insert(dot);
+        self.elements.entry(element).or_default().insert(dot);
     }
 
     /// Remove an element (all current dots)
@@ -480,11 +477,7 @@ where
             let has_live_dot = dots
                 .iter()
                 .any(|dot| tombstones.map(|t| !t.contains(dot)).unwrap_or(true));
-            if has_live_dot {
-                Some(elem)
-            } else {
-                None
-            }
+            if has_live_dot { Some(elem) } else { None }
         })
     }
 
@@ -503,10 +496,7 @@ where
     pub fn merge(&mut self, other: &ORSet<T>) {
         // Merge elements
         for (elem, dots) in &other.elements {
-            self.elements
-                .entry(elem.clone())
-                .or_default()
-                .extend(dots);
+            self.elements.entry(elem.clone()).or_default().extend(dots);
         }
 
         // Merge tombstones
@@ -546,10 +536,7 @@ where
     /// Add a specific dot for an element (for deserialization)
     pub fn add_dot(&mut self, actor: ActorId, element: T, counter: u64) {
         let dot = Dot::new(actor, counter);
-        self.elements
-            .entry(element)
-            .or_default()
-            .insert(dot);
+        self.elements.entry(element).or_default().insert(dot);
 
         // Update counters
         let current = self.counters.entry(actor).or_insert(0);
@@ -559,10 +546,7 @@ where
     /// Add a specific tombstone dot for an element (for deserialization)
     pub fn remove_dot(&mut self, actor: ActorId, element: T, counter: u64) {
         let dot = Dot::new(actor, counter);
-        self.tombstones
-            .entry(element)
-            .or_default()
-            .insert(dot);
+        self.tombstones.entry(element).or_default().insert(dot);
 
         // Update counters
         let current = self.counters.entry(actor).or_insert(0);
@@ -727,9 +711,7 @@ where
     /// Get or create entry for a key
     pub fn get_or_create(&mut self, key: &K) -> &mut LWWReg<V> {
         self.removed.remove(key);
-        self.entries
-            .entry(key.clone())
-            .or_default()
+        self.entries.entry(key.clone()).or_default()
     }
 
     /// Update a key's value
@@ -774,10 +756,7 @@ where
     pub fn merge(&mut self, other: &ORMap<K, V>) {
         for (key, reg) in &other.entries {
             if !self.removed.contains(key) {
-                let entry = self
-                    .entries
-                    .entry(key.clone())
-                    .or_default();
+                let entry = self.entries.entry(key.clone()).or_default();
                 entry.merge(reg);
             }
         }
@@ -1666,8 +1645,8 @@ pub fn deserialize_payload(kind: CrdtKind, data: &[u8]) -> Result<CrdtState, Crd
                 }
                 let nested_kind_byte = data[offset];
                 offset += 1;
-                let nested_kind = CrdtKind::try_from(nested_kind_byte)
-                    .map_err(|_| CrdtError::InvalidPayload)?;
+                let nested_kind =
+                    CrdtKind::try_from(nested_kind_byte).map_err(|_| CrdtError::InvalidPayload)?;
                 // CRITICAL: Read HLC and ActorId to preserve LWW semantics
                 if offset + 8 + 4 + ACTOR_ID_SIZE > data.len() {
                     return Err(CrdtError::InvalidPayload);
@@ -1704,7 +1683,8 @@ pub fn deserialize_payload(kind: CrdtKind, data: &[u8]) -> Result<CrdtState, Crd
                     return Err(CrdtError::InvalidPayload);
                 }
                 // Recursively deserialize nested CRDT state
-                let nested_state = deserialize_payload(nested_kind, &data[offset..offset + state_len])?;
+                let nested_state =
+                    deserialize_payload(nested_kind, &data[offset..offset + state_len])?;
                 offset += state_len;
                 // CRITICAL: Restore LWWReg with original HLC and actor (preserves LWW semantics)
                 let lww_reg = LWWReg::new(hlc, actor, nested_state);
@@ -1882,7 +1862,11 @@ impl CrdtState {
                 //          u32 removed_count, for each: u32 key_len, key_utf8
                 let mut buf = Vec::new();
                 // Count actual entries (excluding removed keys that are in entries)
-                let actual_entry_count = om.entries.keys().filter(|k| !om.removed.contains(*k)).count();
+                let actual_entry_count = om
+                    .entries
+                    .keys()
+                    .filter(|k| !om.removed.contains(*k))
+                    .count();
                 buf.extend_from_slice(&(actual_entry_count as u32).to_le_bytes());
                 for (k, v) in om.entries.iter() {
                     // Skip removed keys in entries serialization
@@ -2021,7 +2005,9 @@ impl MetaStore {
             for (field, state) in fields {
                 let entry = match node_entry.entry(*field) {
                     std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(state.clone()),
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(state.clone())
+                    }
                 };
                 entry.join(state);
             }
@@ -2033,7 +2019,9 @@ impl MetaStore {
             for (field, state) in fields {
                 let entry = match atom_entry.entry(*field) {
                     std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(state.clone()),
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(state.clone())
+                    }
                 };
                 entry.join(state);
             }
@@ -2066,21 +2054,25 @@ impl MetaStore {
 
     /// Export all node fields as iterator for federation sync
     /// Returns (NodeNum, field_id, crdt_kind, state_bytes) tuples
-    pub fn export_node_fields(&self) -> impl Iterator<Item = (NodeNum, u16, crate::store::CrdtKind, Vec<u8>)> + '_ {
+    pub fn export_node_fields(
+        &self,
+    ) -> impl Iterator<Item = (NodeNum, u16, crate::store::CrdtKind, Vec<u8>)> + '_ {
         self.nodes.iter().flat_map(|(node, fields)| {
-            fields.iter().map(move |(field_id, state)| {
-                (*node, *field_id, state.kind(), state.to_bytes())
-            })
+            fields
+                .iter()
+                .map(move |(field_id, state)| (*node, *field_id, state.kind(), state.to_bytes()))
         })
     }
 
     /// Export all atom fields as iterator for federation sync
     /// Returns (AtomId, field_id, crdt_kind, state_bytes) tuples
-    pub fn export_atom_fields(&self) -> impl Iterator<Item = (AtomId, u16, crate::store::CrdtKind, Vec<u8>)> + '_ {
+    pub fn export_atom_fields(
+        &self,
+    ) -> impl Iterator<Item = (AtomId, u16, crate::store::CrdtKind, Vec<u8>)> + '_ {
         self.atoms.iter().flat_map(|(atom, fields)| {
-            fields.iter().map(move |(field_id, state)| {
-                (*atom, *field_id, state.kind(), state.to_bytes())
-            })
+            fields
+                .iter()
+                .map(move |(field_id, state)| (*atom, *field_id, state.kind(), state.to_bytes()))
         })
     }
 
@@ -2095,10 +2087,10 @@ impl MetaStore {
     ) -> Result<bool, CrdtError> {
         // Deserialize remote state
         let remote_state = deserialize_payload(crdt_kind, state_bytes)?;
-        
+
         // Get or create local CRDT
         let local_crdt = self.get_node_crdt(node, field_id, crdt_kind);
-        
+
         // Perform CRDT join
         Ok(local_crdt.join(&remote_state))
     }
@@ -2114,10 +2106,10 @@ impl MetaStore {
     ) -> Result<bool, CrdtError> {
         // Deserialize remote state
         let remote_state = deserialize_payload(crdt_kind, state_bytes)?;
-        
+
         // Get or create local CRDT
         let local_crdt = self.get_atom_crdt(atom, field_id, crdt_kind);
-        
+
         // Perform CRDT join
         Ok(local_crdt.join(&remote_state))
     }
@@ -2466,7 +2458,12 @@ mod tests {
         // key1: nested GCounter
         let mut gcounter = GCounter::new();
         gcounter.inc(actor, 42);
-        outer_map.put(hlc, actor, "key1".to_string(), CrdtState::GCounter(gcounter));
+        outer_map.put(
+            hlc,
+            actor,
+            "key1".to_string(),
+            CrdtState::GCounter(gcounter),
+        );
 
         // key2: nested ORSet
         let mut orset = ORSet::new();
@@ -2535,7 +2532,10 @@ mod tests {
         }
 
         // key4 should be removed (not present)
-        assert!(restored_map.get(&"key4".to_string()).is_none(), "key4 should be removed");
+        assert!(
+            restored_map.get(&"key4".to_string()).is_none(),
+            "key4 should be removed"
+        );
 
         // Verify no nested types were collapsed to LWWReg
         // (this would fail if the old broken code was still in use)
@@ -2548,43 +2548,52 @@ mod tests {
         // merge should select the value with greater timestamp (LWW rule)
         let actor1 = ActorId::new([1u8; ACTOR_ID_SIZE]);
         let actor2 = ActorId::new([2u8; ACTOR_ID_SIZE]);
-        
+
         // Create first ORMap with timestamp 1000
         let hlc1 = HLC::from_parts(1000, 0);
         let mut map1 = ORMap::<String, CrdtState>::new();
         let nested1 = CrdtState::LWWReg(LWWReg::new(hlc1, actor1, b"value_1000".to_vec()));
         map1.put(hlc1, actor1, "key".to_string(), nested1);
-        
+
         // Create second ORMap with timestamp 2000 (greater)
         let hlc2 = HLC::from_parts(2000, 0);
         let mut map2 = ORMap::<String, CrdtState>::new();
         let nested2 = CrdtState::LWWReg(LWWReg::new(hlc2, actor2, b"value_2000".to_vec()));
         map2.put(hlc2, actor2, "key".to_string(), nested2);
-        
+
         // Serialize both
         let state1 = CrdtState::ORMap(map1);
         let bytes1 = state1.to_bytes();
         let state2 = CrdtState::ORMap(map2);
         let bytes2 = state2.to_bytes();
-        
+
         // Deserialize both
-        let restored1 = deserialize_payload(CrdtKind::ORMAP, &bytes1)
-            .expect("Failed to deserialize map1");
-        let restored2 = deserialize_payload(CrdtKind::ORMAP, &bytes2)
-            .expect("Failed to deserialize map2");
-        
+        let restored1 =
+            deserialize_payload(CrdtKind::ORMAP, &bytes1).expect("Failed to deserialize map1");
+        let restored2 =
+            deserialize_payload(CrdtKind::ORMAP, &bytes2).expect("Failed to deserialize map2");
+
         // Merge restored maps (LWW should select value_2000)
         if let (CrdtState::ORMap(mut om1), CrdtState::ORMap(om2)) = (restored1, restored2) {
             om1.merge(&om2);
-            
+
             // Get the value for "key"
-            let merged_value = om1.get(&"key".to_string()).expect("key should exist after merge");
-            
+            let merged_value = om1
+                .get(&"key".to_string())
+                .expect("key should exist after merge");
+
             // Verify LWW semantics: value from map2 (timestamp 2000) should win
             if let CrdtState::LWWReg(lww) = merged_value {
                 let val = lww.get();
-                assert_eq!(val, b"value_2000", "LWW merge should select value with greater timestamp (2000 > 1000)");
-                assert_eq!(lww.hlc().physical_ns(), 2000, "HLC timestamp should be preserved");
+                assert_eq!(
+                    val, b"value_2000",
+                    "LWW merge should select value with greater timestamp (2000 > 1000)"
+                );
+                assert_eq!(
+                    lww.hlc().physical_ns(),
+                    2000,
+                    "HLC timestamp should be preserved"
+                );
             } else {
                 panic!("Expected LWWReg, got {:?}", merged_value.kind());
             }
@@ -2598,99 +2607,124 @@ mod tests {
         // Nested ORMap: outer map contains inner ORMap as value
         let actor = ActorId::new([1u8; ACTOR_ID_SIZE]);
         let hlc = HLC::from_parts(1000, 0);
-        
+
         // Create inner ORMap with nested GCounter
         let mut inner_map: ORMap<String, CrdtState> = ORMap::new();
         let mut gcounter = GCounter::new();
         gcounter.inc(actor, 42);
-        inner_map.put(hlc, actor, "inner_key".to_string(), CrdtState::GCounter(gcounter));
-        
+        inner_map.put(
+            hlc,
+            actor,
+            "inner_key".to_string(),
+            CrdtState::GCounter(gcounter),
+        );
+
         // Create outer ORMap containing inner ORMap as value
         let mut outer_map: ORMap<String, CrdtState> = ORMap::new();
-        outer_map.put(hlc, actor, "outer_key".to_string(), CrdtState::ORMap(inner_map));
-        
+        outer_map.put(
+            hlc,
+            actor,
+            "outer_key".to_string(),
+            CrdtState::ORMap(inner_map),
+        );
+
         // Wrap in CrdtState for serialization
         let state = CrdtState::ORMap(outer_map);
-        
+
         // Roundtrip through serialization
         let bytes = state.to_bytes();
         assert!(!bytes.is_empty());
-        
-        let restored = deserialize_payload(CrdtKind::ORMAP, &bytes)
-            .expect("Nested ORMap roundtrip failed");
-        
+
+        let restored =
+            deserialize_payload(CrdtKind::ORMAP, &bytes).expect("Nested ORMap roundtrip failed");
+
         // Verify outer kind preserved
         assert!(matches!(restored, CrdtState::ORMap(_)));
         assert_eq!(restored.kind(), CrdtKind::ORMAP);
-        
+
         // Verify nested structure preserved
         let restored_outer = match &restored {
             CrdtState::ORMap(om) => om,
             _ => panic!("Expected ORMap"),
         };
-        
+
         // Verify outer_key contains an ORMap
-        let outer_value = restored_outer.get(&"outer_key".to_string())
+        let outer_value = restored_outer
+            .get(&"outer_key".to_string())
             .expect("outer_key missing");
         assert_eq!(outer_value.kind(), CrdtKind::ORMAP);
-        
+
         // Verify inner ORMap structure
         let inner_restored = match outer_value {
             CrdtState::ORMap(im) => im,
             _ => panic!("outer_key should contain ORMap"),
         };
-        
+
         // Verify inner_key contains GCounter with value 42
-        let inner_value = inner_restored.get(&"inner_key".to_string())
+        let inner_value = inner_restored
+            .get(&"inner_key".to_string())
             .expect("inner_key missing");
         assert_eq!(inner_value.kind(), CrdtKind::GCOUNTER);
-        
+
         if let CrdtState::GCounter(gc) = inner_value {
             assert_eq!(gc.value(), 42);
         } else {
             panic!("inner_key should be GCounter");
         }
     }
-    
+
     #[test]
     fn test_ormap_edge_cases() {
         // Test HLC=0 edge case
         let actor_zero = ActorId::new([0u8; ACTOR_ID_SIZE]);
         let hlc_zero = HLC::from_parts(0, 0);
-        
+
         // Create LWWReg with HLC=0 and ActorId=zero
-        let state = CrdtState::LWWReg(LWWReg::new(
-            hlc_zero,
-            actor_zero,
-            vec![1, 2, 3]
-        ));
-        
+        let state = CrdtState::LWWReg(LWWReg::new(hlc_zero, actor_zero, vec![1, 2, 3]));
+
         // Roundtrip should preserve HLC=0
         let bytes = state.to_bytes();
         assert!(!bytes.is_empty());
-        
+
         let restored = deserialize_payload(CrdtKind::LWW_REG, &bytes)
             .expect("LWWReg with HLC=0 roundtrip failed");
-        
+
         // Verify HLC phys == 0
         if let CrdtState::LWWReg(lww) = &restored {
-            assert_eq!(lww.hlc().physical_ns(), 0, "HLC phys should be preserved as 0");
-            assert_eq!(lww.hlc().logical(), 0, "HLC logical should be preserved as 0");
-            assert_eq!(lww.actor().0, [0u8; ACTOR_ID_SIZE], "ActorId should be preserved as zero");
+            assert_eq!(
+                lww.hlc().physical_ns(),
+                0,
+                "HLC phys should be preserved as 0"
+            );
+            assert_eq!(
+                lww.hlc().logical(),
+                0,
+                "HLC logical should be preserved as 0"
+            );
+            assert_eq!(
+                lww.actor().0,
+                [0u8; ACTOR_ID_SIZE],
+                "ActorId should be preserved as zero"
+            );
             assert_eq!(lww.get(), &vec![1, 2, 3], "Value should be preserved");
         } else {
             panic!("Expected LWWReg, got {:?}", restored.kind());
         }
-        
+
         // Test ORMap with HLC=0 entries
         let mut map: ORMap<String, CrdtState> = ORMap::new();
-        map.put(hlc_zero, actor_zero, "zero_key".to_string(), CrdtState::GCounter(GCounter::new()));
-        
+        map.put(
+            hlc_zero,
+            actor_zero,
+            "zero_key".to_string(),
+            CrdtState::GCounter(GCounter::new()),
+        );
+
         let outer_state = CrdtState::ORMap(map);
         let bytes2 = outer_state.to_bytes();
         let restored2 = deserialize_payload(CrdtKind::ORMAP, &bytes2)
             .expect("ORMap with HLC=0 roundtrip failed");
-        
+
         if let CrdtState::ORMap(om) = &restored2 {
             // Verify key with HLC=0 is preserved
             let value = om.get(&"zero_key".to_string());

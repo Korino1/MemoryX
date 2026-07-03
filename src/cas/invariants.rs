@@ -7,7 +7,7 @@
 //!
 //! # Spec reference: SKF-1.1 §9
 
-use super::{crc32, CasError};
+use super::{CasError, crc32};
 
 // ============================================================================
 // Magic and constants
@@ -400,11 +400,10 @@ impl InvariantsSection {
         }
 
         // Parse header
-        let header =
-            InvariantsHeader::from_bytes(bytes).ok_or(CasError::BufferTooSmall {
-                expected: InvariantsHeader::SIZE,
-                actual: bytes.len(),
-            })?;
+        let header = InvariantsHeader::from_bytes(bytes).ok_or(CasError::BufferTooSmall {
+            expected: InvariantsHeader::SIZE,
+            actual: bytes.len(),
+        })?;
 
         if header.magic != INVARIANTS_MAGIC {
             return Err(CasError::InvalidMagic {
@@ -529,7 +528,7 @@ pub fn decode_instructions(code: &[u8]) -> Result<Vec<Instruction>, CasError> {
         });
     }
     let mut instructions = Vec::with_capacity(code.len() / INSTRUCTION_SIZE);
-    for chunk in code.chunks_exact(INSTRUCTION_SIZE) {
+    for chunk in code.as_chunks::<INSTRUCTION_SIZE>().0 {
         instructions.push(Instruction::from_bytes(chunk)?);
     }
     Ok(instructions)
@@ -1033,4 +1032,3 @@ mod tests {
         assert_eq!(crc, crc32(&data));
     }
 }
-

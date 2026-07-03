@@ -565,4 +565,3 @@ mod tests {
         assert_eq!(with_predicate_6.len(), 1);
     }
 }
-

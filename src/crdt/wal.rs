@@ -44,7 +44,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::store::{AtomId, CrdtKind, NodeNum};
-use crate::utils::{crc32, HLC};
+use crate::utils::{HLC, crc32};
 
 // ============================================================================
 // Constants

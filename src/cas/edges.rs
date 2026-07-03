@@ -15,8 +15,8 @@
 use super::CasError;
 use crate::store::{AtomId, EdgeType, InvalidEdgeType};
 use crate::utils::{
-    bitpack_decode, bitpack_decode_deltas, bitpack_encode_deltas, crc32, BitPackBlockHeader,
-    BITPACK_BLOCK_SIZE,
+    BITPACK_BLOCK_SIZE, BitPackBlockHeader, bitpack_decode, bitpack_decode_deltas,
+    bitpack_encode_deltas, crc32,
 };
 use std::fmt;
 use std::fs::File;
@@ -1638,4 +1638,3 @@ mod tests {
         assert!(store.has_pending_for(&tgt_c));
     }
 }
-

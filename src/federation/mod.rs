@@ -890,7 +890,9 @@ impl CrdtMetadata {
 
         // Merge atom fields
         for (atom_key, entries) in &self.atom_fields {
-            if let Ok(atom_id) = hex::decode(atom_key) && atom_id.len() == 32 {
+            if let Ok(atom_id) = hex::decode(atom_key)
+                && atom_id.len() == 32
+            {
                 let mut arr = [0u8; 32];
                 arr.copy_from_slice(&atom_id);
                 for entry in entries {
@@ -1062,12 +1064,7 @@ pub struct MapsTo {
 
 impl MapsTo {
     /// Create new MapsTo mapping
-    pub fn new(
-        local_id: AtomId,
-        remote_base: BaseId,
-        remote_id: AtomId,
-        confidence: f64,
-    ) -> Self {
+    pub fn new(local_id: AtomId, remote_base: BaseId, remote_id: AtomId, confidence: f64) -> Self {
         MapsTo {
             local_id,
             remote_base,
@@ -1194,7 +1191,10 @@ impl MapsTo {
 
         // 9. Check evidence weight threshold
         if self.evidence_weight() < policy.min_evidence_weight {
-            return TrustCheckResult::EvidenceWeightTooLow(self.evidence_weight(), policy.min_evidence_weight);
+            return TrustCheckResult::EvidenceWeightTooLow(
+                self.evidence_weight(),
+                policy.min_evidence_weight,
+            );
         }
 
         // 10. Check all constraints
@@ -1215,14 +1215,18 @@ impl MapsTo {
                         && let Ok(threshold) = threshold_str.parse::<TrustLevel>()
                         && source_trust < threshold
                     {
-                        return TrustCheckResult::ConstraintNotSatisfied("trust_threshold".to_string());
+                        return TrustCheckResult::ConstraintNotSatisfied(
+                            "trust_threshold".to_string(),
+                        );
                     }
                 }
                 ConstraintType::DomainRestriction => {
                     // Domain restriction is checked at query level, not mapping level
                     // But we can validate the constraint exists and is valid
                     if !constraint.params.contains_key("domain_mask") {
-                        return TrustCheckResult::ConstraintNotSatisfied("domain_restriction: missing domain_mask".to_string());
+                        return TrustCheckResult::ConstraintNotSatisfied(
+                            "domain_restriction: missing domain_mask".to_string(),
+                        );
                     }
                 }
                 ConstraintType::VersionCompatibility => {
@@ -1230,7 +1234,9 @@ impl MapsTo {
                         && let Ok(min_ver) = min_ver_str.parse::<u16>()
                         && FEDERATION_PROTOCOL_VERSION < min_ver
                     {
-                        return TrustCheckResult::ConstraintNotSatisfied("version_compatibility".to_string());
+                        return TrustCheckResult::ConstraintNotSatisfied(
+                            "version_compatibility".to_string(),
+                        );
                     }
                 }
             }
@@ -1240,8 +1246,14 @@ impl MapsTo {
     }
 
     /// Check if mapping is acceptable under policy (returns bool)
-    pub fn is_acceptable(&self, policy: &TrustPolicy, now_ns: u64, source_trust: TrustLevel) -> bool {
-        self.is_acceptable_under(policy, now_ns, source_trust).is_acceptable()
+    pub fn is_acceptable(
+        &self,
+        policy: &TrustPolicy,
+        now_ns: u64,
+        source_trust: TrustLevel,
+    ) -> bool {
+        self.is_acceptable_under(policy, now_ns, source_trust)
+            .is_acceptable()
     }
 
     /// Get mapping age in nanoseconds
@@ -1266,12 +1278,17 @@ impl MapsTo {
 
     /// Check if mapping has specific evidence type
     pub fn has_evidence_type(&self, evidence_type: &EvidenceType) -> bool {
-        self.evidence.iter().any(|e| &e.evidence_type == evidence_type)
+        self.evidence
+            .iter()
+            .any(|e| &e.evidence_type == evidence_type)
     }
 
     /// Get evidence of specific type
     pub fn get_evidence_by_type(&self, evidence_type: &EvidenceType) -> Vec<&MappingEvidence> {
-        self.evidence.iter().filter(|e| &e.evidence_type == evidence_type).collect()
+        self.evidence
+            .iter()
+            .filter(|e| &e.evidence_type == evidence_type)
+            .collect()
     }
 }
 
@@ -1523,24 +1540,25 @@ impl TrustCheckResult {
     pub fn reason(&self) -> String {
         match self {
             TrustCheckResult::Acceptable => "acceptable".to_string(),
-            TrustCheckResult::Expired(expired_at) => 
-                format!("expired at {} ns", expired_at),
-            TrustCheckResult::ConfidenceTooLow(actual, required) => 
-                format!("confidence {} < required {}", actual, required),
-            TrustCheckResult::BaseNotAllowed => 
-                "source base not in allowed list".to_string(),
-            TrustCheckResult::BaseBlocked => 
-                "source base is blocked".to_string(),
-            TrustCheckResult::SourceTrustTooLow(actual, required) => 
-                format!("source trust {} < required {}", actual, required),
-            TrustCheckResult::MissingEvidence => 
-                "required evidence missing".to_string(),
-            TrustCheckResult::EvidenceWeightTooLow(actual, required) => 
-                format!("evidence weight {} < required {}", actual, required),
-            TrustCheckResult::TooOld(age, max_age) => 
-                format!("mapping age {} ns > max {} ns", age, max_age),
-            TrustCheckResult::ConstraintNotSatisfied(constraint) => 
-                format!("constraint not satisfied: {}", constraint),
+            TrustCheckResult::Expired(expired_at) => format!("expired at {} ns", expired_at),
+            TrustCheckResult::ConfidenceTooLow(actual, required) => {
+                format!("confidence {} < required {}", actual, required)
+            }
+            TrustCheckResult::BaseNotAllowed => "source base not in allowed list".to_string(),
+            TrustCheckResult::BaseBlocked => "source base is blocked".to_string(),
+            TrustCheckResult::SourceTrustTooLow(actual, required) => {
+                format!("source trust {} < required {}", actual, required)
+            }
+            TrustCheckResult::MissingEvidence => "required evidence missing".to_string(),
+            TrustCheckResult::EvidenceWeightTooLow(actual, required) => {
+                format!("evidence weight {} < required {}", actual, required)
+            }
+            TrustCheckResult::TooOld(age, max_age) => {
+                format!("mapping age {} ns > max {} ns", age, max_age)
+            }
+            TrustCheckResult::ConstraintNotSatisfied(constraint) => {
+                format!("constraint not satisfied: {}", constraint)
+            }
         }
     }
 }
@@ -1757,7 +1775,8 @@ impl FederationClient {
         }
 
         // Get source trust from peer config
-        let source_trust = self.config
+        let source_trust = self
+            .config
             .find_peer(&base_id)
             .map(|p| p.trust_level)
             .unwrap_or(0);
@@ -1770,7 +1789,10 @@ impl FederationClient {
                 "Mapping trust verification failed: {}",
                 trust_result.reason()
             );
-            return Err(FederationError::TrustTooLow(source_trust, policy.min_source_trust));
+            return Err(FederationError::TrustTooLow(
+                source_trust,
+                policy.min_source_trust,
+            ));
         }
 
         // Additional verification: check returned atom_id matches mapping's remote_id
@@ -2124,7 +2146,11 @@ impl Gateway {
                     continue;
                 }
                 Err(err) => {
-                    tracing::warn!("Forwarded discover failed for peer {:?}: {}", peer.base_id, err);
+                    tracing::warn!(
+                        "Forwarded discover failed for peer {:?}: {}",
+                        peer.base_id,
+                        err
+                    );
                     continue;
                 }
             };
@@ -2190,12 +2216,14 @@ impl Gateway {
                     match self.local_store.get_provenance(&atom_id) {
                         Ok(chain) => {
                             response = response.with_provenance(chain);
-                        },
+                        }
                         Err(_) => { /* no evidence available */ }
                     }
                 }
 
-                if req.include_meta && let Some(meta) = self.local_store.meta.get_meta(&atom_id) {
+                if req.include_meta
+                    && let Some(meta) = self.local_store.meta.get_meta(&atom_id)
+                {
                     let fed_meta = AtomMetadata {
                         atom_type: meta.atom_type,
                         created_at_ns: meta.created_at_ns,
@@ -2213,8 +2241,16 @@ impl Gateway {
                     "Federation fetch: atom {:?} found (body {} bytes, provenance {} nodes, {} edges)",
                     atom_id,
                     response.body.len(),
-                    response.provenance_chain.as_ref().map(|c| c.nodes.len()).unwrap_or(0),
-                    response.provenance_chain.as_ref().map(|c| c.derivation_edges.len()).unwrap_or(0)
+                    response
+                        .provenance_chain
+                        .as_ref()
+                        .map(|c| c.nodes.len())
+                        .unwrap_or(0),
+                    response
+                        .provenance_chain
+                        .as_ref()
+                        .map(|c| c.derivation_edges.len())
+                        .unwrap_or(0)
                 );
                 Ok(response)
             }
@@ -2246,9 +2282,7 @@ impl Gateway {
 
         // Check if compatible enough
         if agreement.compatibility < 0.5 {
-            return NegotiateResponse::reject(
-                "Compatibility too low".to_string(),
-            );
+            return NegotiateResponse::reject("Compatibility too low".to_string());
         }
 
         NegotiateResponse::success(agreement)
@@ -2277,7 +2311,7 @@ impl Gateway {
     // ===================================================================
 
     /// Handle CRDT sync request — REAL CRDT synchronization
-    /// 
+    ///
     /// This implementation:
     /// 1. Exports actual local metadata from meta_store
     /// 2. Merges remote state using CRDT join (not overwrite)
@@ -2293,12 +2327,12 @@ impl Gateway {
         // 1. Export real local metadata before merge
         let mut local_meta = CrdtMetadata::new(*meta_store.actor_id());
         local_meta.hlc_timestamp = meta_store.hlc().to_raw();
-        
+
         // Export all node fields with their CrdtKind
         for (node, field_id, crdt_kind, state_bytes) in meta_store.export_node_fields() {
             local_meta.add_node_field(node, field_id, crdt_kind, state_bytes);
         }
-        
+
         // Export all atom fields with their CrdtKind
         for (atom, field_id, crdt_kind, state_bytes) in meta_store.export_atom_fields() {
             local_meta.add_atom_field(atom, field_id, crdt_kind, state_bytes);
@@ -2315,7 +2349,7 @@ impl Gateway {
         // 2. Merge remote metadata into store using CRDT join
         let remote_field_count = req.metadata.total_fields();
         let join_result = req.metadata.merge_into_store(&mut meta_store);
-        
+
         let join_count = match join_result {
             Ok(count) => count,
             Err(e) => {
@@ -2334,11 +2368,11 @@ impl Gateway {
         // (Changes are already persisted in meta_store by merge_into_store)
         let mut merged_meta = CrdtMetadata::new(*meta_store.actor_id());
         merged_meta.hlc_timestamp = meta_store.hlc().to_raw();
-        
+
         for (node, field_id, crdt_kind, state_bytes) in meta_store.export_node_fields() {
             merged_meta.add_node_field(node, field_id, crdt_kind, state_bytes);
         }
-        
+
         for (atom, field_id, crdt_kind, state_bytes) in meta_store.export_atom_fields() {
             merged_meta.add_atom_field(atom, field_id, crdt_kind, state_bytes);
         }
@@ -2459,8 +2493,8 @@ impl Gateway {
             mappings
                 .iter()
                 .find(|m| {
-                    &m.local_id == local_id 
-                        && &m.remote_base == remote_base 
+                    &m.local_id == local_id
+                        && &m.remote_base == remote_base
                         && m.is_valid_at(now_ns)
                 })
                 .cloned()
@@ -2553,7 +2587,10 @@ pub struct FederationServer {
 #[cfg(feature = "federation")]
 impl FederationServer {
     /// Create a new federation server
-    pub fn new(gateway: Arc<tokio::sync::RwLock<Gateway>>, bind_addr: std::net::SocketAddr) -> Self {
+    pub fn new(
+        gateway: Arc<tokio::sync::RwLock<Gateway>>,
+        bind_addr: std::net::SocketAddr,
+    ) -> Self {
         FederationServer {
             gateway,
             server_handle: None,
@@ -2563,7 +2600,10 @@ impl FederationServer {
 
     /// Start the HTTP server (spawns tokio task)
     pub fn start(&mut self) -> Result<(), String> {
-        use axum::{routing::{get, post}, Router};
+        use axum::{
+            Router,
+            routing::{get, post},
+        };
         use tower_http::cors::{Any, CorsLayer};
 
         let gateway = self.gateway.clone();
@@ -2580,7 +2620,10 @@ impl FederationServer {
 
         let app = Router::new()
             .route("/fetch", post(Self::handle_fetch_route))
-            .route("/negotiate", get(Self::handle_negotiate_get).post(Self::handle_negotiate_post))
+            .route(
+                "/negotiate",
+                get(Self::handle_negotiate_get).post(Self::handle_negotiate_post),
+            )
             .route("/sync", post(Self::handle_sync_route))
             .route("/discover", post(Self::handle_discover_route))
             .route("/health", get(Self::handle_health))
@@ -2634,11 +2677,7 @@ impl FederationServer {
             Ok(resp) => axum::Json(resp),
             Err(_) => {
                 // Return 404 via axum response
-                axum::Json(FetchResponse::new(
-                    [0u8; 32],
-                    Vec::new(),
-                    [0u8; 32],
-                ))
+                axum::Json(FetchResponse::new([0u8; 32], Vec::new(), [0u8; 32]))
             }
         }
     }
@@ -2846,11 +2885,7 @@ mod tests {
     #[test]
     fn test_peer_config() {
         let base_id = [1u8; 32];
-        let peer = PeerConfig::new(
-            base_id,
-            "https://peer.example.com".to_string(),
-            8000,
-        );
+        let peer = PeerConfig::new(base_id, "https://peer.example.com".to_string(), 8000);
 
         assert_eq!(peer.base_id, base_id);
         assert_eq!(peer.endpoint, "https://peer.example.com");
@@ -2862,7 +2897,10 @@ mod tests {
     fn test_peer_api_url() {
         let peer = PeerConfig::new([1u8; 32], "https://peer.example.com".to_string(), 5000);
 
-        assert_eq!(peer.api_url("discover"), "https://peer.example.com/discover");
+        assert_eq!(
+            peer.api_url("discover"),
+            "https://peer.example.com/discover"
+        );
         assert_eq!(
             peer.api_url("fetch/123"),
             "https://peer.example.com/fetch/123"
@@ -2876,13 +2914,7 @@ mod tests {
     #[test]
     fn test_discovery_result() {
         let base_id = [1u8; 32];
-        let result = DiscoveryResult::new(
-            base_id,
-            "test_term".to_string(),
-            0.85,
-            2,
-            9000,
-        );
+        let result = DiscoveryResult::new(base_id, "test_term".to_string(), 0.85, 2, 9000);
 
         assert_eq!(result.base_id, base_id);
         assert_eq!(result.term, "test_term");
@@ -2967,14 +2999,14 @@ mod tests {
     #[test]
     fn test_crdt_metadata_fields() {
         use crate::store::CrdtKind;
-        
+
         let actor_id = ActorId::generate();
         let mut meta = CrdtMetadata::new(actor_id);
 
         // Add node field with CrdtKind
         meta.add_node_field(1, 0x0001, CrdtKind::GCOUNTER, vec![1, 2, 3]);
         meta.add_node_field(1, 0x0002, CrdtKind::PNCOUNTER, vec![4, 5, 6]);
-        
+
         // Add atom field with CrdtKind
         meta.add_atom_field([1u8; 32], 0x0003, CrdtKind::LWW_REG, vec![7, 8, 9]);
 
@@ -2982,7 +3014,7 @@ mod tests {
         assert_eq!(meta.node_fields.get(&1).unwrap().len(), 2);
         assert_eq!(meta.atom_fields.len(), 1);
         assert_eq!(meta.total_fields(), 3);
-        
+
         // Verify CrdtKind is preserved
         let node_entries = meta.node_fields.get(&1).unwrap();
         assert_eq!(node_entries[0].crdt_kind, CrdtKind::GCOUNTER);
@@ -2992,38 +3024,38 @@ mod tests {
 
     #[test]
     fn test_crdt_metadata_merge_into_store() {
-        use crate::store::CrdtKind;
         use crate::crdt::MetaStore;
-        
+        use crate::store::CrdtKind;
+
         // Create two stores with different actors
         let actor1 = ActorId::generate();
         let actor2 = ActorId::generate();
         let mut store1 = MetaStore::new(actor1);
         let mut store2 = MetaStore::new(actor2);
-        
+
         // Add counters to both stores
         let crdt1 = store1.get_node_crdt(1, 0x0001, CrdtKind::GCOUNTER);
         if let crate::crdt::CrdtState::GCounter(gc) = crdt1 {
             gc.inc(actor1, 10);
         }
-        
+
         let crdt2 = store2.get_node_crdt(1, 0x0001, CrdtKind::GCOUNTER);
         if let crate::crdt::CrdtState::GCounter(gc) = crdt2 {
             gc.inc(actor2, 20);
         }
-        
+
         // Export store2 to wire format
         let mut meta2 = CrdtMetadata::new(actor2);
         for (node, field_id, kind, bytes) in store2.export_node_fields() {
             meta2.add_node_field(node, field_id, kind, bytes);
         }
-        
+
         // Merge store2 into store1 using CRDT join
         let result = meta2.merge_into_store(&mut store1);
         assert!(result.is_ok());
         let join_count = result.unwrap();
         assert!(join_count > 0);
-        
+
         // Verify convergence: counter should be 10 + 20 = 30
         let merged_crdt = store1.get_node_crdt(1, 0x0001, CrdtKind::GCOUNTER);
         if let crate::crdt::CrdtState::GCounter(gc) = merged_crdt {
@@ -3035,39 +3067,39 @@ mod tests {
 
     #[test]
     fn test_crdt_sync_idempotent() {
-        use crate::store::CrdtKind;
         use crate::crdt::MetaStore;
-        
+        use crate::store::CrdtKind;
+
         let actor1 = ActorId::generate();
         let actor2 = ActorId::generate();
         let mut store1 = MetaStore::new(actor1);
         let mut store2 = MetaStore::new(actor2);
-        
+
         // Setup same counter in both
         let crdt1 = store1.get_node_crdt(1, 0x0001, CrdtKind::GCOUNTER);
         if let crate::crdt::CrdtState::GCounter(gc) = crdt1 {
             gc.inc(actor1, 10);
         }
-        
+
         let crdt2 = store2.get_node_crdt(1, 0x0001, CrdtKind::GCOUNTER);
         if let crate::crdt::CrdtState::GCounter(gc) = crdt2 {
             gc.inc(actor2, 20);
         }
-        
+
         // Export and merge first time
         let mut meta2 = CrdtMetadata::new(actor2);
         for (node, field_id, kind, bytes) in store2.export_node_fields() {
             meta2.add_node_field(node, field_id, kind, bytes);
         }
         meta2.merge_into_store(&mut store1).unwrap();
-        
+
         // Export and merge second time (should be idempotent)
         let mut meta2_again = CrdtMetadata::new(actor2);
         for (node, field_id, kind, bytes) in store2.export_node_fields() {
             meta2_again.add_node_field(node, field_id, kind, bytes);
         }
         meta2_again.merge_into_store(&mut store1).unwrap();
-        
+
         // Value should still be 30 (idempotent)
         let merged = store1.get_node_crdt(1, 0x0001, CrdtKind::GCOUNTER);
         if let crate::crdt::CrdtState::GCounter(gc) = merged {
@@ -3079,8 +3111,7 @@ mod tests {
     fn test_sync_request() {
         let actor_id = ActorId::generate();
         let meta = CrdtMetadata::new(actor_id);
-        let req = SyncRequest::new([1u8; 32], meta)
-            .with_direction(SyncDirection::Push);
+        let req = SyncRequest::new([1u8; 32], meta).with_direction(SyncDirection::Push);
 
         assert_eq!(req.direction, SyncDirection::Push);
     }
@@ -3137,7 +3168,7 @@ mod tests {
 
         mapping.add_evidence(evidence);
 
-assert_eq!(mapping.evidence.len(), 1);
+        assert_eq!(mapping.evidence.len(), 1);
         assert_eq!(mapping.evidence_weight(), 0.8);
     }
 
@@ -3259,16 +3290,13 @@ assert_eq!(mapping.evidence.len(), 1);
         assert!(default_policy.is_base_allowed(&base1));
 
         // Policy with whitelist
-        let whitelist_policy = TrustPolicy::new()
-            .allow_base(base1)
-            .allow_base(base2);
+        let whitelist_policy = TrustPolicy::new().allow_base(base1).allow_base(base2);
         assert!(whitelist_policy.is_base_allowed(&base1));
         assert!(whitelist_policy.is_base_allowed(&base2));
         assert!(!whitelist_policy.is_base_allowed(&base3));
 
         // Policy with blocked list
-        let blocked_policy = TrustPolicy::new()
-            .block_base(base3);
+        let blocked_policy = TrustPolicy::new().block_base(base3);
         assert!(blocked_policy.is_base_allowed(&base1));
         assert!(!blocked_policy.is_base_allowed(&base3));
 
@@ -3296,7 +3324,10 @@ assert_eq!(mapping.evidence.len(), 1);
         let low = MapsTo::new([1u8; 32], [2u8; 32], [3u8; 32], 0.5);
         let result = low.is_acceptable_under(&policy, now_ns, source_trust);
         assert!(!result.is_acceptable());
-        assert!(matches!(result, TrustCheckResult::ConfidenceTooLow(0.5, 0.7)));
+        assert!(matches!(
+            result,
+            TrustCheckResult::ConfidenceTooLow(0.5, 0.7)
+        ));
     }
 
     #[test]
@@ -3319,8 +3350,7 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_maps_to_acceptable_under_age() {
-        let policy = TrustPolicy::new()
-            .with_max_mapping_age_ns(1000);
+        let policy = TrustPolicy::new().with_max_mapping_age_ns(1000);
 
         let source_trust = 5000u16;
 
@@ -3370,8 +3400,7 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_maps_to_acceptable_under_source_trust() {
-        let policy = TrustPolicy::new()
-            .with_min_source_trust(5000);
+        let policy = TrustPolicy::new().with_min_source_trust(5000);
 
         let now_ns = 1000u64;
 
@@ -3383,7 +3412,10 @@ assert_eq!(mapping.evidence.len(), 1);
         // Too low source trust
         let result = mapping.is_acceptable_under(&policy, now_ns, 2000);
         assert!(!result.is_acceptable());
-        assert!(matches!(result, TrustCheckResult::SourceTrustTooLow(2000, 5000)));
+        assert!(matches!(
+            result,
+            TrustCheckResult::SourceTrustTooLow(2000, 5000)
+        ));
     }
 
     #[test]
@@ -3423,7 +3455,10 @@ assert_eq!(mapping.evidence.len(), 1);
 
         let result = low_weight.is_acceptable_under(&policy, now_ns, source_trust);
         assert!(!result.is_acceptable());
-        assert!(matches!(result, TrustCheckResult::EvidenceWeightTooLow(0.3, 0.5)));
+        assert!(matches!(
+            result,
+            TrustCheckResult::EvidenceWeightTooLow(0.3, 0.5)
+        ));
     }
 
     #[test]
@@ -3466,7 +3501,10 @@ assert_eq!(mapping.evidence.len(), 1);
             TrustCheckResult::SourceTrustTooLow(2000, 5000).reason(),
             "source trust 2000 < required 5000"
         );
-        assert_eq!(TrustCheckResult::BaseBlocked.reason(), "source base is blocked");
+        assert_eq!(
+            TrustCheckResult::BaseBlocked.reason(),
+            "source base is blocked"
+        );
     }
 
     #[test]
@@ -3494,7 +3532,10 @@ assert_eq!(mapping.evidence.len(), 1);
         // Outside time range
         let result = time_constrained.is_acceptable_under(&policy, 2000, source_trust);
         assert!(!result.is_acceptable());
-        assert!(matches!(result, TrustCheckResult::ConstraintNotSatisfied(_)));
+        assert!(matches!(
+            result,
+            TrustCheckResult::ConstraintNotSatisfied(_)
+        ));
     }
 
     // ===================================================================
@@ -3503,8 +3544,8 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_gateway_find_mappings_valid() {
-        use std::sync::Arc;
         use crate::store::api::{MemoryX, StoreConfig};
+        use std::sync::Arc;
 
         // Create a simple store for testing
         let local_base = [1u8; 32];
@@ -3540,7 +3581,7 @@ assert_eq!(mapping.evidence.len(), 1);
         // - expired_mapping (confidence 0.9, expiry 500) -> INVALID (expired)
         // - low_confidence (confidence 0.1, no expiry) -> VALID (in range)
         assert_eq!(valid_mappings.len(), 2);
-        
+
         // Both should have valid confidence (in range)
         for m in &valid_mappings {
             assert!(m.confidence > 0.0 && m.confidence <= 1.0);
@@ -3553,16 +3594,24 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_gateway_find_mappings_trusted() {
-        use std::sync::Arc;
         use crate::store::api::{MemoryX, StoreConfig};
+        use std::sync::Arc;
 
         let local_base = [1u8; 32];
         let trusted_base = [2u8; 32];
         let untrusted_base = [3u8; 32];
 
         // Create config with trusted peer
-        let trusted_peer = PeerConfig::new(trusted_base, "https://trusted.example.com".to_string(), 8000);
-        let untrusted_peer = PeerConfig::new(untrusted_base, "https://untrusted.example.com".to_string(), 100);
+        let trusted_peer = PeerConfig::new(
+            trusted_base,
+            "https://trusted.example.com".to_string(),
+            8000,
+        );
+        let untrusted_peer = PeerConfig::new(
+            untrusted_base,
+            "https://untrusted.example.com".to_string(),
+            100,
+        );
 
         let config = FederationConfig::new(local_base)
             .with_peer(trusted_peer)
@@ -3601,8 +3650,8 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_gateway_find_mapping_to_valid() {
-        use std::sync::Arc;
         use crate::store::api::{MemoryX, StoreConfig};
+        use std::sync::Arc;
 
         let local_base = [1u8; 32];
         let config = FederationConfig::new(local_base);
@@ -3727,7 +3776,8 @@ assert_eq!(mapping.evidence.len(), 1);
         let peer_addr = free_local_addr();
         let peer_base = [3u8; 32];
         let peer_dir = tempdir().unwrap();
-        let mut peer_store = MemoryX::new(StoreConfig::new(peer_dir.path().join("peer_store"))).unwrap();
+        let mut peer_store =
+            MemoryX::new(StoreConfig::new(peer_dir.path().join("peer_store"))).unwrap();
         let payload = build_discovery_test_payload("federated-term", AtomType::FACT, 9000);
         peer_store
             .ingest(&payload, AtomType::FACT, &[], &[])
@@ -3743,7 +3793,8 @@ assert_eq!(mapping.evidence.len(), 1);
 
         let mid_base = [2u8; 32];
         let mid_dir = tempdir().unwrap();
-        let mid_store = Arc::new(MemoryX::new(StoreConfig::new(mid_dir.path().join("mid_store"))).unwrap());
+        let mid_store =
+            Arc::new(MemoryX::new(StoreConfig::new(mid_dir.path().join("mid_store"))).unwrap());
         let peer_config = PeerConfig::new(peer_base, format!("http://{}", peer_addr), 8000);
         let mid_gateway = Gateway::new(
             mid_store,
@@ -3760,8 +3811,15 @@ assert_eq!(mapping.evidence.len(), 1);
 
         peer_server.stop();
 
-        assert!(response.results.is_empty(), "middle gateway should not have local matches");
-        assert_eq!(response.forwarded.len(), 1, "peer result should be forwarded");
+        assert!(
+            response.results.is_empty(),
+            "middle gateway should not have local matches"
+        );
+        assert_eq!(
+            response.forwarded.len(),
+            1,
+            "peer result should be forwarded"
+        );
         assert_eq!(response.forwarded[0].base_id, peer_base);
         assert_eq!(response.forwarded[0].term, "federated-term");
         assert_eq!(response.forwarded[0].hops, 1);
@@ -3770,8 +3828,8 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_gateway_get_base_trust() {
-        use std::sync::Arc;
         use crate::store::api::{MemoryX, StoreConfig};
+        use std::sync::Arc;
 
         let local_base = [1u8; 32];
         let known_base = [2u8; 32];
@@ -3800,10 +3858,10 @@ assert_eq!(mapping.evidence.len(), 1);
 
     #[test]
     fn test_format_base_id() {
-        let base_id = [0xABu8, 0xCD, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 
-                       0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
-                       0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
-                       0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
+        let base_id = [
+            0xABu8, 0xCD, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+            0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+        ];
         let formatted = format_base_id(&base_id);
         assert_eq!(formatted, "abcdef123456789a");
     }

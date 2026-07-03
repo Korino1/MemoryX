@@ -68,9 +68,9 @@
 use std::collections::HashMap;
 
 use crate::store::{CrdtKind, NodeNum, SymId};
-use crate::utils::{crc32, HLC};
+use crate::utils::{HLC, crc32};
 
-use super::{ActorId, CrdtError, Dot, GCounter, LWWReg, ORSet, PNCounter, ACTOR_ID_SIZE};
+use super::{ACTOR_ID_SIZE, ActorId, CrdtError, Dot, GCounter, LWWReg, ORSet, PNCounter};
 
 // ============================================================================
 // Constants

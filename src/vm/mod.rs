@@ -395,4 +395,4 @@ mod tests {
 // Append pub mod abi to vm/mod.rs
 
 pub mod abi;
-pub use abi::{eval_invariants, InvariantResult};
+pub use abi::{InvariantResult, eval_invariants};

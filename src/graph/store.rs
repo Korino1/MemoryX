@@ -47,8 +47,8 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::slice;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use memmap2::Mmap;
 
@@ -371,9 +371,7 @@ impl BitPackBlock {
         self.base = 0;
         self.count = 0;
         // Keep payload allocation
-        for word in &mut self.payload {
-            *word = 0;
-        }
+        self.payload.fill(0);
     }
 }
 
@@ -1844,45 +1842,42 @@ impl GraphStore {
             if store.manifest.edge_type_mask & (1u64 << (edge_type_u32 - 1)) != 0
                 && let Some(et) = EdgeType::from_u32(edge_type_u32)
             {
-                    // Try mmap-based zero-copy first
-                    let offsets_path = store
-                        .base_path
-                        .join(format!("edges_{}{}", edge_type_u32, OFFSETS_SUFFIX));
-                    let targets_path = store
-                        .base_path
-                        .join(format!("edges_{}{}", edge_type_u32, TARGETS_SUFFIX));
-                    let attrs_path = store
-                        .base_path
-                        .join(format!("edges_{}{}", edge_type_u32, ATTRS_SUFFIX));
+                // Try mmap-based zero-copy first
+                let offsets_path = store
+                    .base_path
+                    .join(format!("edges_{}{}", edge_type_u32, OFFSETS_SUFFIX));
+                let targets_path = store
+                    .base_path
+                    .join(format!("edges_{}{}", edge_type_u32, TARGETS_SUFFIX));
+                let attrs_path = store
+                    .base_path
+                    .join(format!("edges_{}{}", edge_type_u32, ATTRS_SUFFIX));
 
-                    if offsets_path.exists() && targets_path.exists() && attrs_path.exists() {
-                        // Set up mmap for zero-copy access
-                        let offsets_file = File::open(&offsets_path)?;
-                        let targets_file = File::open(&targets_path)?;
-                        let attrs_file = File::open(&attrs_path)?;
+                if offsets_path.exists() && targets_path.exists() && attrs_path.exists() {
+                    // Set up mmap for zero-copy access
+                    let offsets_file = File::open(&offsets_path)?;
+                    let targets_file = File::open(&targets_path)?;
+                    let attrs_file = File::open(&attrs_path)?;
 
-                        let offsets_mmap = unsafe { Mmap::map(&offsets_file)? };
-                        let targets_mmap = unsafe { Mmap::map(&targets_file)? };
-                        let attrs_mmap = unsafe { Mmap::map(&attrs_file)? };
+                    let offsets_mmap = unsafe { Mmap::map(&offsets_file)? };
+                    let targets_mmap = unsafe { Mmap::map(&targets_file)? };
+                    let attrs_mmap = unsafe { Mmap::map(&attrs_file)? };
 
-                        let triple = Arc::new(MmapTriple {
-                            offsets: offsets_mmap,
-                            targets: targets_mmap,
-                            attrs: attrs_mmap,
-                        });
+                    let triple = Arc::new(MmapTriple {
+                        offsets: offsets_mmap,
+                        targets: targets_mmap,
+                        attrs: attrs_mmap,
+                    });
 
-                        store.mmap_refs.insert(et, Arc::clone(&triple));
+                    store.mmap_refs.insert(et, Arc::clone(&triple));
 
-                        // Also load into memory for in-memory operations
-                        let layer = CsrLayer::load_from_files(
-                            &store.base_path,
-                            et,
-                            store.manifest.node_count,
-                        )?;
-                        if let Some(layer) = layer {
-                            store.base_layers.insert(et, layer);
-                        }
+                    // Also load into memory for in-memory operations
+                    let layer =
+                        CsrLayer::load_from_files(&store.base_path, et, store.manifest.node_count)?;
+                    if let Some(layer) = layer {
+                        store.base_layers.insert(et, layer);
                     }
+                }
             }
         }
 
@@ -2265,9 +2260,7 @@ impl GraphStore {
 
                 for entry in edges.iter().rev() {
                     let key = (entry.src_node, entry.dst_node);
-                    if seen.insert(key, entry.is_deleted()).is_none()
-                        && !entry.is_deleted()
-                    {
+                    if seen.insert(key, entry.is_deleted()).is_none() && !entry.is_deleted() {
                         unique.push(*entry);
                     }
                 }

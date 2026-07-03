@@ -6,7 +6,6 @@
 //! - Query and answer retrieval
 //! - Context branching for hypothesis exploration
 
-use memoryx::prelude::*;
 use memoryx::cas::{
     claims::{ClaimRecord, ClaimsSection},
     evidence::EvidenceSection,
@@ -14,9 +13,8 @@ use memoryx::cas::{
     meta::{MetaField, MetaFieldKind, MetaSection, MetaValue},
     symbols::SymbolsSection,
 };
-use memoryx::store::api::{
-    AnswerPack, CtxId, MemoryX, StoreConfig, StoreError,
-};
+use memoryx::prelude::*;
+use memoryx::store::api::{AnswerPack, CtxId, MemoryX, StoreConfig, StoreError};
 use memoryx::vm::ClaimData;
 use std::path::PathBuf;
 
@@ -190,8 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         qualifiers_mask: 0,
     };
 
-    let ctx_hypothesis =
-        create_hypothesis_branch(&mut store, ctx_main, atom_id1, &branch_claim)?;
+    let ctx_hypothesis = create_hypothesis_branch(&mut store, ctx_main, atom_id1, &branch_claim)?;
     println!("   Created hypothesis branch: {:?}", ctx_hypothesis);
 
     // List conflicts (would be populated in real scenario)

@@ -2,11 +2,11 @@
 //!
 //! Provides fast approximate nearest neighbor search using multi-layer graph navigation.
 
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
-use crate::store::NodeNum;
 use super::embedding::cosine_similarity;
+use crate::store::NodeNum;
 
 /// Neighbor entry in the HNSW graph
 #[derive(Clone, Debug)]
@@ -32,7 +32,10 @@ impl PartialOrd for Neighbor {
 impl Ord for Neighbor {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order for min-heap behavior (we want lowest similarity at top)
-        other.similarity.partial_cmp(&self.similarity).unwrap_or(Ordering::Equal)
+        other
+            .similarity
+            .partial_cmp(&self.similarity)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -102,7 +105,9 @@ impl HnswGraph {
         }
 
         let layers: Vec<Layer> = (0..=level)
-            .map(|_| Layer { connections: Vec::new() })
+            .map(|_| Layer {
+                connections: Vec::new(),
+            })
             .collect();
 
         let node = HnswNode {
@@ -261,7 +266,9 @@ impl HnswGraph {
 
         while !candidates.is_empty() {
             let best = candidates.pop().unwrap();
-            let best_idx = self.node_map.get(best.node_id as usize)
+            let best_idx = self
+                .node_map
+                .get(best.node_id as usize)
                 .and_then(|x| *x)
                 .unwrap_or(current_idx);
 
@@ -279,7 +286,9 @@ impl HnswGraph {
             }
 
             // Explore neighbors
-            if let Some(node) = self.nodes.get(best_idx) && !node.layers.is_empty() {
+            if let Some(node) = self.nodes.get(best_idx)
+                && !node.layers.is_empty()
+            {
                 for &neighbor_id in &node.layers[0].connections {
                     if !visited.contains(&(neighbor_id as usize)) {
                         visited.insert(neighbor_id as usize);
@@ -299,10 +308,7 @@ impl HnswGraph {
 
         // Return top k
         result_list.truncate(std::cmp::min(k, result_list.len()));
-        result_list
-            .into_iter()
-            .map(|(sim, id)| (id, sim))
-            .collect()
+        result_list.into_iter().map(|(sim, id)| (id, sim)).collect()
     }
 
     /// Get number of nodes in the graph.

@@ -1,5 +1,5 @@
 //! Native API для MemoryX с полным доступом ко всем функциям
-//! 
+//!
 //! Этот модуль предоставляет прямой доступ к возможностям MemoryX без ограничений MCP:
 //! - Batch ingest с chunking по `batch_size`
 //! - Parallel batch query с bounded concurrency
@@ -59,8 +59,8 @@ impl MemoryXNative {
         data_dir: P,
         config: NativeConfig,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let store_config = StoreConfig::new(data_dir.as_ref().to_path_buf())
-            .with_mmap_mode(config.mmap_mode);
+        let store_config =
+            StoreConfig::new(data_dir.as_ref().to_path_buf()).with_mmap_mode(config.mmap_mode);
 
         let store = MemoryX::new(store_config)?;
 
@@ -94,12 +94,8 @@ impl MemoryXNative {
                         break;
                     };
 
-                    match store.ingest(
-                        &atom.payload,
-                        atom.atom_type,
-                        &atom.claims,
-                        &atom.evidence,
-                    ) {
+                    match store.ingest(&atom.payload, atom.atom_type, &atom.claims, &atom.evidence)
+                    {
                         Ok(atom_id) => {
                             results.push(atom_id);
                         }
@@ -149,7 +145,8 @@ impl MemoryXNative {
             return Ok(results);
         }
 
-        let mut results: Vec<Option<AnswerPack>> = std::iter::repeat_with(|| None).take(total).collect();
+        let mut results: Vec<Option<AnswerPack>> =
+            std::iter::repeat_with(|| None).take(total).collect();
         let mut pending = queries.into_iter().enumerate();
 
         loop {
@@ -160,13 +157,15 @@ impl MemoryXNative {
                 };
 
                 let store = Arc::clone(&self.store);
-                handles.push(tokio::task::spawn_blocking(move || -> Result<(usize, AnswerPack), String> {
-                    let store = store.blocking_read();
-                    store
-                        .answer(&query, ctx)
-                        .map(|answer| (index, answer))
-                        .map_err(|error| error.to_string())
-                }));
+                handles.push(tokio::task::spawn_blocking(
+                    move || -> Result<(usize, AnswerPack), String> {
+                        let store = store.blocking_read();
+                        store
+                            .answer(&query, ctx)
+                            .map(|answer| (index, answer))
+                            .map_err(|error| error.to_string())
+                    },
+                ));
             }
 
             if handles.is_empty() {
@@ -174,9 +173,9 @@ impl MemoryXNative {
             }
 
             for handle in handles {
-                let worker_result = handle
-                    .await
-                    .map_err(|error| std::io::Error::other(format!("batch_query worker panicked: {error}")))?;
+                let worker_result = handle.await.map_err(|error| {
+                    std::io::Error::other(format!("batch_query worker panicked: {error}"))
+                })?;
                 let (index, answer) = worker_result.map_err(std::io::Error::other)?;
                 results[index] = Some(answer);
             }
@@ -209,7 +208,11 @@ impl MemoryXNative {
         question: &str,
         ctx_id: Option<CtxId>,
     ) -> Result<Subgraph, Box<dyn std::error::Error + Send + Sync>> {
-        let answer = self.store.read().await.answer(question, ctx_id.unwrap_or(0))?;
+        let answer = self
+            .store
+            .read()
+            .await
+            .answer(question, ctx_id.unwrap_or(0))?;
 
         Ok(Subgraph {
             nodes: answer.graph.nodes.clone(),
@@ -570,10 +573,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("--------------------------------");
 
     let answers = api
-        .batch_query(
-            vec!["rust".to_string(), "memory safety".to_string()],
-            None,
-        )
+        .batch_query(vec!["rust".to_string(), "memory safety".to_string()], None)
         .await?;
 
     println!("Batch query returned {} answers", answers.len());

@@ -40,15 +40,15 @@ use std::cmp::Ordering;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering as AtomicOrdering};
 
 use memmap2::{Mmap, MmapOptions};
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
-use crate::cas::edges::{DeferredEdgesStore, ResolvedEdge, DEFAULT_DEFERRED_RETENTION_CYCLES};
-use crate::cas::{AtomId, CasError, RecordHeader, RecordView, RECORD_MAGIC};
+use crate::cas::edges::{DEFAULT_DEFERRED_RETENTION_CYCLES, DeferredEdgesStore, ResolvedEdge};
+use crate::cas::{AtomId, CasError, RECORD_MAGIC, RecordHeader, RecordView};
 use crate::utils::crc32;
 
 // ============================================================================
@@ -418,10 +418,8 @@ impl BloomFilter {
         let num_words = num_bits.div_ceil(64);
         let mut bits = Vec::with_capacity(num_words);
 
-        for chunk in bytes.chunks_exact(8) {
-            bits.push(u64::from_le_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-            ]));
+        for chunk in bytes.as_chunks::<8>().0 {
+            bits.push(u64::from_le_bytes(*chunk));
         }
 
         // Handle remaining bytes if not aligned
@@ -1549,8 +1547,14 @@ impl Compactor {
 
     fn next_unused_target_seg_id(&self, mut seg_id: u32) -> u32 {
         loop {
-            let seg_path = self.base_dir.join(format!("{}{:05}.{}", SEGMENT_PREFIX, seg_id, SEGMENT_EXTENSION));
-            let idx_path = self.base_dir.join(format!("{}{:05}.{}", SEGMENT_PREFIX, seg_id, INDEX_EXTENSION));
+            let seg_path = self.base_dir.join(format!(
+                "{}{:05}.{}",
+                SEGMENT_PREFIX, seg_id, SEGMENT_EXTENSION
+            ));
+            let idx_path = self.base_dir.join(format!(
+                "{}{:05}.{}",
+                SEGMENT_PREFIX, seg_id, INDEX_EXTENSION
+            ));
             if !seg_path.exists() && !idx_path.exists() {
                 return seg_id;
             }
@@ -1621,7 +1625,8 @@ impl Compactor {
                         };
 
                         if should_replace {
-                            atom_records.insert(atom_id, (seg_idx as u32, entry.seg_offset, body, flags));
+                            atom_records
+                                .insert(atom_id, (seg_idx as u32, entry.seg_offset, body, flags));
                         }
                     }
                     Err(e) => {
@@ -1796,8 +1801,8 @@ impl CasStore {
     pub fn open(base_dir: &Path, size_limit: Option<u64>) -> CasIoResult<Self> {
         std::fs::create_dir_all(base_dir)?;
 
-        let deferred_edges = DeferredEdgesStore::open(base_dir)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        let deferred_edges =
+            DeferredEdgesStore::open(base_dir).map_err(|e| io::Error::other(e.to_string()))?;
 
         let store = CasStore {
             base_dir: base_dir.to_path_buf(),
@@ -1827,8 +1832,14 @@ impl CasStore {
 
     /// Get a read guard to the initialized CAS writer.
     pub fn writer(&self) -> CasIoResult<parking_lot::MappedRwLockReadGuard<'_, CasWriter>> {
-        parking_lot::RwLockReadGuard::try_map(self.writer.read(), |writer| writer.as_ref())
-            .map_err(|_| CasIoError::Io(io::Error::new(io::ErrorKind::NotConnected, "Writer not initialized")))
+        parking_lot::RwLockReadGuard::try_map(self.writer.read(), |writer| writer.as_ref()).map_err(
+            |_| {
+                CasIoError::Io(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Writer not initialized",
+                ))
+            },
+        )
     }
 
     /// Write a record
@@ -1957,7 +1968,9 @@ impl CasStore {
         let mut store = self.deferred_edges.lock();
         let dropped = store.apply_retention(max_cycles);
 
-        if dropped > 0 && let Err(e) = store.save() {
+        if dropped > 0
+            && let Err(e) = store.save()
+        {
             tracing::warn!("Failed to save deferred edges after retention: {}", e);
         }
 
@@ -1984,9 +1997,7 @@ impl CasStore {
     /// Flush deferred edges to disk.
     pub fn flush_deferred_edges(&self) -> CasIoResult<()> {
         let mut store = self.deferred_edges.lock();
-        store
-            .save()
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        store.save().map_err(|e| io::Error::other(e.to_string()))?;
         Ok(())
     }
 

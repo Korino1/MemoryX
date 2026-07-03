@@ -1109,4 +1109,3 @@ mod tests {
         assert!(!header.is_valid_now(2_000_000_000));
     }
 }
-

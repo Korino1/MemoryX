@@ -3,8 +3,8 @@
 //! Provides vector-based search as fallback when traditional
 //! inverted/graph lookups don't return sufficient results.
 
-use crate::store::NodeNum;
 use super::index::EmbeddingIndex;
+use crate::store::NodeNum;
 
 /// ANN Backend for semantic search.
 ///

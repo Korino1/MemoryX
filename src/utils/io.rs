@@ -23,7 +23,7 @@ use std::time::Duration;
 // ============================================================================
 
 #[cfg(target_os = "linux")]
-use io_uring::{opcode, types, IoUring};
+use io_uring::{IoUring, opcode, types};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
