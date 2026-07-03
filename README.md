@@ -173,6 +173,26 @@ MemoryX keeps bases in explicit scoped roots:
 - Project scope: `<repo>/.memoryx/bases/<name>`
 - User scope: `<home>/.memoryx/bases/<name>`
 
+The user chooses the storage location with `--base-scope`:
+
+```bash
+# Store the base inside the current project folder
+cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
+
+# Store the base in the shared user-level MemoryX folder
+cargo +nightly run --release --bin memoryx -- --base-scope user init --base default
+```
+
+MCP uses the same choice:
+
+```bash
+# MCP uses the project-local base
+cargo +nightly run --release --features mcp --bin memoryx -- --base-scope project serve --base default --stdio
+
+# MCP uses the shared user-level base
+cargo +nightly run --release --features mcp --bin memoryx -- --base-scope user serve --base default --stdio
+```
+
 `memoryx init` creates a structure like:
 
 ```text
@@ -367,6 +387,26 @@ MemoryX хранит базы в явных scoped roots:
 
 - Project scope: `<repo>/.memoryx/bases/<name>`
 - User scope: `<home>/.memoryx/bases/<name>`
+
+Пользователь выбирает место хранения через `--base-scope`:
+
+```bash
+# Хранить базу внутри текущей папки проекта
+cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
+
+# Хранить базу в общей пользовательской папке MemoryX
+cargo +nightly run --release --bin memoryx -- --base-scope user init --base default
+```
+
+MCP использует тот же выбор:
+
+```bash
+# MCP работает с базой внутри папки проекта
+cargo +nightly run --release --features mcp --bin memoryx -- --base-scope project serve --base default --stdio
+
+# MCP работает с общей пользовательской базой
+cargo +nightly run --release --features mcp --bin memoryx -- --base-scope user serve --base default --stdio
+```
 
 После `memoryx init` структура выглядит так:
 
