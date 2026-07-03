@@ -283,10 +283,11 @@ benchmarks/            Honest RAG-comparison scaffold
 
 ## Status
 
-- Current crate version: `0.1.0`.
-- Public API and wire formats are pre-1.0 and may change.
-- The codebase is store-backed and tested, but the project should still be
-  treated as early-stage software.
+- Current crate version: `1.0.0`.
+- Public API and wire formats are stable for the 1.0 release line. Breaking
+  changes should use a new major version.
+- The codebase is store-backed and tested, but users should still validate
+  deployment behavior for their own workloads.
 - MCP is optional and requires the `mcp` feature.
 - Administrative base maintenance commands such as `import`, `export`,
   `verify-integrity`, `rebuild-index`, and `repair` are CLI commands.
@@ -507,9 +508,11 @@ CLI и MCP открывают одну и ту же durable store layout. `updat
 
 ## Статус
 
-- Текущая версия crate: `0.1.0`.
-- Public API и wire formats пока pre-1.0 и могут меняться.
-- Кодовая база рабочая и покрыта тестами, но проект всё ещё ранней стадии.
+- Текущая версия crate: `1.0.0`.
+- Public API и wire formats стабильны для release line 1.0. Breaking changes
+  должны идти через новую major version.
+- Кодовая база рабочая и покрыта тестами, но пользователям всё равно нужно
+  проверять поведение на своих workload-ах.
 - MCP опционален и требует feature `mcp`.
 - Административные операции обслуживания базы остаются CLI-командами.
 
