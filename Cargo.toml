@@ -2,6 +2,22 @@
 name = "memoryx"
 version = "0.1.0"
 edition = "2024"
+description = "Local-first proof-grade knowledge base with atoms, contexts, provenance, MCP, and federation."
+readme = "README.md"
+repository = "https://github.com/Korino1/MemoryX"
+license-file = "LICENSE.md"
+keywords = ["knowledge-base", "mcp", "provenance", "rag", "local-first"]
+categories = ["database-implementations", "command-line-utilities"]
+exclude = [
+    ".cargo/",
+    ".codex/",
+    "AGENTS.md",
+    "AGENT_PROGRESS_LOG.md",
+    "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md",
+    "ORCHESTRATION_PLAN.md",
+    "ORCHESTRATOR_CONTEXT_COMPACT.md",
+    "SKF_README_CONFORMANCE_AUDIT_*.md",
+]
 
 [[bin]]
 name = "memoryx"
@@ -60,13 +76,13 @@ windows-sys = { version = "0.59", features = [
 [dev-dependencies]
 tempfile = "3.10"
 
-# MCP Server example (original - 10 tools)
+# Legacy demonstrational MCP server example. Production MCP is `memoryx serve --stdio`.
 [[example]]
 name = "mcp_server"
 path = "examples/mcp_server.rs"
 required-features = ["mcp"]
 
-# MCP Server Full example (14 tools - complete coverage)
+# Full demonstrational MCP server example. Production MCP is `memoryx serve --stdio`.
 [[example]]
 name = "mcp_server_full"
 path = "examples/mcp_server_full.rs"

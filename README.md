@@ -253,6 +253,11 @@ cargo +nightly run --release --bin memoryx -- history --base default --limit 20
 - Нативное API: `examples/native_api.rs` и `examples/basic.rs`
 - Общая структура crate: `src/lib.rs`
 
+## Лицензия
+
+Проект публикуется без open-source лицензии. Условия по умолчанию:
+proprietary / all rights reserved. См. `LICENSE.md`.
+
 ---
 
 English summary below.
@@ -564,3 +569,8 @@ The crate exposes a native Rust API under `memoryx::store::api` and related modu
 - LLM boundary: `docs/LLM_BOUNDARY.md`
 - Full MCP example: `examples/mcp_server_full.rs`
 - Full crate layout: `src/lib.rs`
+
+## License
+
+This project is not published under an open-source license. Default terms are
+proprietary / all rights reserved. See `LICENSE.md`.
