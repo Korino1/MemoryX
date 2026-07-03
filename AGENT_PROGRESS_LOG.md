@@ -666,7 +666,7 @@ Verification:
 
 Done:
 
-- Updated README with QueryContract compile/execute examples and current
+- Updated README with QueryContract compile/execute examples and then-current
   33-tool MCP surface.
 - Added `docs/QUERY_CONTRACT.md`.
 - Added `docs/ANSWER_PACK.md`.
@@ -743,17 +743,43 @@ Done:
   README, `memoryx serve --help`, production MCP `tools/list`, and
   demonstrational MCP examples.
 - Clarified that production MCP source of truth is `memoryx serve --stdio`.
-- Clarified that production MCP exposes 33 store-backed tools, while example
-  MCP servers are demonstrational and may have smaller/older tool sets.
+- Clarified that production MCP then exposed 33 store-backed tools, while
+  example MCP servers are demonstrational and may have smaller/older tool sets.
 
 Verification:
 
 - `cargo run --quiet -- --help`
 - `cargo run --quiet -- serve --help`
 - `memoryx serve --stdio` JSON-RPC `tools/list`:
-  stdout contains only JSON-RPC, diagnostics go to stderr, tool count is 33.
+  stdout contains only JSON-RPC, diagnostics go to stderr, tool count was 33
+  before the later Multi-Base MCP extension.
 - `cargo fmt --check`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo build --release --features mcp`
 - Cleaned generated runtime dirs after tests.
+
+## 2026-07-03: Multi-Base MCP layer
+
+Done:
+
+- Added Phase 19 / Multi-Base MCP Layer to
+  `CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md`.
+- Added `McpServerState` registry for connected bases, active base tracking,
+  and store cache.
+- Added MCP tools:
+  `list_bases`, `active_base`, `connect_base`, `switch_base`, `query_base`.
+- Preserved compatibility:
+  existing MCP tools use active base when `base_ref` is omitted.
+- Added optional `base_ref` routing for store-backed MCP tools.
+- Updated README with 38-tool MCP surface and multi-base workflow examples.
+- Added regression coverage for connect/list/query/switch multi-base behavior.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo build --release --features mcp`
+- `memoryx serve --stdio` JSON-RPC `tools/list`:
+  tool count is 38 and multi-base tools are present.
