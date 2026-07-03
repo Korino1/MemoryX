@@ -6,7 +6,7 @@
 //! - Compact: Optimize storage through compaction
 //! - Export/Import: Data exchange in multiple formats
 //! - Stats: Storage analytics and reporting
-//! - Serve: MCP (Model Context Protocol) server
+//! - Serve: MCP over stdio or HTTP federation server
 //!
 //! # Usage
 //!
@@ -20,7 +20,10 @@
 //! # Show statistics
 //! memoryx stats --base /path/to/base
 //!
-//! # Start MCP server
+//! # Start production MCP over stdio
+//! memoryx serve --base /path/to/base --stdio
+//!
+//! # Start HTTP federation server
 //! memoryx serve --base /path/to/base --port 8080
 //! ```
 
@@ -363,7 +366,7 @@ enum Commands {
         ctx: u32,
     },
 
-    /// Start MCP server
+    /// Start MCP stdio transport or HTTP federation server
     Serve {
         /// MemoryX base path or base name
         #[arg(short, long)]
@@ -2990,7 +2993,7 @@ fn cmd_snapshot(base: &Path, ctx: u32, format: OutputFormat) -> CliResult<()> {
     Ok(())
 }
 
-/// Start MCP server
+/// Start MCP stdio transport or HTTP federation server.
 #[cfg(feature = "mcp")]
 fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
     use std::sync::Arc;

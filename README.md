@@ -117,6 +117,10 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 `memoryx serve --stdio` запускает store-backed MCP transport. Для этого нужен feature `mcp`.
 
+Он открывает полный production surface из 33 инструментов для query,
+authoring, provenance, context branching, graph operations и безопасных
+write-операций базы:
+
 Доступные инструменты:
 
 - `query`
@@ -175,32 +179,10 @@ cargo +nightly run --release --features mcp --bin memoryx -- serve --base defaul
 
 ### Полный MCP example
 
-`examples/mcp_server_full.rs` - демонстрационный stdio MCP server вокруг того же store-backed набора операций. Источник истины для production MCP - `memoryx serve --stdio`.
-
-- `query`
-- `search_lex`
-- `search_graph`
-- `search_semantic`
-- `ingest`
-- `batch_ingest`
-- `update_atom`
-- `delete_atom`
-- `history`
-- `register_source`
-- `list_sources`
-- `attach_atom_source`
-- `create_entity`
-- `list_entities`
-- `alias_entity`
-- `assert_relation`
-- `correct_relation`
-- `create_context`
-- `list_contexts`
-- `branch_context`
-- `list_conflicts`
-- `graph_neighbors`
-- `graph_walk`
-- `extract_subgraph`
+`examples/mcp_server_full.rs` - демонстрационный stdio MCP server. Он полезен
+как пример интеграции, но не является production entrypoint и может иметь
+меньший/устаревающий набор инструментов. Источник истины для production MCP -
+`memoryx serve --stdio`.
 
 Пример:
 
@@ -256,9 +238,9 @@ cargo +nightly run --release --bin memoryx -- history --base default --limit 20
 - Версия crate сейчас `0.1.0`, то есть это ещё pre-1.0 проект.
 - Кодовая база рабочая и store-backed, но публичный API и wire formats проектно-специфичны.
 - `mcp` - опциональный feature. Без него `serve` не поднимет MCP surface.
-- `memoryx serve --stdio` уже даёт полный production MCP surface для работы с базой.
+- `memoryx serve --stdio` уже даёт полный production MCP surface из 33 tools для работы с базой.
 - `examples/mcp_server_full.rs` остаётся демонстрационной example-обвязкой, а не production entry point.
-- Административные операции вроде `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index` и `repair` остаются CLI-командами. MCP имеет read-only `history` tool для просмотра последних write-операций базы.
+- MCP имеет write/authoring tools (`ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `register_source`, `create_entity`, `branch_context` и другие). Bulk/base maintenance операции вроде `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index` и `repair` остаются CLI-командами; MCP имеет `history` tool для просмотра последних write-операций базы.
 
 ## Для Дальнейшего Чтения
 
@@ -455,32 +437,10 @@ MCP call examples:
 
 ### Full MCP example
 
-`examples/mcp_server_full.rs` is a demonstrational stdio MCP server around the same store-backed operation set. The production MCP source of truth is `memoryx serve --stdio`:
-
-- `query`
-- `search_lex`
-- `search_graph`
-- `search_semantic`
-- `ingest`
-- `batch_ingest`
-- `update_atom`
-- `delete_atom`
-- `history`
-- `register_source`
-- `list_sources`
-- `attach_atom_source`
-- `create_entity`
-- `list_entities`
-- `alias_entity`
-- `assert_relation`
-- `correct_relation`
-- `create_context`
-- `list_contexts`
-- `branch_context`
-- `list_conflicts`
-- `graph_neighbors`
-- `graph_walk`
-- `extract_subgraph`
+`examples/mcp_server_full.rs` is a demonstrational stdio MCP server. It is useful
+as an integration example, but it is not the production entry point and may have
+a smaller or older tool set. The production MCP source of truth is
+`memoryx serve --stdio`.
 
 Example:
 
@@ -587,9 +547,9 @@ examples/
 - The crate version is `0.1.0`, so treat this as pre-1.0 software.
 - The codebase is functional and store-backed, but the API and wire formats are project-specific.
 - `mcp` is an optional feature. Without it, `serve` will fail with a feature error.
-- `memoryx serve --stdio` now exposes the full production MCP surface for working with the knowledge base.
+- `memoryx serve --stdio` now exposes the full 33-tool production MCP surface for working with the knowledge base.
 - `examples/mcp_server_full.rs` remains a demonstrational example server, not the production entry point.
-- Administrative operations such as `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index`, and `repair` remain CLI commands rather than standalone MCP tools.
+- MCP includes write/authoring tools (`ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `register_source`, `create_entity`, `branch_context`, and others). Bulk/base maintenance operations such as `init`, `import`, `export`, `stats`, `compact`, `verify-integrity`, `rebuild-index`, and `repair` remain CLI commands rather than standalone MCP tools.
 
 ## Native Rust API
 

@@ -145,6 +145,8 @@ renderer explains
 
 ### A1. Добавить модуль query contract
 
+Статус: реализовано.
+
 Файлы:
 
 - добавить `src/query/contract.rs`
@@ -191,6 +193,8 @@ pub struct QueryContract {
 
 ### A2. Компилятор natural query -> QueryContract
 
+Статус: реализовано.
+
 Файлы:
 
 - расширить `src/query/solver.rs` или вынести в `src/query/compiler.rs`
@@ -208,6 +212,8 @@ pub struct QueryContract {
 - Запрос из `Concept/Расширение.txt` превращается в `QueryContract` с `MUST`, `MUST_NOT`, `SHOULD` и `OutputContract`.
 
 ### A3. Adapter QueryContract -> solver input
+
+Статус: реализовано.
 
 Файлы:
 
@@ -231,6 +237,8 @@ pub struct QueryContract {
 
 ### B1. Source model
 
+Статус: реализовано.
+
 Файлы:
 
 - добавить `src/store/source.rs` или расширить `src/cas/evidence.rs`
@@ -249,6 +257,8 @@ pub struct QueryContract {
 - `EvidenceRef` может быть прослежен до `SourceRecord` с конкретной location/version.
 
 ### B2. Evidence model upgrade
+
+Статус: реализовано.
 
 Файлы:
 
@@ -269,6 +279,8 @@ pub struct QueryContract {
 
 ### B3. Claim model upgrade
 
+Статус: реализовано.
+
 Файлы:
 
 - `src/cas/claims.rs`
@@ -287,6 +299,8 @@ pub struct QueryContract {
 - Solver и renderer не могут выдать factual claim без epistemic status.
 
 ### B4. Entity and relation authoring model
+
+Статус: реализовано.
 
 Файлы:
 
@@ -405,6 +419,8 @@ pub struct QueryContract {
 
 ### D1. AnswerStatus
 
+Статус: реализовано.
+
 Файлы:
 
 - `src/store/api.rs`
@@ -421,6 +437,8 @@ pub struct QueryContract {
 - Клиент не должен угадывать состояние ответа по confidence или limitations.
 
 ### D2. CoverageReport
+
+Статус: реализовано.
 
 Файлы:
 
@@ -446,6 +464,8 @@ weighted_covered_required_gaps / weighted_total_required_gaps
 
 ### D3. ConfidenceVector
 
+Статус: реализовано.
+
 Файлы:
 
 - `src/store/api.rs`
@@ -463,6 +483,8 @@ weighted_covered_required_gaps / weighted_total_required_gaps
 - `0.87` больше не является единственным объяснением уверенности.
 
 ### D4. Rejection summaries and trace
+
+Статус: реализовано.
 
 Файлы:
 
@@ -482,6 +504,8 @@ weighted_covered_required_gaps / weighted_total_required_gaps
 - Пользователь может понять, почему кандидат не попал в ответ.
 
 ### D5. StructuredAnswer and renderer boundary
+
+Статус: реализовано.
 
 Файлы:
 
@@ -545,6 +569,8 @@ pub struct CandidateV2 {
 
 ### E2. Добавить специализированные retrievers
 
+Статус: реализовано.
+
 Файлы:
 
 - `src/query/retrieval.rs`
@@ -606,6 +632,8 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### F1. Типизация узлов и рёбер AnswerGraph
 
+Статус: реализовано.
+
 Файлы:
 
 - `src/store/api.rs`
@@ -623,6 +651,8 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 - `AnswerGraph` становится доказательным объектом, а не просто набором найденных nodes.
 
 ### F2. Многокритериальная минимизация
+
+Статус: реализовано.
 
 Файлы:
 
@@ -1211,3 +1241,65 @@ cargo build --release --features mcp
 - MCP поддерживает contract query, proof answer и authoring operations.
 - Есть regression tests на constraints, conflicts, provenance, partial answers, unsupported facts и reproducibility.
 - `cargo fmt`, `cargo clippy -D warnings`, `cargo test`, release build проходят без warnings/errors.
+
+## 18. Финальная Полировка Перед Публикацией
+
+Эта часть не добавляет новые концептуальные фичи. Она фиксирует оставшуюся
+release-readiness работу поверх уже реализованного расширения.
+
+### L1. Нормализация статусов плана
+
+Статус: выполнено.
+
+Задачи:
+
+- Проставить явные `Статус: реализовано` для ранних секций, которые уже
+  закрыты в `AGENT_PROGRESS_LOG.md`, но не имеют отдельной строки статуса в
+  плане.
+- Не менять критерии готовности задним числом: статус должен отражать только
+  фактически реализованное и проверенное.
+
+Критерий готовности:
+
+- По плану видно, что обязательная реализация `Concept/Расширение.txt`
+  закрыта, а оставшаяся работа относится только к упаковке.
+
+### L2. Публичная документация и help surface
+
+Статус: выполнено.
+
+Задачи:
+
+- Сверить README, CLI help, MCP stdio help и examples.
+- Убрать устаревшие заявления про демонстрационные MCP examples как
+  production entrypoint.
+- Зафиксировать, что production MCP entrypoint - `memoryx serve --stdio`.
+- Зафиксировать фактический production MCP surface: 33 store-backed tools.
+- Чётко разделить MCP write/authoring tools и CLI-only base maintenance
+  operations (`import`, `export`, `verify-integrity`, `rebuild-index`,
+  `repair`, release/admin scripts).
+
+Критерий готовности:
+
+- Новый пользователь не получает противоречивых инструкций о том, как
+  подключать и использовать MCP.
+
+### L3. Финальный release gate
+
+Статус: выполнено.
+
+Задачи:
+
+- Проверить `memoryx --help`.
+- Проверить `memoryx serve --help`.
+- Проверить `tools/list` для `memoryx serve --stdio`.
+- Прогнать `cargo fmt --check`.
+- Прогнать `cargo clippy --all-targets --all-features -- -D warnings`.
+- Прогнать `cargo test --all-targets --all-features --quiet`.
+- Прогнать `cargo build --release --features mcp`.
+- Очистить generated runtime dirs после тестов.
+
+Критерий готовности:
+
+- Рабочая копия чистая, release gate проходит, в корне нет мусорных runtime
+  баз или архивов.

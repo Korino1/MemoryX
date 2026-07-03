@@ -730,3 +730,30 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo build --release --features mcp`
+
+## 2026-07-03: Release polish plan started
+
+Done:
+
+- Added final release-polish section L1-L3 to
+  `CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md`.
+- Normalized missing `Статус: реализовано` markers for already completed
+  early extension sections.
+- Started public surface cleanup:
+  README, `memoryx serve --help`, production MCP `tools/list`, and
+  demonstrational MCP examples.
+- Clarified that production MCP source of truth is `memoryx serve --stdio`.
+- Clarified that production MCP exposes 33 store-backed tools, while example
+  MCP servers are demonstrational and may have smaller/older tool sets.
+
+Verification:
+
+- `cargo run --quiet -- --help`
+- `cargo run --quiet -- serve --help`
+- `memoryx serve --stdio` JSON-RPC `tools/list`:
+  stdout contains only JSON-RPC, diagnostics go to stderr, tool count is 33.
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo build --release --features mcp`
+- Cleaned generated runtime dirs after tests.

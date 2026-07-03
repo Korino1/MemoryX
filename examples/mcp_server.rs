@@ -1,9 +1,11 @@
 //! MemoryX MCP (Model Context Protocol) Server
 //!
-//! This module implements a complete MCP server for MemoryX, exposing
+//! This module implements a demonstrational MCP server for MemoryX, exposing
 //! a hybrid API:
-//! - **MCP Tools**: Limited API for AI assistants (10 tools)
+//! - **MCP Tools**: Legacy limited API for AI assistants (10 demo tools)
 //! - **Native API**: Full access for Rust code via direct MemoryX store
+//!
+//! Production MCP source of truth: `memoryx serve --stdio`.
 //!
 //! # Architecture
 //!
@@ -305,10 +307,10 @@ impl ToolContent {
 // MemoryX MCP Server
 // ============================================================================
 
-/// MemoryX MCP Server with hybrid architecture
+/// MemoryX MCP demo server with hybrid architecture
 ///
 /// Provides:
-/// - MCP Tools: Limited API for AI assistants
+/// - MCP Tools: legacy limited API for AI assistants
 /// - Native API: Direct MemoryX access for Rust code
 /// - Streaming: Async streaming for large queries
 struct MemoryXServer {

@@ -1,6 +1,8 @@
-//! MemoryX Full MCP Server v0.2.0
+//! MemoryX Demonstrational MCP Server v0.2.0
 //!
-//! Complete MCP (Model Context Protocol) server with all 24 tools:
+//! Demonstrational MCP (Model Context Protocol) server with 24 example tools.
+//! Production MCP source of truth: `memoryx serve --stdio`, currently exposing
+//! the full 33-tool store-backed surface.
 //! - query: Natural language query
 //! - search_lex: Lexical search
 //! - search_graph: Graph search
@@ -1999,7 +2001,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "--help" | "-h" => {
-                println!("MemoryX Full MCP Server v0.2.0");
+                println!("MemoryX Demonstrational MCP Server v0.2.0");
                 println!();
                 println!("Usage: mcp_server_full [OPTIONS]");
                 println!();
@@ -2015,7 +2017,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  project -> <cwd>/.memoryx/bases/default");
                 println!("  user    -> <home>/.memoryx/bases/default");
                 println!();
-                println!("MCP Tools (24 total):");
+                println!("Demo MCP tools (24 total; production uses memoryx serve --stdio):");
                 println!("  1. query           - Natural language query");
                 println!("  2. search_lex      - Lexical search");
                 println!("  3. search_graph    - Graph search");
