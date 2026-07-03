@@ -1,11 +1,26 @@
-MemoryX Proprietary License
+# MemoryX License
 
-Copyright (c) 2026 Korino1. All rights reserved.
+MemoryX is offered under a dual-license model:
 
-This repository is published for evaluation, demonstration, and controlled
-distribution only. No permission is granted to copy, modify, distribute,
-sublicense, sell, or use the software in production unless a separate written
-license agreement explicitly grants those rights.
+1. Open-source license: GNU Affero General Public License version 3 or later
+   (`AGPL-3.0-or-later`).
+2. Separate commercial license: available under a written agreement with the
+   copyright holder.
 
-If you received this software without a separate written license, you may view
-the source code but you may not redistribute it or use it to provide services.
+The full AGPLv3 text is included in `COPYING`.
+
+If you use, modify, distribute, or provide MemoryX as a network service under
+the open-source license, you must comply with the AGPL-3.0-or-later terms,
+including the network source-code availability requirement for modified server
+deployments.
+
+Organizations that cannot use AGPL software may request a separate commercial
+license. A commercial license is not granted by this repository; it requires a
+separate written agreement.
+
+## Contributions
+
+External contributions require a contribution policy that preserves the ability
+to keep MemoryX dual-licensed. Until a CLA or equivalent contributor agreement
+is published and accepted, maintainers should not merge external contributions
+that would compromise dual licensing.
