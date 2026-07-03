@@ -33,11 +33,24 @@ context control, and durable project memory, MemoryX is the intended tool.
 | Aspect | Classic RAG | MemoryX |
 | --- | --- | --- |
 | Storage unit | Text chunks | Knowledge atoms with claims and evidence |
-| Main goal | Retrieve similar passages | Assemble a consistent answer graph |
-| Contradictions | Often hidden or blended | Stored as conflicts or branches |
-| Context | Usually implicit and global | Explicit contexts and policies |
-| Explainability | "Found in document X" | Provenance plus supporting graph |
-| Best fit | FAQ, documentation search | Research, engineering, audit, timelines, decision memory |
+| Source of truth | Retrieved text plus model interpretation | Stored atoms, claims, evidence, contexts, and graph links |
+| Retrieval role | Retrieval often drives the final answer | Retrieval proposes candidates; validation and solver decide |
+| Query control | Prompt instructions and top-k settings | Explicit `QueryContract` with constraints and policies |
+| Reasoning path | Query -> retrieve chunks -> generate text | Backward gaps + forward candidates + fixed-point answer assembly |
+| Output | Usually generated prose | Structured `AnswerPack` and proof-style `AnswerGraph` |
+| Contradictions | Often hidden, blended, or resolved by the model | Stored as conflicts, alternatives, or branches |
+| Missing evidence | Can become hallucinated text | Reported as unknowns, limitations, gaps, or insufficient evidence |
+| Context | Usually implicit and global | Explicit contexts, branches, project/user scopes, and policies |
+| Temporal changes | Old chunks can be retrieved as current | History, `SUPERSEDES`, tombstones, snapshots, and temporal policy |
+| Explainability | "Found in document X" | Claim/evidence/source provenance plus supporting graph |
+| Reproducibility | Depends on model, prompt, and retrieval state | Snapshot + query contract + structured answer state |
+| Multi-project work | Usually separate indexes or conventions | Scoped bases plus Multi-Base MCP routing |
+| Assistant operations | Often query-only retrieval endpoint | MCP read/write/admin tools for maintaining the knowledge base |
+| Federation | Often merges retrieved text | Compatible claims/provenance/metadata between bases |
+| Durability | Index rebuild depends on external document pipeline | CAS integrity, repair/rebuild, history, and snapshots |
+| Best fit | FAQ and documentation search | Research, engineering, audit, timelines, decision memory, agent memory |
+
+Full comparison: `docs/MEMORYX_VS_RAG.md`.
 
 ## Build Requirements
 
@@ -325,11 +338,24 @@ Rust-движок базы знаний с:
 | Аспект | Обычный RAG | MemoryX |
 | --- | --- | --- |
 | Единица хранения | Текстовые чанки | Атомы знания с claims и evidence |
-| Цель | Найти похожие фрагменты | Собрать согласованный answer graph |
-| Противоречия | Часто скрываются или смешиваются | Хранятся как conflicts или branches |
-| Контекст | Обычно неявный и общий | Явные contexts и policies |
-| Объяснимость | "Найдено в документе X" | Provenance плюс supporting graph |
-| Лучший сценарий | FAQ, поиск по документации | Исследования, инженерия, аудит, timelines, память решений |
+| Источник истины | Найденный текст плюс интерпретация модели | Атомы, утверждения, evidence, contexts и graph links |
+| Роль retrieval | Retrieval часто фактически ведёт к ответу | Retrieval предлагает candidates; validation и solver принимают решение |
+| Управление запросом | Prompt-инструкции и top-k настройки | Явный `QueryContract` с constraints и policies |
+| Ход рассуждения | Query -> retrieve chunks -> generate text | Backward gaps + forward candidates + fixed-point сборка ответа |
+| Выход | Обычно сгенерированный текст | Structured `AnswerPack` и proof-style `AnswerGraph` |
+| Противоречия | Часто скрываются, смешиваются или решаются моделью | Хранятся как conflicts, alternatives или branches |
+| Недостающие факты | Могут превратиться в галлюцинацию | Возвращаются как unknowns, limitations, gaps или insufficient evidence |
+| Контекст | Обычно неявный и общий | Явные contexts, branches, project/user scopes и policies |
+| Временные изменения | Старые chunks могут выдаваться как текущие | History, `SUPERSEDES`, tombstones, snapshots и temporal policy |
+| Объяснимость | "Найдено в документе X" | Claim/evidence/source provenance плюс supporting graph |
+| Воспроизводимость | Зависит от модели, prompt и retrieval state | Snapshot + query contract + structured answer state |
+| Несколько проектов | Обычно отдельные индексы или соглашения | Scoped bases плюс Multi-Base MCP routing |
+| Работа ассистента | Часто только query endpoint | MCP read/write/admin tools для ведения базы |
+| Федерация | Часто объединяет найденный текст | Совместимые claims/provenance/metadata между базами |
+| Надёжность хранения | Rebuild index зависит от внешнего document pipeline | CAS integrity, repair/rebuild, history и snapshots |
+| Лучший сценарий | FAQ и поиск по документации | Исследования, инженерия, аудит, timelines, память решений, agent memory |
+
+Полное сравнение: `docs/MEMORYX_VS_RAG.md`.
 
 ## Быстрый Старт
 
