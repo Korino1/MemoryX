@@ -166,6 +166,88 @@ Important distinction:
 - `memoryx serve` without `--stdio` starts the HTTP federation server, not MCP.
 - `examples/mcp_server_full.rs` is a demonstration example, not the production entry point.
 
+### MCP Client Configuration
+
+Most MCP-capable IDEs and agent clients use a JSON object shaped like
+`mcpServers`. Adjust the command path if you run a prebuilt `memoryx.exe`
+instead of `cargo`.
+
+Project-local base:
+
+```json
+{
+  "mcpServers": {
+    "memoryx-project": {
+      "command": "cargo",
+      "args": [
+        "+nightly",
+        "run",
+        "--release",
+        "--features",
+        "mcp",
+        "--bin",
+        "memoryx",
+        "--",
+        "--base-scope",
+        "project",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+Shared user-level base:
+
+```json
+{
+  "mcpServers": {
+    "memoryx-user": {
+      "command": "cargo",
+      "args": [
+        "+nightly",
+        "run",
+        "--release",
+        "--features",
+        "mcp",
+        "--bin",
+        "memoryx",
+        "--",
+        "--base-scope",
+        "user",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+Prebuilt executable example:
+
+```json
+{
+  "mcpServers": {
+    "memoryx": {
+      "command": "E:\\Memory bank\\memoryx.exe",
+      "args": [
+        "--base-scope",
+        "project",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
 Example MCP tool calls:
 
 ```json
@@ -201,6 +283,31 @@ Multi-base MCP workflow:
 Existing store-backed MCP tools use the active base by default. Most of them can
 also accept `base_ref` to operate on a connected base without changing the
 active base.
+
+### MCP Tool Map
+
+| Category | Tools | Purpose |
+| --- | --- | --- |
+| Query and proof output | `query`, `query_base`, `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`, `get_provenance_path` | Compile strict queries, execute them, inspect proof graph output, and trace evidence. |
+| Multi-base routing | `list_bases`, `active_base`, `connect_base`, `switch_base` | Discover project/user bases, connect additional bases, and choose the active base. |
+| Retrieval | `search_lex`, `search_graph`, `search_semantic` | Search lexical, graph, and semantic indexes without treating retrieval as final truth. |
+| Atom writes and history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Add atoms, batch-write atoms, create superseding versions, create tombstones, and inspect recent operations. |
+| Claim correction | `supersede_claim`, `correct_claim`, `correct_relation` | Replace outdated or incorrect knowledge while keeping provenance and history. |
+| Sources and provenance | `register_source`, `list_sources`, `attach_atom_source` | Register source records and attach atoms to source/provenance paths. |
+| Entities and relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Maintain structured entities, aliases, entity merges/splits, claims, and relations. |
+| Contexts and conflicts | `create_context`, `list_contexts`, `branch_context`, `list_conflicts` | Create contexts, branch assumptions, and inspect unresolved conflicts. |
+| Graph traversal | `graph_neighbors`, `graph_walk`, `extract_subgraph` | Traverse graph links and extract a local proof/reasoning subgraph. |
+
+Recommended agent workflow:
+
+1. Call `active_base` or `list_bases` first.
+2. Use `connect_base` if the needed project/user base is not connected.
+3. Use `compile_query_contract` for non-trivial questions.
+4. Use `query` or `query_base` with `base_ref` for answer assembly.
+5. Use `get_provenance_path`, `explain_answer_graph`, or `extract_subgraph`
+   before presenting factual claims to a user.
+6. Use write tools only when the user explicitly asks the agent to update the
+   knowledge base.
 
 ## Storage Layout
 
@@ -444,6 +551,88 @@ contexts, conflicts, graph traversal, history и multi-base routing.
 - `memoryx serve` без `--stdio` запускает HTTP federation server, это не MCP.
 - `examples/mcp_server_full.rs` - демонстрационный пример, не production entry point.
 
+### MCP Конфигурация Клиента
+
+Большинство IDE и AI-agent клиентов с MCP используют JSON вида `mcpServers`.
+Если запускается готовый `memoryx.exe`, замените `command` и `args` на путь к
+исполняемому файлу.
+
+Project-local base:
+
+```json
+{
+  "mcpServers": {
+    "memoryx-project": {
+      "command": "cargo",
+      "args": [
+        "+nightly",
+        "run",
+        "--release",
+        "--features",
+        "mcp",
+        "--bin",
+        "memoryx",
+        "--",
+        "--base-scope",
+        "project",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+User-level base:
+
+```json
+{
+  "mcpServers": {
+    "memoryx-user": {
+      "command": "cargo",
+      "args": [
+        "+nightly",
+        "run",
+        "--release",
+        "--features",
+        "mcp",
+        "--bin",
+        "memoryx",
+        "--",
+        "--base-scope",
+        "user",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+Пример с готовым exe:
+
+```json
+{
+  "mcpServers": {
+    "memoryx": {
+      "command": "E:\\Memory bank\\memoryx.exe",
+      "args": [
+        "--base-scope",
+        "project",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
 Multi-base MCP workflow:
 
 ```json
@@ -465,6 +654,31 @@ Multi-base MCP workflow:
 Старые MCP tools используют active base по умолчанию. Большинство
 store-backed tools также могут принять `base_ref`, чтобы работать с
 подключённой базой без смены active base.
+
+### Карта MCP Инструментов
+
+| Категория | Tools | Назначение |
+| --- | --- | --- |
+| Query и proof output | `query`, `query_base`, `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`, `get_provenance_path` | Компилировать строгие запросы, выполнять их, смотреть answer graph и evidence. |
+| Multi-base routing | `list_bases`, `active_base`, `connect_base`, `switch_base` | Найти project/user базы, подключить дополнительные базы и выбрать active base. |
+| Retrieval | `search_lex`, `search_graph`, `search_semantic` | Искать по lexical, graph и semantic индексам без превращения retrieval в источник истины. |
+| Atom writes и history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Добавлять atoms, batch-write, создавать superseding versions, tombstones и смотреть историю. |
+| Claim correction | `supersede_claim`, `correct_claim`, `correct_relation` | Исправлять устаревшие или неверные знания с сохранением provenance/history. |
+| Sources и provenance | `register_source`, `list_sources`, `attach_atom_source` | Регистрировать источники и связывать atoms с source/provenance paths. |
+| Entities и relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Вести entities, aliases, merges/splits, claims и relations. |
+| Contexts и conflicts | `create_context`, `list_contexts`, `branch_context`, `list_conflicts` | Создавать contexts, ветвить assumptions и смотреть unresolved conflicts. |
+| Graph traversal | `graph_neighbors`, `graph_walk`, `extract_subgraph` | Обходить graph links и извлекать локальный proof/reasoning subgraph. |
+
+Рекомендуемый workflow для AI-агента:
+
+1. Сначала вызвать `active_base` или `list_bases`.
+2. Если нужная база не подключена, использовать `connect_base`.
+3. Для сложных вопросов использовать `compile_query_contract`.
+4. Для ответа использовать `query` или `query_base` с `base_ref`.
+5. Перед утверждениями пользователю проверять `get_provenance_path`,
+   `explain_answer_graph` или `extract_subgraph`.
+6. Write tools использовать только если пользователь явно попросил обновить
+   базу знаний.
 
 ## Где Хранится База
 
