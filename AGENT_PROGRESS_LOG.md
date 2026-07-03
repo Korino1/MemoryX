@@ -715,3 +715,18 @@ Verification:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features --quiet`
 - `cargo run --quiet -- init --help`
+
+## 2026-07-03: Full verification gate
+
+Done:
+
+- Re-ran the extension-level quality/release gate after K2.
+- Verified the release binary builds with the `mcp` feature enabled.
+- Recorded K3 status in `CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md`.
+
+Verification:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all-targets --all-features --quiet`
+- `cargo build --release --features mcp`

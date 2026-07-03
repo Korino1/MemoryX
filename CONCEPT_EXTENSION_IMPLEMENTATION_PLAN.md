@@ -1043,6 +1043,16 @@ expected_gap_coverage * evidence_quality * constraint_selectivity / execution_co
 
 ### K3. Full verification gate
 
+Статус: выполнено.
+
+Результат:
+
+- `cargo fmt --check` проходит.
+- `cargo clippy --all-targets --all-features -- -D warnings` проходит без
+  warnings.
+- `cargo test --all-targets --all-features --quiet` проходит.
+- `cargo build --release --features mcp` проходит.
+
 Команды:
 
 ```bash
