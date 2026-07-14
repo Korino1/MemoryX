@@ -2645,18 +2645,60 @@ fn read_query_contract(path: &Path) -> CliResult<QueryContract> {
     }
 }
 
+fn answer_graph_json(graph: &memoryx::store::api::AnswerGraph) -> serde_json::Value {
+    let nodes = graph
+        .nodes
+        .iter()
+        .map(|node| {
+            serde_json::json!({
+                "atom_id": hex::encode(node.atom_ref.atom_id),
+                "node_num": node.atom_ref.node_num,
+                "atom_type": node.atom_type.to_string(),
+                "trust": node.trust,
+                "branch_ctx_id": node.branch_ctx_id,
+                "evidence_ref_count": node.evidence_refs.len(),
+                "source_link_count": node
+                    .direct_evidence
+                    .iter()
+                    .filter(|record| record.source_id.is_some())
+                    .count(),
+                "direct_evidence": node.direct_evidence,
+            })
+        })
+        .collect::<Vec<_>>();
+    let edges = graph
+        .edges
+        .iter()
+        .map(|edge| {
+            serde_json::json!({
+                "src_idx": edge.src_idx,
+                "dst_idx": edge.dst_idx,
+                "edge_type": format!("{:?}", edge.edge_type),
+                "confidence": edge.confidence,
+                "derived": edge.derived,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "ctx_id": graph.ctx_id,
+        "node_count": graph.node_count(),
+        "edge_count": graph.edge_count(),
+        "evidence_record_count": graph.evidence_record_count(),
+        "source_link_count": graph.source_link_count(),
+        "branch_lineage": graph.branch_lineage,
+        "nodes": nodes,
+        "edges": edges,
+    })
+}
+
 fn answer_pack_json(answer: &memoryx::store::api::AnswerPack) -> serde_json::Value {
     serde_json::json!({
         "status": format!("{:?}", answer.status),
         "selected_ctx": answer.selected_ctx,
         "confidence": answer.confidence,
         "snapshot": answer.snapshot,
-        "graph": {
-            "ctx_id": answer.graph.ctx_id,
-            "node_count": answer.graph.node_count(),
-            "edge_count": answer.graph.edge_count(),
-            "branch_lineage": answer.graph.branch_lineage,
-        },
+        "graph": answer_graph_json(&answer.graph),
         "claims": answer.claims,
         "claims_v2": answer.claims_v2,
         "evidence": answer.evidence,
@@ -5131,12 +5173,7 @@ fn mcp_explain_answer_graph_response(
                 "status": format!("{:?}", answer.status),
                 "snapshot": answer.snapshot,
                 "selected_ctx": answer.selected_ctx,
-                "graph": {
-                    "ctx_id": answer.graph.ctx_id,
-                    "node_count": answer.graph.node_count(),
-                    "edge_count": answer.graph.edge_count(),
-                    "branch_lineage": answer.graph.branch_lineage,
-                },
+                "graph": answer_graph_json(&answer.graph),
                 "coverage_report": answer.coverage_report,
                 "query_trace": answer.query_trace,
                 "rejected_candidates": answer.rejected_candidates,
