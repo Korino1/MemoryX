@@ -587,6 +587,20 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
             .iter()
             .any(|record| record["source_id"] == 1)
     );
+    assert!(answer["graph"]["evidence_record_count"].as_u64().unwrap() > 0);
+    assert!(answer["graph"]["source_link_count"].as_u64().unwrap() > 0);
+    let source_node = answer["graph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["atom_id"] == atom_id)
+        .expect("source-backed atom must be present in serialized AnswerGraph");
+    assert_eq!(source_node["source_link_count"], 1);
+    assert_eq!(source_node["direct_evidence"][0]["source_id"], 1);
+    assert_eq!(
+        source_node["direct_evidence"][0]["source_location"]["path"],
+        "docs/mx01-source.txt"
+    );
     assert!(
         answer["claims"]
             .as_array()

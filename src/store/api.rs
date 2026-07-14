@@ -773,8 +773,10 @@ impl EvidenceLink {
 
         EvidenceLink {
             source_atom_id,
-            source_id: parent_link.source_id,
-            source_location: parent_link.source_location.clone(),
+            // A derivation edge identifies an atom dependency, not an external
+            // source. The traversed atom's own attachment is resolved separately.
+            source_id: None,
+            source_location: None,
             evidence_kind: EvidenceKind::DERIVED,
             confidence: propagated_confidence.clamp(0.0, 1.0),
             trust: propagated_trust,
@@ -1860,6 +1862,9 @@ pub struct AgNode {
     pub hard_conflicts: u32,
     pub soft_conflicts: u32,
     pub evidence_refs: Vec<EvidenceRef>,
+    /// Source-bearing direct evidence resolved from `evidence_refs` by MemoryX.
+    /// This is the canonical public provenance representation for this node.
+    pub direct_evidence: Vec<EvidenceRecord>,
     pub derived_claims: Vec<ClaimData>,
     /// Branch context ID - indicates which TMS branch this node belongs to (SKF-1.1 §3.2)
     /// When a candidate triggers NeedBranch, the new context ID is stored here,
@@ -1883,6 +1888,7 @@ impl AgNode {
             hard_conflicts: 0,
             soft_conflicts: 0,
             evidence_refs: Vec::new(),
+            direct_evidence: Vec::new(),
             derived_claims: Vec::new(),
             branch_ctx_id: None,
         }
@@ -2013,6 +2019,23 @@ impl AnswerGraph {
             ctx_id: 0,
             branch_lineage: Vec::new(),
         }
+    }
+
+    /// Number of source-bearing evidence records exposed by graph nodes.
+    pub fn evidence_record_count(&self) -> usize {
+        self.nodes
+            .iter()
+            .map(|node| node.direct_evidence.len())
+            .sum()
+    }
+
+    /// Number of graph evidence records linked to registered external sources.
+    pub fn source_link_count(&self) -> usize {
+        self.nodes
+            .iter()
+            .flat_map(|node| &node.direct_evidence)
+            .filter(|record| record.source_id.is_some())
+            .count()
     }
     /// Create with capacity
     #[inline]
@@ -5506,9 +5529,16 @@ impl MemoryX {
 
     fn enrich_answer_sources(&self, pack: &mut AnswerPack) -> Result<(), StoreError> {
         pack.evidence_records.clear();
-        for evidence in &pack.evidence {
+        for node in &mut pack.graph.nodes {
+            node.direct_evidence.clear();
+            for evidence in &node.evidence_refs {
+                node.direct_evidence
+                    .push(self.evidence_record_for_ref(evidence)?);
+            }
+            // AnswerPack keeps a compatibility aggregate derived from the
+            // canonical graph-node records, never independently enriched.
             pack.evidence_records
-                .push(self.evidence_record_for_ref(evidence)?);
+                .extend(node.direct_evidence.iter().cloned());
         }
         pack.refresh_coverage_counts();
         for alternate in &mut pack.alternates {
@@ -6610,7 +6640,7 @@ impl MemoryX {
 
         // Step 6: Parse EDGES section and extract DERIVED_FROM edges
         if let Some(edges_bytes) = edges_data {
-            self.build_derivation_chain(edges_bytes, atom_id, meta_trust, &mut chain);
+            self.build_derivation_chain(edges_bytes, atom_id, meta_trust, &mut chain)?;
         }
 
         // Add root node to chain
@@ -6635,103 +6665,65 @@ impl MemoryX {
         root_atom_id: &AtomId,
         root_trust: TrustLevel,
         chain: &mut ProvenanceChain,
-    ) {
-        // EDGES section format:
-        // u32 edge_count
-        // For each edge: u64 src_node, u64 dst_node, u32 edge_type, u32 weight
-        if edges_data.len() < 4 {
-            return;
+    ) -> Result<(), StoreError> {
+        if edges_data.is_empty() {
+            return Ok(());
         }
 
-        let edge_count =
-            u32::from_le_bytes([edges_data[0], edges_data[1], edges_data[2], edges_data[3]])
-                as usize;
-
-        let mut offset = 4;
+        let edges = crate::cas::edges::EdgesSection::from_bytes(edges_data)?;
+        let targets = edges
+            .get_targets(EdgeType::DERIVED_FROM.to_u32())
+            .unwrap_or_default();
         let mut depth = 1; // First derivation level
 
-        for _ in 0..edge_count {
-            if offset + 24 > edges_data.len() {
-                break;
-            }
+        for target in targets {
+            let source_node_num = u64::from(target.refid);
+            let Some(&source_atom_id) = self.meta.get_atom_by_node(source_node_num) else {
+                continue;
+            };
+            let source_metadata = self.meta.get_meta(&source_atom_id);
+            let source_trust = source_metadata
+                .map(|metadata| metadata.trust_level)
+                .unwrap_or(root_trust);
 
-            let _src_node = u64::from_le_bytes([
-                edges_data[offset],
-                edges_data[offset + 1],
-                edges_data[offset + 2],
-                edges_data[offset + 3],
-                edges_data[offset + 4],
-                edges_data[offset + 5],
-                edges_data[offset + 6],
-                edges_data[offset + 7],
-            ]);
+            chain.add_derivation(DerivationEdge::new(
+                *root_atom_id,
+                source_atom_id,
+                depth,
+                chain.overall_confidence,
+                source_trust,
+            ));
 
-            let dst_node = u64::from_le_bytes([
-                edges_data[offset + 8],
-                edges_data[offset + 9],
-                edges_data[offset + 10],
-                edges_data[offset + 11],
-                edges_data[offset + 12],
-                edges_data[offset + 13],
-                edges_data[offset + 14],
-                edges_data[offset + 15],
-            ]);
+            // This link describes the atom-to-atom derivation only. External
+            // source identity belongs exclusively to the source atom node below.
+            chain.add_direct_evidence(
+                EvidenceLink::new(
+                    source_atom_id,
+                    EvidenceKind::DERIVED,
+                    chain.overall_confidence,
+                    source_trust,
+                    SectionKind::EVIDENCE,
+                    0,
+                    0,
+                )
+                .with_depth(depth),
+            );
 
-            let edge_type = u32::from_le_bytes([
-                edges_data[offset + 16],
-                edges_data[offset + 17],
-                edges_data[offset + 18],
-                edges_data[offset + 19],
-            ]);
-
-            let _weight = u32::from_le_bytes([
-                edges_data[offset + 20],
-                edges_data[offset + 21],
-                edges_data[offset + 22],
-                edges_data[offset + 23],
-            ]);
-
-            offset += 24;
-
-            // DERIVED_FROM edge (edge_type = 9)
-            if edge_type == 9 {
-                // Resolve dst_node to AtomId using public method
-                if let Some(&source_atom_id) = self.meta.get_atom_by_node(dst_node) {
-                    // Create derivation edge
-                    let derivation_edge = DerivationEdge::new(
-                        *root_atom_id,
-                        source_atom_id,
-                        depth,
-                        chain.overall_confidence,
-                        root_trust,
-                    );
-
-                    chain.add_derivation(derivation_edge);
-
-                    // Create derived evidence link
-                    if let Some(first_evidence) = chain.direct_evidence.first() {
-                        let derived_link =
-                            EvidenceLink::derived_from(source_atom_id, first_evidence, depth);
-                        chain.add_direct_evidence(derived_link);
-                    }
-
-                    // Add source atom as provenance node
-                    if let Some(source_node_num) = self.loc_index.get_node_num(&source_atom_id) {
-                        let source_node = ProvenanceNode::new(
-                            source_atom_id,
-                            source_node_num,
-                            AtomType::FACT, // Assume source is a fact
-                        )
+            if let Some(metadata) = source_metadata {
+                let mut source_node =
+                    ProvenanceNode::new(source_atom_id, source_node_num, metadata.atom_type)
                         .with_depth(depth);
-
-                        chain.add_node(source_node);
-                    }
-
-                    // Increase depth for next level
-                    depth += 1;
+                if let Some(source_evidence) =
+                    self.attached_source_evidence_link(source_atom_id, metadata)?
+                {
+                    source_node.add_evidence(source_evidence);
                 }
+                chain.add_node(source_node);
             }
+            depth += 1;
         }
+
+        Ok(())
     }
 
     /// Get legacy provenance as Vec<EvidenceRef> (backward compatibility)
@@ -7811,6 +7803,14 @@ mod tests {
         atom_type: AtomType,
         claim: Option<ClaimData>,
     ) -> Vec<u8> {
+        build_full_test_payload_with_claim_and_edges(atom_type, claim, Vec::new())
+    }
+
+    fn build_full_test_payload_with_claim_and_edges(
+        atom_type: AtomType,
+        claim: Option<ClaimData>,
+        edges_bytes: Vec<u8>,
+    ) -> Vec<u8> {
         // Create SYMBOLS section with symbols for claims (SKF-1.1 lexical retrieval requirement)
         let mut symbols_section = crate::cas::symbols::SymbolsSection::new();
         // Add symbols for subject and predicate indices
@@ -7842,7 +7842,6 @@ mod tests {
         let claims_bytes = claims_section.to_bytes();
 
         let invariants_bytes = crate::cas::invariants::InvariantsSection::new().to_bytes();
-        let edges_bytes = vec![0u8; 0]; // EDGES section: empty (no edges)
         let evidence_bytes = crate::cas::evidence::EvidenceSection::new().to_bytes();
 
         // Meta section with proper format
@@ -8097,6 +8096,21 @@ mod tests {
         assert_eq!(contexts[1].parent_ctx, Some(0));
         assert_eq!(contexts[1].branch_reason, BranchReason::Hypothesis);
         assert_eq!(reopened.active_context(), 1);
+    }
+
+    #[test]
+    fn test_pre_context_state_base_opens_with_empty_context_manager() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+
+        {
+            let _store = MemoryX::new(config.clone()).unwrap();
+        }
+        assert!(!config.contexts_path().exists());
+
+        let mut reopened = MemoryX::new(config).unwrap();
+        assert!(reopened.list_contexts().is_empty());
+        assert_eq!(reopened.create_context(0).unwrap(), 0);
     }
 
     #[test]
@@ -8747,6 +8761,166 @@ mod tests {
         let answer = reopened.answer("subject_7", 0).unwrap();
         assert!(answer.coverage_report.evidence_record_count > 0);
         assert!(answer.coverage_report.source_link_count > 0);
+    }
+
+    #[test]
+    fn test_distinct_sources_are_not_cross_attributed_through_derivation() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config).unwrap();
+
+        let source_a = store
+            .register_source(
+                SourceKind::File,
+                "source-a",
+                SourceLocation {
+                    path: Some("docs/a.txt".to_string()),
+                    line_range: Some((1, 2)),
+                    ..SourceLocation::default()
+                },
+            )
+            .unwrap();
+        let source_b = store
+            .register_source(
+                SourceKind::File,
+                "source-b",
+                SourceLocation {
+                    path: Some("docs/b.txt".to_string()),
+                    line_range: Some((10, 12)),
+                    ..SourceLocation::default()
+                },
+            )
+            .unwrap();
+
+        let claim_b = ClaimData {
+            subj: 201,
+            pred: 301,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 401,
+            qualifiers_mask: 0,
+        };
+        let payload_b = build_full_test_payload_with_claim(AtomType::FACT, Some(claim_b.clone()));
+        let atom_b = store
+            .ingest(&payload_b, AtomType::FACT, &[claim_b], &[])
+            .unwrap();
+        store.set_atom_source(atom_b, source_b.source_id).unwrap();
+
+        let node_b = u32::try_from(store.get_node_num(&atom_b).unwrap()).unwrap();
+        let mut edges = crate::cas::edges::EdgesSection::new();
+        edges.add_edge(EdgeType::DERIVED_FROM.to_u32(), node_b);
+        let claim_a = ClaimData {
+            subj: 202,
+            pred: 302,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 402,
+            qualifiers_mask: 0,
+        };
+        let payload_a = build_full_test_payload_with_claim_and_edges(
+            AtomType::FACT,
+            Some(claim_a.clone()),
+            edges.to_bytes(),
+        );
+        let atom_a = store
+            .ingest(&payload_a, AtomType::FACT, &[claim_a], &[])
+            .unwrap();
+        store.set_atom_source(atom_a, source_a.source_id).unwrap();
+
+        let provenance = store.get_provenance(&atom_a).unwrap();
+        assert_eq!(provenance.derivation_edges.len(), 1);
+        assert_eq!(provenance.derivation_edges[0].source_atom_id, atom_b);
+        assert!(provenance.direct_evidence.iter().any(|link| {
+            link.source_atom_id == atom_a && link.source_id == Some(source_a.source_id)
+        }));
+        let derived_link = provenance
+            .direct_evidence
+            .iter()
+            .find(|link| {
+                link.source_atom_id == atom_b && link.evidence_kind == EvidenceKind::DERIVED
+            })
+            .expect("derived atom link");
+        assert_eq!(derived_link.source_id, None);
+        assert_eq!(derived_link.source_location, None);
+
+        let node_a = provenance
+            .nodes
+            .iter()
+            .find(|node| node.atom_id == atom_a)
+            .expect("root provenance node");
+        let node_b = provenance
+            .nodes
+            .iter()
+            .find(|node| node.atom_id == atom_b)
+            .expect("derived provenance node");
+        assert_eq!(node_a.evidence_links.len(), 1);
+        assert_eq!(node_b.evidence_links.len(), 1);
+        assert!(
+            !provenance
+                .direct_evidence
+                .iter()
+                .any(|link| link.source_id == Some(source_b.source_id))
+        );
+        assert!(node_a.evidence_links.iter().all(|link| {
+            link.source_id == Some(source_a.source_id)
+                && link
+                    .source_location
+                    .as_ref()
+                    .and_then(|location| location.path.as_deref())
+                    == Some("docs/a.txt")
+        }));
+        assert!(node_b.evidence_links.iter().all(|link| {
+            link.source_id == Some(source_b.source_id)
+                && link
+                    .source_location
+                    .as_ref()
+                    .and_then(|location| location.path.as_deref())
+                    == Some("docs/b.txt")
+        }));
+
+        let mut answer = AnswerPack::new(0);
+        for atom_id in [atom_a, atom_b] {
+            let metadata = store.meta.get_meta(&atom_id).unwrap();
+            let mut graph_node = AgNode::new(
+                AtomRef::new(atom_id, store.get_node_num(&atom_id).unwrap(), 0, 0),
+                metadata.atom_type,
+            );
+            graph_node
+                .evidence_refs
+                .push(MemoryX::attached_source_evidence_ref(atom_id, metadata).unwrap());
+            answer.graph.add_node(graph_node);
+        }
+        store.enrich_answer_sources(&mut answer).unwrap();
+
+        for (atom_id, source_id, path) in [
+            (atom_a, source_a.source_id, "docs/a.txt"),
+            (atom_b, source_b.source_id, "docs/b.txt"),
+        ] {
+            let graph_node = answer
+                .graph
+                .nodes
+                .iter()
+                .find(|node| node.atom_ref.atom_id == atom_id)
+                .expect("source atom in AnswerGraph");
+            assert_eq!(graph_node.direct_evidence.len(), 1);
+            assert_eq!(graph_node.direct_evidence[0].source_id, Some(source_id));
+            assert_eq!(
+                graph_node.direct_evidence[0]
+                    .source_location
+                    .as_ref()
+                    .and_then(|location| location.path.as_deref()),
+                Some(path)
+            );
+        }
+        assert_eq!(answer.graph.evidence_record_count(), 2);
+        assert_eq!(answer.graph.source_link_count(), 2);
+        assert_eq!(
+            answer.evidence_records,
+            answer
+                .graph
+                .nodes
+                .iter()
+                .flat_map(|node| node.direct_evidence.iter().cloned())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
