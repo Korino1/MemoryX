@@ -3467,13 +3467,14 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
-                        let response = process_mcp_request(&mut mcp_state, &line).await;
-                        stdout
-                            .write_all(response.as_bytes())
-                            .await
-                            .map_err(CliError::Io)?;
-                        stdout.write_all(b"\n").await.map_err(CliError::Io)?;
-                        stdout.flush().await.map_err(CliError::Io)?;
+                        if let Some(response) = process_mcp_request(&mut mcp_state, &line).await {
+                            stdout
+                                .write_all(response.as_bytes())
+                                .await
+                                .map_err(CliError::Io)?;
+                            stdout.write_all(b"\n").await.map_err(CliError::Io)?;
+                            stdout.flush().await.map_err(CliError::Io)?;
+                        }
                     }
                     Ok(None) => break,
                     Err(e) => {
@@ -3635,11 +3636,16 @@ fn add_base_ref_to_store_tool_schemas(response: &mut serde_json::Value) {
 
 /// Process MCP JSON-RPC request
 #[cfg(feature = "mcp")]
-async fn process_mcp_request(state: &mut McpServerState, request: &str) -> String {
+async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Option<String> {
     let result: serde_json::Result<serde_json::Value> = serde_json::from_str(request);
     match result {
         Ok(req) => {
             let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
+            let is_notification = req.get("id").is_none()
+                && req
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some();
             let id = req.get("id").cloned().unwrap_or(serde_json::json!(null));
 
             let mut resp = match method {
@@ -3654,6 +3660,11 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Strin
                             "version": env!("CARGO_PKG_VERSION")
                         }
                     }
+                }),
+                "notifications/initialized" => serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {}
                 }),
                 "tools/list" => serde_json::json!({
                             "jsonrpc": "2.0",
@@ -4646,14 +4657,20 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Strin
                 add_base_ref_to_store_tool_schemas(&mut resp);
             }
 
-            serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string())
+            if is_notification {
+                None
+            } else {
+                Some(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+            }
         }
-        Err(_) => serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": null,
-            "error": { "code": -32700, "message": "Parse error" }
-        })
-        .to_string(),
+        Err(_) => Some(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": { "code": -32700, "message": "Parse error" }
+            })
+            .to_string(),
+        ),
     }
 }
 
@@ -6811,6 +6828,13 @@ mod tests {
     }
 
     #[cfg(feature = "mcp")]
+    async fn process_mcp_request(state: &mut McpServerState, request: &str) -> String {
+        super::process_mcp_request(state, request)
+            .await
+            .expect("JSON-RPC request with an id must produce a response")
+    }
+
+    #[cfg(feature = "mcp")]
     fn test_mcp_state(base: PathBuf) -> McpServerState {
         let store = MemoryX::new(StoreConfig::new(base.clone())).unwrap();
         McpServerState::new(base, store).unwrap()
@@ -7027,6 +7051,29 @@ mod tests {
         assert_ne!(first_a, first_b);
         assert!(federation_base_id_path(&base_a).exists());
         assert!(federation_base_id_path(&base_b).exists());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn test_mcp_notifications_never_produce_responses() {
+        let dir = tempdir().unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
+
+        for method in ["notifications/initialized", "notifications/unknown"] {
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": {}
+            })
+            .to_string();
+
+            assert!(
+                super::process_mcp_request(&mut state, &notification)
+                    .await
+                    .is_none(),
+                "notification {method} must not produce a JSON-RPC response"
+            );
+        }
     }
 
     #[cfg(feature = "mcp")]
