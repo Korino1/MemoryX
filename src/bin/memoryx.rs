@@ -3634,6 +3634,81 @@ fn add_base_ref_to_store_tool_schemas(response: &mut serde_json::Value) {
     }
 }
 
+#[cfg(feature = "mcp")]
+const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2024-11-05"];
+
+/// MCP initialize policy: echo an explicitly supported client date-version.
+/// Missing, non-string, and non-allowlisted versions are rejected rather than
+/// claiming compatibility with an arbitrary protocol revision.
+#[cfg(feature = "mcp")]
+fn mcp_initialize_response(
+    request: &serde_json::Value,
+    id: serde_json::Value,
+) -> serde_json::Value {
+    let requested_version = request.pointer("/params/protocolVersion");
+    let protocol_version = match requested_version {
+        Some(serde_json::Value::String(version))
+            if SUPPORTED_MCP_PROTOCOL_VERSIONS.contains(&version.as_str()) =>
+        {
+            version
+        }
+        Some(serde_json::Value::String(version)) => {
+            return serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32602,
+                    "message": format!(
+                        "Unsupported MCP protocolVersion '{version}'"
+                    ),
+                    "data": {
+                        "supportedProtocolVersions": SUPPORTED_MCP_PROTOCOL_VERSIONS
+                    }
+                }
+            });
+        }
+        Some(_) => {
+            return serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid initialize params: protocolVersion must be a string",
+                    "data": {
+                        "supportedProtocolVersions": SUPPORTED_MCP_PROTOCOL_VERSIONS
+                    }
+                }
+            });
+        }
+        None => {
+            return serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid initialize params: protocolVersion is required",
+                    "data": {
+                        "supportedProtocolVersions": SUPPORTED_MCP_PROTOCOL_VERSIONS
+                    }
+                }
+            });
+        }
+    };
+
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "protocolVersion": protocol_version,
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": "memoryx",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        }
+    })
+}
+
 /// Process MCP JSON-RPC request
 #[cfg(feature = "mcp")]
 async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Option<String> {
@@ -3649,18 +3724,7 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
             let id = req.get("id").cloned().unwrap_or(serde_json::json!(null));
 
             let mut resp = match method {
-                "initialize" => serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": { "tools": {} },
-                        "serverInfo": {
-                            "name": "memoryx",
-                            "version": env!("CARGO_PKG_VERSION")
-                        }
-                    }
-                }),
+                "initialize" => mcp_initialize_response(&req, id),
                 "notifications/initialized" => serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -7051,6 +7115,64 @@ mod tests {
         assert_ne!(first_a, first_b);
         assert!(federation_base_id_path(&base_a).exists());
         assert!(federation_base_id_path(&base_b).exists());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn test_mcp_initialize_negotiates_allowlisted_versions_and_rejects_invalid_input() {
+        let dir = tempdir().unwrap();
+        let mut state = test_mcp_state(dir.path().join("memoryx"));
+
+        for (id, protocol_version) in SUPPORTED_MCP_PROTOCOL_VERSIONS.iter().enumerate() {
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": protocol_version,
+                    "capabilities": {},
+                    "clientInfo": {"name": "unit-test", "version": "1.0"}
+                }
+            })
+            .to_string();
+            let response = process_mcp_request(&mut state, &request).await;
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+            assert_eq!(value["id"], serde_json::json!(id));
+            assert_eq!(value["result"]["protocolVersion"], *protocol_version);
+            assert_eq!(
+                value["result"]["capabilities"],
+                serde_json::json!({"tools": {}})
+            );
+            assert_eq!(value["result"]["serverInfo"]["name"], "memoryx");
+            assert!(value.get("error").is_none());
+        }
+
+        let invalid_versions = [
+            serde_json::json!({}),
+            serde_json::json!({"protocolVersion": 20251125}),
+            serde_json::json!({"protocolVersion": "2025-03-26"}),
+        ];
+        for (index, params) in invalid_versions.into_iter().enumerate() {
+            let id = 100 + index;
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "initialize",
+                "params": params
+            })
+            .to_string();
+            let response = process_mcp_request(&mut state, &request).await;
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+            assert_eq!(value["id"], serde_json::json!(id));
+            assert_eq!(value["error"]["code"], -32602);
+            assert_eq!(
+                value["error"]["data"]["supportedProtocolVersions"],
+                serde_json::json!(SUPPORTED_MCP_PROTOCOL_VERSIONS)
+            );
+            assert!(value.get("result").is_none());
+        }
     }
 
     #[cfg(feature = "mcp")]
