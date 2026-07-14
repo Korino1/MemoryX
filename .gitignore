@@ -3,6 +3,7 @@
 /.codex/
 /.memoryx/
 /.codegraph/
+/.cabal/
 /build/
 /data/
 /memoryx_data/

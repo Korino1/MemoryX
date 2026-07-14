@@ -37,6 +37,7 @@ use crate::graph::GraphStore;
 use crate::index::{IdLocBuilder, IdLocIndex, InvertedIndex, Location};
 use crate::prelude::QueryConstraints;
 use crate::query::ann::EmbeddingIndex;
+use crate::store::base_lease::{BaseLease, BaseLeaseError};
 use crate::store::{
     AtomId, AtomType, ClaimPattern, DomainMask, EdgeType, GapKind, InvariantResult, NavHint,
     NodeNum, SectionKind, StopCond, SymId, TrustLevel,
@@ -4964,6 +4965,8 @@ pub struct MemoryX {
     /// Embedding index for semantic search (SKF-1.1 Section 6.1, 10.2)
     /// Maps NodeNum -> embedding vector for ANN-based semantic retrieval
     embedding_index: EmbeddingIndex,
+    // Dropped last so no mutable store component outlives its writer lease.
+    base_lease: BaseLease,
 }
 
 /// Store errors
@@ -5012,11 +5015,32 @@ pub enum StoreError {
     /// Index error
     #[error("Index error: {0}")]
     Index(String),
+
+    /// Another MemoryX instance attempted to open a base already owned by a writer.
+    #[error("store base is already open; exclusive writer lease is held: {0}")]
+    BaseInUse(PathBuf),
 }
 
 impl From<std::io::Error> for StoreError {
     fn from(err: std::io::Error) -> Self {
         StoreError::Io(err.to_string())
+    }
+}
+
+impl From<BaseLeaseError> for StoreError {
+    fn from(err: BaseLeaseError) -> Self {
+        match err {
+            BaseLeaseError::Busy { root } => StoreError::BaseInUse(root),
+            BaseLeaseError::NotDirectory { root } => StoreError::Io(format!(
+                "store base root is not a directory: {}",
+                root.display()
+            )),
+            BaseLeaseError::Io { root, source } => StoreError::Io(format!(
+                "failed to acquire store base lease for {}: {}",
+                root.display(),
+                source
+            )),
+        }
     }
 }
 
@@ -5044,7 +5068,10 @@ impl MemoryX {
     /// let config = StoreConfig::new(PathBuf::from("./data"));
     /// let store = MemoryX::new(config).unwrap();
     /// ```
-    pub fn new(config: StoreConfig) -> Result<Self, StoreError> {
+    pub fn new(mut config: StoreConfig) -> Result<Self, StoreError> {
+        let base_lease = BaseLease::acquire(&config.root_path)?;
+        config.root_path = base_lease.canonical_root().to_path_buf();
+
         let cas = CasStore::new(&config)?;
         let loc_index = LocationIndex::new(&config)?;
         let term_index = TermIndex::new(&config)?;
@@ -5068,6 +5095,7 @@ impl MemoryX {
             meta,
             ctx_manager,
             embedding_index,
+            base_lease,
         })
     }
 
@@ -7741,6 +7769,23 @@ mod tests {
     }
 
     #[test]
+    fn test_memoryx_duplicate_open_is_rejected_until_first_drops() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+
+        let first = MemoryX::new(config.clone()).unwrap();
+        let error = match MemoryX::new(StoreConfig::new(config.root_path.join("."))) {
+            Err(error) => error,
+            Ok(_) => panic!("canonical alias unexpectedly opened a second MemoryX"),
+        };
+
+        assert!(matches!(error, StoreError::BaseInUse(_)));
+        drop(first);
+
+        assert!(MemoryX::new(config).is_ok());
+    }
+
+    #[test]
     fn test_memoryx_ingest() {
         let config = StoreConfig::new(PathBuf::from("./test_ingest"));
         let mut store = MemoryX::new(config).unwrap();
@@ -8350,6 +8395,7 @@ mod tests {
             .unwrap();
 
         assert!(history_path.exists());
+        drop(store);
 
         let reopened = MemoryX::new(config).unwrap();
         let entries = reopened.history(2).unwrap();
@@ -8408,6 +8454,7 @@ mod tests {
             Some("Concept/SKF.txt")
         );
         assert_eq!(record.extracted_span.byte_range, Some((128, 160)));
+        drop(store);
 
         let reopened = MemoryX::new(config).unwrap();
         let persisted = reopened.get_source(source.source_id).unwrap().unwrap();
@@ -8463,6 +8510,7 @@ mod tests {
         assert_eq!(relations.len(), 1);
         assert_eq!(relations[0].subject, rust.entity_id);
         assert_eq!(relations[0].object, ownership.entity_id);
+        drop(store);
 
         let reopened = MemoryX::new(config).unwrap();
         assert_eq!(reopened.list_entities().unwrap().len(), 2);
