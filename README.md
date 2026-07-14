@@ -402,7 +402,7 @@ benchmarks/            Honest RAG-comparison scaffold
 
 ## Status
 
-- Current crate version: `1.0.0`.
+- Current crate version: `1.0.2`.
 - Public API and wire formats are stable for the 1.0 release line. Breaking
   changes should use a new major version.
 - The codebase is store-backed and tested, but users should still validate
@@ -753,7 +753,7 @@ CLI и MCP открывают одну и ту же durable store layout. `updat
 
 ## Статус
 
-- Текущая версия crate: `1.0.0`.
+- Текущая версия crate: `1.0.2`.
 - Public API и wire formats стабильны для release line 1.0. Breaking changes
   должны идти через новую major version.
 - Кодовая база рабочая и покрыта тестами, но пользователям всё равно нужно
