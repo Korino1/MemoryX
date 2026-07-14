@@ -64,15 +64,19 @@ impl McpProcess {
         }
     }
 
-    fn request(&mut self, request: Value) -> Result<Value, String> {
+    fn send(&mut self, message: Value) -> Result<(), String> {
         let stdin = self
             .stdin
             .as_mut()
             .ok_or_else(|| "MCP stdin is closed".to_string())?;
-        writeln!(stdin, "{request}").map_err(|error| format!("write failed: {error}"))?;
+        writeln!(stdin, "{message}").map_err(|error| format!("write failed: {error}"))?;
         stdin
             .flush()
-            .map_err(|error| format!("flush failed: {error}"))?;
+            .map_err(|error| format!("flush failed: {error}"))
+    }
+
+    fn request(&mut self, request: Value) -> Result<Value, String> {
+        self.send(request)?;
 
         let line = self
             .responses
@@ -86,6 +90,18 @@ impl McpProcess {
                 }
             })?;
         serde_json::from_str(&line).map_err(|error| format!("invalid MCP JSON response: {error}"))
+    }
+
+    fn expect_no_response(&self, timeout: Duration) -> Result<(), String> {
+        match self.responses.recv_timeout(timeout) {
+            Err(RecvTimeoutError::Timeout) => Ok(()),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("MCP stdout closed while waiting for notification silence".to_string())
+            }
+            Ok(line) => Err(format!(
+                "notification unexpectedly produced a protocol message: {line}"
+            )),
+        }
     }
 
     fn collect_report(&mut self, status: ExitStatus, timed_out: bool) -> ProcessReport {
@@ -165,6 +181,19 @@ fn initialize_request(id: u64) -> Value {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "mcp-parallel-processes-test", "version": "0.1"}
+        }
+    })
+}
+
+fn codex_initialize_request(id: u64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "codex", "version": "1.0"}
         }
     })
 }
@@ -288,6 +317,54 @@ fn response_text(response: &Value) -> &str {
     response["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or_else(|| panic!("MCP response has no text content: {response}"))
+}
+
+#[test]
+fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
+    let root = TempDir::new().expect("Codex lifecycle temp root");
+    let mut process = McpProcess::spawn(root.path(), "codex-lifecycle");
+
+    let initialized = process
+        .request(codex_initialize_request(1001))
+        .expect("Codex initialize request failed");
+    assert_success(&initialized);
+    assert_eq!(initialized["id"], json!(1001));
+    assert_eq!(
+        initialized["result"]["protocolVersion"],
+        json!("2024-11-05")
+    );
+
+    process
+        .send(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }))
+        .expect("failed to send notifications/initialized");
+    process
+        .expect_no_response(Duration::from_millis(300))
+        .expect("notifications/initialized must not produce a response or blank line");
+
+    let tools = process
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": "codex-tools-list",
+            "method": "tools/list",
+            "params": {}
+        }))
+        .expect("Codex tools/list request failed after initialized notification");
+    assert_success(&tools);
+    assert_eq!(tools["id"], json!("codex-tools-list"));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(38));
+
+    let report = process.finish();
+    assert!(
+        !report.timed_out && report.status.success(),
+        "Codex lifecycle MCP process did not exit cleanly: timed_out={}, status={}, stderr={}",
+        report.timed_out,
+        report.status,
+        report.stderr
+    );
 }
 
 fn assert_success(response: &Value) {
