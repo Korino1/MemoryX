@@ -1,6 +1,6 @@
 [package]
 name = "memoryx"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 description = "Local-first proof-grade knowledge base with atoms, contexts, provenance, MCP, and federation."
 readme = "README.md"
