@@ -1,5 +1,6 @@
 #![cfg(feature = "mcp")]
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -568,27 +569,24 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
         ))
         .expect("query reopened source-backed atom");
     let answer: Value = serde_json::from_str(response_text(&answer)).expect("AnswerPack JSON");
-    assert!(
-        answer["coverage_report"]["evidence_record_count"]
-            .as_u64()
-            .unwrap()
-            > 0
+    assert_single_source_graph(&answer["graph"], &atom_id);
+    assert_eq!(answer["coverage_report"]["evidence_ref_count"], 1);
+    assert_eq!(answer["coverage_report"]["evidence_record_count"], 1);
+    assert_eq!(answer["coverage_report"]["source_link_count"], 1);
+    assert_eq!(
+        answer["coverage_report"]["evidence_ref_count"],
+        answer["graph"]["evidence_ref_count"]
     );
-    assert!(
-        answer["coverage_report"]["source_link_count"]
-            .as_u64()
-            .unwrap()
-            > 0
+    assert_eq!(
+        answer["coverage_report"]["evidence_record_count"],
+        answer["graph"]["evidence_record_count"]
     );
-    assert!(
-        answer["evidence_records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|record| record["source_id"] == 1)
+    assert_eq!(
+        answer["coverage_report"]["source_link_count"],
+        answer["graph"]["source_link_count"]
     );
-    assert!(answer["graph"]["evidence_record_count"].as_u64().unwrap() > 0);
-    assert!(answer["graph"]["source_link_count"].as_u64().unwrap() > 0);
+    assert_eq!(answer["evidence_records"].as_array().unwrap().len(), 1);
+    assert_eq!(answer["evidence_records"][0]["source_id"], 1);
     let source_node = answer["graph"]["nodes"]
         .as_array()
         .unwrap()
@@ -609,8 +607,34 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
             .any(|claim| !claim["provenance_path"].as_array().unwrap().is_empty())
     );
 
+    let explanation = reopened
+        .request(tool_request(
+            2014,
+            "explain_answer_graph",
+            json!({"query_text": "mx01sourceprojection", "ctx_id": 0}),
+        ))
+        .expect("explain reopened source-backed atom");
+    let explanation: Value =
+        serde_json::from_str(response_text(&explanation)).expect("AnswerGraph explanation JSON");
+    assert_single_source_graph(&explanation["graph"], &atom_id);
+    assert_eq!(explanation["coverage_report"]["evidence_ref_count"], 1);
+    assert_eq!(explanation["coverage_report"]["evidence_record_count"], 1);
+    assert_eq!(explanation["coverage_report"]["source_link_count"], 1);
+    assert_eq!(
+        explanation["coverage_report"]["evidence_ref_count"],
+        explanation["graph"]["evidence_ref_count"]
+    );
+    assert_eq!(
+        explanation["coverage_report"]["evidence_record_count"],
+        explanation["graph"]["evidence_record_count"]
+    );
+    assert_eq!(
+        explanation["coverage_report"]["source_link_count"],
+        explanation["graph"]["source_link_count"]
+    );
+
     let contexts = reopened
-        .request(tool_request(2014, "list_contexts", json!({})))
+        .request(tool_request(2015, "list_contexts", json!({})))
         .expect("list reopened contexts");
     let contexts = response_text(&contexts);
     assert!(contexts.contains("Total: 2"), "{contexts}");
@@ -627,6 +651,37 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
         "reopened MCP stderr: {}",
         report.stderr
     );
+}
+
+fn assert_single_source_graph(graph: &Value, atom_id: &str) {
+    assert_eq!(graph["node_count"], 1);
+    assert_eq!(graph["evidence_ref_count"], 1);
+    assert_eq!(graph["evidence_record_count"], 1);
+    assert_eq!(graph["source_link_count"], 1);
+    let nodes = graph["nodes"].as_array().expect("AnswerGraph nodes array");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["atom_id"], atom_id);
+    assert_eq!(nodes[0]["evidence_ref_count"], 1);
+    assert_eq!(nodes[0]["source_link_count"], 1);
+
+    let mut identities = HashSet::new();
+    let records = nodes
+        .iter()
+        .flat_map(|node| node["direct_evidence"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    for record in &records {
+        let legacy = &record["legacy_ref"];
+        let identity = format!(
+            "{}:{}:{}:{}:{}",
+            legacy["atom_id"],
+            legacy["section_kind"],
+            legacy["offset"],
+            legacy["length"],
+            record["source_id"]
+        );
+        assert!(identities.insert(identity), "duplicate evidence identity");
+    }
+    assert_eq!(records.len(), 1);
 }
 
 fn assert_success(response: &Value) {
