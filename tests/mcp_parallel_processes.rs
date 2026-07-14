@@ -327,11 +327,21 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
     let initialized = process
         .request(codex_initialize_request(1001))
         .expect("Codex initialize request failed");
-    assert_success(&initialized);
-    assert_eq!(initialized["id"], json!(1001));
     assert_eq!(
-        initialized["result"]["protocolVersion"],
-        json!("2024-11-05")
+        initialized,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1001,
+            "result": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {
+                    "name": "memoryx",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }
+        }),
+        "initialize response must match the current Codex MCP shape exactly"
     );
 
     process
