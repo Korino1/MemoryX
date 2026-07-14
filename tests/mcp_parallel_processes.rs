@@ -328,6 +328,23 @@ fn response_text(response: &Value) -> &str {
         .unwrap_or_else(|| panic!("MCP response has no text content: {response}"))
 }
 
+fn tool_request(id: u64, name: &str, arguments: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments}
+    })
+}
+
+fn ingested_atom_id(response: &Value) -> String {
+    response_text(response)
+        .lines()
+        .find_map(|line| line.strip_prefix("Atom ID: "))
+        .unwrap_or_else(|| panic!("ingest response has no atom id: {response}"))
+        .to_string()
+}
+
 #[test]
 fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
     let root = TempDir::new().expect("Codex lifecycle temp root");
@@ -402,6 +419,198 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
         "Codex lifecycle MCP process did not exit cleanly: timed_out={}, status={}, stderr={}",
         report.timed_out,
         report.status,
+        report.stderr
+    );
+}
+
+#[test]
+fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
+    let root = TempDir::new().expect("MCP reopen temp root");
+    let base_name = "mx01-reopen";
+    let atom_id;
+
+    {
+        let mut process = McpProcess::spawn(root.path(), base_name);
+        process
+            .request(codex_initialize_request(2000))
+            .expect("initialize first MCP process");
+
+        let ingest = process
+            .request(tool_request(
+                2001,
+                "ingest",
+                json!({
+                    "atom_type": "FACT",
+                    "symbols": ["mx01sourceprojection"],
+                    "claims": [{
+                        "subj": 7,
+                        "pred": 8,
+                        "obj_tag": 3,
+                        "obj_val": 9,
+                        "qualifiers_mask": 0
+                    }]
+                }),
+            ))
+            .expect("ingest source-backed atom");
+        atom_id = ingested_atom_id(&ingest);
+
+        let source = process
+            .request(tool_request(
+                2002,
+                "register_source",
+                json!({
+                    "kind": "file",
+                    "label": "MX-01 source projection fixture",
+                    "path": "docs/mx01-source.txt",
+                    "line_start": 10,
+                    "line_end": 20,
+                    "source_version": "test"
+                }),
+            ))
+            .expect("register source");
+        assert!(response_text(&source).contains("Source ID: 1"));
+
+        process
+            .request(tool_request(
+                2003,
+                "attach_atom_source",
+                json!({"atom_id": atom_id, "source_id": 1}),
+            ))
+            .expect("attach source to atom");
+
+        let root_context = process
+            .request(tool_request(
+                2004,
+                "create_context",
+                json!({"policy_id": 0}),
+            ))
+            .expect("create root context");
+        assert!(response_text(&root_context).contains("created_ctx=0"));
+        let branch = process
+            .request(tool_request(
+                2005,
+                "branch_context",
+                json!({"parent_ctx": 0, "reason": "Hypothesis", "policy_id": 1}),
+            ))
+            .expect("create hypothesis branch");
+        assert!(response_text(&branch).contains("Created branch context: 1"));
+
+        let provenance = process
+            .request(tool_request(
+                2006,
+                "get_provenance_path",
+                json!({"atom_id": atom_id}),
+            ))
+            .expect("get in-process provenance");
+        let provenance: Value =
+            serde_json::from_str(response_text(&provenance)).expect("provenance JSON");
+        assert_eq!(provenance["direct_evidence"].as_array().unwrap().len(), 1);
+        assert_eq!(provenance["direct_evidence"][0]["source_id"], 1);
+        assert_eq!(
+            provenance["direct_evidence"][0]["source_location"]["path"],
+            "docs/mx01-source.txt"
+        );
+        assert_eq!(
+            provenance["nodes"][0]["evidence_links"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let report = process.finish();
+        assert!(!report.timed_out, "first MCP process timed out");
+        assert!(
+            report.status.success(),
+            "first MCP stderr: {}",
+            report.stderr
+        );
+    }
+
+    let mut reopened = McpProcess::spawn(root.path(), base_name);
+    reopened
+        .request(codex_initialize_request(2010))
+        .expect("initialize reopened MCP process");
+
+    let sources = reopened
+        .request(tool_request(2011, "list_sources", json!({})))
+        .expect("list persisted sources");
+    assert!(response_text(&sources).contains("MX-01 source projection fixture"));
+
+    let provenance = reopened
+        .request(tool_request(
+            2012,
+            "get_provenance_path",
+            json!({"atom_id": atom_id}),
+        ))
+        .expect("get reopened provenance");
+    let provenance: Value =
+        serde_json::from_str(response_text(&provenance)).expect("reopened provenance JSON");
+    assert_eq!(provenance["direct_evidence"].as_array().unwrap().len(), 1);
+    assert_eq!(provenance["direct_evidence"][0]["source_id"], 1);
+    assert_eq!(
+        provenance["direct_evidence"][0]["source_location"]["line_range"],
+        json!([10, 20])
+    );
+    assert_eq!(
+        provenance["nodes"][0]["evidence_links"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let answer = reopened
+        .request(tool_request(
+            2013,
+            "query",
+            json!({"query_text": "mx01sourceprojection", "ctx_id": 0}),
+        ))
+        .expect("query reopened source-backed atom");
+    let answer: Value = serde_json::from_str(response_text(&answer)).expect("AnswerPack JSON");
+    assert!(
+        answer["coverage_report"]["evidence_record_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        answer["coverage_report"]["source_link_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        answer["evidence_records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| record["source_id"] == 1)
+    );
+    assert!(
+        answer["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|claim| !claim["provenance_path"].as_array().unwrap().is_empty())
+    );
+
+    let contexts = reopened
+        .request(tool_request(2014, "list_contexts", json!({})))
+        .expect("list reopened contexts");
+    let contexts = response_text(&contexts);
+    assert!(contexts.contains("Total: 2"), "{contexts}");
+    assert!(
+        contexts.contains("ID: 1, Status: active, Parent: 0"),
+        "{contexts}"
+    );
+    assert!(contexts.contains("Branch reason: hypothesis"), "{contexts}");
+
+    let report = reopened.finish();
+    assert!(!report.timed_out, "reopened MCP process timed out");
+    assert!(
+        report.status.success(),
+        "reopened MCP stderr: {}",
         report.stderr
     );
 }

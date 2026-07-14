@@ -5251,11 +5251,13 @@ fn mcp_create_context_response(
         .and_then(|args| args.get("policy_id"))
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
-    let ctx_id = store.create_context(policy_id as u32);
-    mcp_text_result(
-        id,
-        format!("created_ctx={}\npolicy_id={}", ctx_id, policy_id),
-    )
+    match store.create_context(policy_id as u32) {
+        Ok(ctx_id) => mcp_text_result(
+            id,
+            format!("created_ctx={}\npolicy_id={}", ctx_id, policy_id),
+        ),
+        Err(error) => mcp_error(id, -32603, format!("Create context failed: {error}")),
+    }
 }
 
 #[cfg(feature = "mcp")]
@@ -6184,14 +6186,15 @@ fn mcp_branch_context_response(
         .unwrap_or(0);
 
     match store.branch_ctx(parent_ctx as u32, branch_reason, policy_id) {
-        Some(new_ctx) => mcp_text_result(
+        Ok(Some(new_ctx)) => mcp_text_result(
             id,
             format!(
                 "Created branch context: {}\nParent context: {}\nReason: {:?}\nPolicy ID: {}",
                 new_ctx, parent_ctx, branch_reason, policy_id
             ),
         ),
-        None => mcp_error(id, -32603, "Failed to create branch context"),
+        Ok(None) => mcp_error(id, -32603, "Failed to create branch context"),
+        Err(error) => mcp_error(id, -32603, format!("Branch context failed: {error}")),
     }
 }
 

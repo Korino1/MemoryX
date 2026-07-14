@@ -704,6 +704,10 @@ impl EvidenceKind {
 pub struct EvidenceLink {
     /// Source atom ID (canonical content-addressed identity)
     pub source_atom_id: AtomId,
+    /// Registered external source attached to the atom, when present.
+    pub source_id: Option<SourceId>,
+    /// Durable location metadata for the registered source.
+    pub source_location: Option<SourceLocation>,
     /// Evidence kind/type
     pub evidence_kind: EvidenceKind,
     /// Confidence value (0.0 - 1.0)
@@ -741,6 +745,8 @@ impl EvidenceLink {
         let decay = evidence_kind.trust_decay_factor();
         EvidenceLink {
             source_atom_id,
+            source_id: None,
+            source_location: None,
             evidence_kind,
             confidence: confidence.clamp(0.0, 1.0),
             trust,
@@ -767,6 +773,8 @@ impl EvidenceLink {
 
         EvidenceLink {
             source_atom_id,
+            source_id: parent_link.source_id,
+            source_location: parent_link.source_location.clone(),
             evidence_kind: EvidenceKind::DERIVED,
             confidence: propagated_confidence.clamp(0.0, 1.0),
             trust: propagated_trust,
@@ -798,6 +806,14 @@ impl EvidenceLink {
     #[inline]
     pub fn with_timestamp(mut self, timestamp_ns: u64) -> Self {
         self.timestamp_ns = timestamp_ns;
+        self
+    }
+
+    /// Attach the durable external source represented by this evidence link.
+    #[inline]
+    pub fn with_source(mut self, source: &SourceRecord) -> Self {
+        self.source_id = Some(source.source_id);
+        self.source_location = Some(source.location.clone());
         self
     }
 
@@ -2293,6 +2309,12 @@ impl StoreConfig {
     pub fn relations_path(&self) -> PathBuf {
         self.meta_dir().join("relations.jsonl")
     }
+
+    /// Get durable context-manager state path.
+    #[inline]
+    pub fn contexts_path(&self) -> PathBuf {
+        self.meta_dir().join("contexts.json")
+    }
 }
 
 impl Default for StoreConfig {
@@ -2315,7 +2337,7 @@ pub type CtxPolicyId = u32;
 pub type ClaimId = u64;
 
 /// Conflict resolution mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ConflictResolutionMode {
     /// Create new branch on conflict
     #[default]
@@ -2329,7 +2351,7 @@ pub enum ConflictResolutionMode {
 }
 
 /// Context policy with TMS constraints
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtxPolicy {
     pub trust_threshold: TrustLevel,
     pub domain_constraints: DomainMask,
@@ -2376,7 +2398,7 @@ impl CtxPolicy {
 }
 
 /// Context branch representation with full TMS support
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextBranch {
     pub ctx_id: CtxId,
     pub parent_ctx: Option<CtxId>,
@@ -2394,7 +2416,7 @@ pub struct ContextBranch {
 }
 
 /// Reason for context branching
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BranchReason {
     /// Conflict detected
     Conflict,
@@ -2449,7 +2471,7 @@ impl QueryFilters {
 }
 
 /// Context manager for branching and conflict tracking
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CtxManager {
     contexts: Vec<ContextBranch>,
     next_ctx_id: CtxId,
@@ -2883,7 +2905,7 @@ impl Limitation {
 }
 
 /// Conflict activation conditions (SKF-1.1 Section 3.3)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConflictConditions {
     /// Time range when conflict is active (0 = always)
     pub valid_from_ns: u64,
@@ -2895,7 +2917,7 @@ pub struct ConflictConditions {
 }
 
 /// Resolution option for conflict (SKF-1.1 Section 3.3)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResolutionOption {
     /// Prefer atom A over B
     PreferAtomA,
@@ -2917,7 +2939,7 @@ pub enum ResolutionOption {
 /// ```text
 /// Conflict = ⟨c_id, claim_a, claim_b, reason, conditions, resolution_candidates⟩
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conflict {
     /// Unique conflict identifier
     pub c_id: u32,
@@ -3062,7 +3084,7 @@ impl KnowledgeSnapshotId {
 }
 
 /// Type of conflict
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConflictType {
     /// Direct contradiction
     Contradiction,
@@ -3077,7 +3099,7 @@ pub enum ConflictType {
 }
 
 /// Conflict severity
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConflictSeverity {
     Soft,
     Hard,
@@ -3091,7 +3113,7 @@ pub enum ConflictSeverity {
 /// **SKF-1.1 Contract:**
 /// - `atom_id` MUST be a real content-addressed identity (not placeholder)
 /// - Conflict detection uses `atom_id` to link conflicts to canonical identities
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveClaim {
     /// Source atom ID (canonical content-addressed identity)
     pub atom_id: AtomId,
@@ -5051,6 +5073,144 @@ impl From<crate::index::IndexError> for StoreError {
 }
 
 impl MemoryX {
+    fn contexts_backup_path(path: &std::path::Path) -> PathBuf {
+        path.with_extension("json.bak")
+    }
+
+    fn validate_context_manager(manager: &CtxManager) -> Result<(), StoreError> {
+        let mut ids = HashSet::with_capacity(manager.contexts.len());
+        for context in &manager.contexts {
+            if !ids.insert(context.ctx_id) {
+                return Err(StoreError::Context(format!(
+                    "duplicate persisted context id {}",
+                    context.ctx_id
+                )));
+            }
+        }
+
+        for context in &manager.contexts {
+            if let Some(parent) = context.parent_ctx
+                && (parent >= context.ctx_id || !ids.contains(&parent))
+            {
+                return Err(StoreError::Context(format!(
+                    "invalid parent {} for persisted context {}",
+                    parent, context.ctx_id
+                )));
+            }
+        }
+
+        let next_id_is_valid = manager
+            .contexts
+            .iter()
+            .map(|context| context.ctx_id)
+            .max()
+            .map(|max_id| manager.next_ctx_id > max_id)
+            .unwrap_or(manager.next_ctx_id == 0);
+        if !next_id_is_valid {
+            return Err(StoreError::Context(
+                "persisted next context id is not monotonic".to_string(),
+            ));
+        }
+
+        if !manager.contexts.is_empty()
+            && !manager
+                .contexts
+                .iter()
+                .any(|context| context.ctx_id == manager.active_ctx && context.active)
+        {
+            return Err(StoreError::Context(format!(
+                "persisted active context {} is unavailable",
+                manager.active_ctx
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn read_context_manager(path: &std::path::Path) -> Result<CtxManager, StoreError> {
+        let backup_path = Self::contexts_backup_path(path);
+        let selected_path = if path.exists() {
+            path
+        } else if backup_path.exists() {
+            backup_path.as_path()
+        } else {
+            return Ok(CtxManager::new());
+        };
+
+        let file = File::open(selected_path).map_err(StoreError::from)?;
+        let manager: CtxManager =
+            serde_json::from_reader(BufReader::new(file)).map_err(|error| {
+                StoreError::Context(format!("failed to load persisted contexts: {error}"))
+            })?;
+        Self::validate_context_manager(&manager)?;
+        Ok(manager)
+    }
+
+    fn write_context_manager(
+        path: &std::path::Path,
+        manager: &CtxManager,
+    ) -> Result<(), StoreError> {
+        Self::validate_context_manager(manager)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+
+        let temp_path = path.with_extension("json.tmp");
+        let backup_path = Self::contexts_backup_path(path);
+        {
+            let mut file = File::create(&temp_path).map_err(StoreError::from)?;
+            serde_json::to_writer(&mut file, manager)
+                .map_err(|error| StoreError::Context(error.to_string()))?;
+            file.write_all(b"\n").map_err(StoreError::from)?;
+            file.flush().map_err(StoreError::from)?;
+            file.sync_all().map_err(StoreError::from)?;
+        }
+
+        if path.exists() {
+            if backup_path.exists() {
+                fs::remove_file(&backup_path).map_err(StoreError::from)?;
+            }
+            fs::rename(path, &backup_path).map_err(StoreError::from)?;
+        }
+
+        if let Err(error) = fs::rename(&temp_path, path) {
+            if backup_path.exists() && !path.exists() {
+                let _ = fs::rename(&backup_path, path);
+            }
+            return Err(StoreError::from(error));
+        }
+
+        if backup_path.exists() {
+            let _ = fs::remove_file(backup_path);
+        }
+        Ok(())
+    }
+
+    fn persist_contexts(&self) -> Result<(), StoreError> {
+        let manager = self.ctx_manager.lock();
+        Self::write_context_manager(&self.config.contexts_path(), &manager)
+    }
+
+    fn mutate_contexts<T>(
+        &self,
+        mutation: impl FnOnce(&mut CtxManager) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let mut manager = self.ctx_manager.lock();
+        let previous = manager.clone();
+        let result = match mutation(&mut manager) {
+            Ok(result) => result,
+            Err(error) => {
+                *manager = previous;
+                return Err(error);
+            }
+        };
+        if let Err(error) = Self::write_context_manager(&self.config.contexts_path(), &manager) {
+            *manager = previous;
+            return Err(error);
+        }
+        Ok(result)
+    }
+
     /// Create a new MemoryX store
     ///
     /// # Arguments
@@ -5078,7 +5238,9 @@ impl MemoryX {
         let graph = GraphStore::open_or_create(config.graph_dir(), 0)
             .map_err(|e| StoreError::Io(e.to_string()))?;
         let meta = MetaStore::new(&config)?;
-        let ctx_manager = Arc::new(Mutex::new(CtxManager::new()));
+        let ctx_manager = Arc::new(Mutex::new(Self::read_context_manager(
+            &config.contexts_path(),
+        )?));
         let embedding_path = config.index_dir().join(EMBEDDINGS_FILE);
         let embedding_index = if embedding_path.exists() {
             EmbeddingIndex::load(&embedding_path).map_err(|e| StoreError::Io(e.to_string()))?
@@ -5111,6 +5273,7 @@ impl MemoryX {
             .save()
             .map_err(|e| StoreError::Io(e.to_string()))?;
         self.meta.save()?;
+        self.persist_contexts()?;
 
         let embedding_path = self.config.index_dir().join(EMBEDDINGS_FILE);
         self.embedding_index
@@ -5269,6 +5432,53 @@ impl MemoryX {
         self.flush()
     }
 
+    fn attached_source_evidence_ref(
+        atom_id: AtomId,
+        metadata: &AtomMetadata,
+    ) -> Option<EvidenceRef> {
+        (metadata.source_id != 0)
+            .then(|| EvidenceRef::new(atom_id, SectionKind::META, 0, 0, metadata.trust_level))
+    }
+
+    fn attached_source_evidence_link(
+        &self,
+        atom_id: AtomId,
+        metadata: &AtomMetadata,
+    ) -> Result<Option<EvidenceLink>, StoreError> {
+        if metadata.source_id == 0 {
+            return Ok(None);
+        }
+        let Some(source) = self.get_source(metadata.source_id)? else {
+            return Err(StoreError::Context(format!(
+                "atom references missing source {}",
+                metadata.source_id
+            )));
+        };
+        let evidence_kind = match source.kind {
+            SourceKind::Measurement => EvidenceKind::MEASUREMENT,
+            SourceKind::Human => EvidenceKind::EXPERT_INFERENCE,
+            _ => EvidenceKind::CITATION,
+        };
+        let (offset, length) = source
+            .location
+            .byte_range
+            .map(|(start, end)| (start, end.saturating_sub(start)))
+            .unwrap_or((0, 0));
+        Ok(Some(
+            EvidenceLink::new(
+                atom_id,
+                evidence_kind,
+                f64::from(metadata.trust_level) / 10000.0,
+                metadata.trust_level,
+                SectionKind::META,
+                offset,
+                length,
+            )
+            .with_timestamp(source.registered_at_unix_ns)
+            .with_source(&source),
+        ))
+    }
+
     /// Convert a legacy EvidenceRef into a proof-grade EvidenceRecord.
     pub fn evidence_record_for_ref(
         &self,
@@ -5279,6 +5489,16 @@ impl MemoryX {
             && metadata.source_id != 0
             && let Some(source) = self.get_source(metadata.source_id)?
         {
+            record.extracted_span = EvidenceSpan {
+                byte_range: source
+                    .location
+                    .byte_range
+                    .or(record.extracted_span.byte_range),
+                line_range: source
+                    .location
+                    .line_range
+                    .or(record.extracted_span.line_range),
+            };
             record = record.with_source(&source);
         }
         Ok(record)
@@ -5662,7 +5882,7 @@ impl MemoryX {
         reason: BranchReason,
         policy_id: CtxPolicyId,
     ) -> Result<CtxId, StoreError> {
-        self.branch_ctx(parent_ctx, reason, policy_id)
+        self.branch_ctx(parent_ctx, reason, policy_id)?
             .ok_or(StoreError::ContextBranchFailed)
     }
 
@@ -5989,9 +6209,18 @@ impl MemoryX {
             .with_timestamp(now_ns)
             .with_cas(Arc::clone(&self.cas.io_store));
 
-        let mut pack = solver
-            .solve(goal, ctx_policy)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let contexts_before_solve = self.ctx_manager.lock().clone();
+        let mut pack = match solver.solve(goal, ctx_policy) {
+            Ok(pack) => pack,
+            Err(error) => {
+                *self.ctx_manager.lock() = contexts_before_solve;
+                return Err(StoreError::Query(error.to_string()));
+            }
+        };
+        if let Err(error) = self.persist_contexts() {
+            *self.ctx_manager.lock() = contexts_before_solve;
+            return Err(error);
+        }
         pack.snapshot = self.knowledge_snapshot(pack.selected_ctx)?;
         self.enrich_answer_sources(&mut pack)?;
         Ok(pack)
@@ -6049,6 +6278,9 @@ impl MemoryX {
                         metadata.domain_mask,
                         metadata.source_id,
                     );
+                    if let Some(evidence) = Self::attached_source_evidence_ref(atom_id, metadata) {
+                        router.register_atom_evidence(node_num, vec![evidence]);
+                    }
                 }
             }
         }
@@ -6126,9 +6358,10 @@ impl MemoryX {
     /// - `policy`: Context policy ID
     ///
     /// # Returns
-    /// - `CtxId`: New context ID
-    pub fn create_context(&mut self, policy: CtxPolicyId) -> CtxId {
-        self.ctx_manager.lock().create_context(policy)
+    /// - `Ok(CtxId)`: New context ID after durable persistence
+    /// - `Err(StoreError)`: Context state could not be persisted
+    pub fn create_context(&mut self, policy: CtxPolicyId) -> Result<CtxId, StoreError> {
+        self.mutate_contexts(|manager| Ok(manager.create_context(policy)))
     }
 
     /// List all known contexts and their current branch state.
@@ -6161,9 +6394,7 @@ impl MemoryX {
         claim: &ClaimData,
         atom_id: AtomId,
     ) -> Result<CtxId, StoreError> {
-        self.ctx_manager
-            .lock()
-            .assert_claim_with_atom_id(ctx_id, claim, atom_id)
+        self.mutate_contexts(|manager| manager.assert_claim_with_atom_id(ctx_id, claim, atom_id))
     }
 
     /// List conflicts in a context (SKF-1.1 §10.3, 3.3)
@@ -6192,14 +6423,16 @@ impl MemoryX {
     /// Set the active context
     #[inline]
     pub fn set_active_context(&mut self, ctx_id: CtxId) -> Result<(), StoreError> {
-        if self.ctx_manager.lock().set_active_ctx(ctx_id) {
-            Ok(())
-        } else {
-            Err(StoreError::Context(format!(
-                "Invalid context ID: {}",
-                ctx_id
-            )))
-        }
+        self.mutate_contexts(|manager| {
+            if manager.set_active_ctx(ctx_id) {
+                Ok(())
+            } else {
+                Err(StoreError::Context(format!(
+                    "Invalid context ID: {}",
+                    ctx_id
+                )))
+            }
+        })
     }
 
     /// Get store configuration
@@ -6327,6 +6560,13 @@ impl MemoryX {
 
         // Create provenance node for root atom
         let mut root_node = ProvenanceNode::new(*atom_id, node_num.unwrap_or(0), atom_type);
+
+        if let Some(metadata) = self.meta.get_meta(atom_id)
+            && let Some(evidence_link) = self.attached_source_evidence_link(*atom_id, metadata)?
+        {
+            chain.add_direct_evidence(evidence_link.clone());
+            root_node.add_evidence(evidence_link);
+        }
 
         // Step 5: Parse EVIDENCE section and create EvidenceLinks
         if let Some(evidence_bytes) = evidence_data {
@@ -6921,16 +7161,16 @@ impl MemoryX {
     /// - `conflict_id`: Optional conflict ID
     ///
     /// # Returns
-    /// - `Option<CtxId>`: New context ID if branched
+    /// - `Ok(Some(CtxId))`: New context ID after durable persistence
+    /// - `Ok(None)`: Parent context does not exist
+    /// - `Err(StoreError)`: Context state could not be persisted
     pub fn branch_ctx(
         &mut self,
         ctx_id: CtxId,
         reason: BranchReason,
         conflict_id: u32,
-    ) -> Option<CtxId> {
-        self.ctx_manager
-            .lock()
-            .create_branch(ctx_id, reason, conflict_id)
+    ) -> Result<Option<CtxId>, StoreError> {
+        self.mutate_contexts(|manager| Ok(manager.create_branch(ctx_id, reason, conflict_id)))
     }
 
     // ========================================================================
@@ -7830,23 +8070,33 @@ mod tests {
     fn test_memoryx_list_contexts_exposes_branches() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let config = StoreConfig::new(temp_dir.path().join("memoryx"));
-        let mut store = MemoryX::new(config).unwrap();
+        let mut store = MemoryX::new(config.clone()).unwrap();
 
-        let root_ctx = store.create_context(0);
+        let root_ctx = store.create_context(0).unwrap();
         assert_eq!(root_ctx, 0);
 
-        {
-            let mut ctx_manager = store.ctx_manager.lock();
-            let branched = ctx_manager
-                .create_branch(root_ctx, BranchReason::Hypothesis, 1)
-                .unwrap();
-            assert_eq!(branched, 1);
-        }
+        let branched = store
+            .branch_ctx(root_ctx, BranchReason::Hypothesis, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(branched, 1);
 
         let contexts = store.list_contexts();
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].ctx_id, 0);
         assert_eq!(contexts[1].parent_ctx, Some(0));
+        assert_eq!(contexts[1].branch_reason, BranchReason::Hypothesis);
+        store.set_active_context(branched).unwrap();
+        drop(store);
+
+        let reopened = MemoryX::new(config).unwrap();
+        let contexts = reopened.list_contexts();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].ctx_id, 0);
+        assert_eq!(contexts[1].ctx_id, 1);
+        assert_eq!(contexts[1].parent_ctx, Some(0));
+        assert_eq!(contexts[1].branch_reason, BranchReason::Hypothesis);
+        assert_eq!(reopened.active_context(), 1);
     }
 
     #[test]
@@ -8443,6 +8693,38 @@ mod tests {
             .unwrap();
         store.set_atom_source(atom_id, source.source_id).unwrap();
 
+        let provenance = store.get_provenance(&atom_id).unwrap();
+        assert_eq!(provenance.direct_evidence.len(), 1);
+        assert_eq!(provenance.nodes.len(), 1);
+        assert_eq!(provenance.nodes[0].evidence_links.len(), 1);
+        assert_eq!(
+            provenance.direct_evidence[0].evidence_kind,
+            EvidenceKind::CITATION
+        );
+        assert_eq!(
+            provenance.direct_evidence[0].source_id,
+            Some(source.source_id)
+        );
+        assert_eq!(
+            provenance.direct_evidence[0]
+                .source_location
+                .as_ref()
+                .and_then(|location| location.line_range),
+            Some((10, 20))
+        );
+
+        let answer = store.answer("subject_7", 0).unwrap();
+        assert!(!answer.evidence.is_empty());
+        assert!(!answer.evidence_records.is_empty());
+        assert!(answer.coverage_report.evidence_record_count > 0);
+        assert!(answer.coverage_report.source_link_count > 0);
+        assert!(
+            answer
+                .claims
+                .iter()
+                .any(|claim| !claim.provenance_path.is_empty())
+        );
+
         let evidence = EvidenceRef::new(atom_id, SectionKind::CLAIMS, 128, 32, 9000);
         let record = store.evidence_record_for_ref(&evidence).unwrap();
         assert_eq!(record.source_id, Some(source.source_id));
@@ -8459,6 +8741,12 @@ mod tests {
         let reopened = MemoryX::new(config).unwrap();
         let persisted = reopened.get_source(source.source_id).unwrap().unwrap();
         assert_eq!(persisted.label, "concept-spec");
+        let provenance = reopened.get_provenance(&atom_id).unwrap();
+        assert_eq!(provenance.direct_evidence.len(), 1);
+        assert_eq!(provenance.nodes[0].evidence_links.len(), 1);
+        let answer = reopened.answer("subject_7", 0).unwrap();
+        assert!(answer.coverage_report.evidence_record_count > 0);
+        assert!(answer.coverage_report.source_link_count > 0);
     }
 
     #[test]
@@ -8493,7 +8781,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&test_dir);
         let config = StoreConfig::new(test_dir);
         let mut store = MemoryX::new(config.clone()).unwrap();
-        let ctx = store.create_context(0);
+        let ctx = store.create_context(0).unwrap();
 
         let rust = store.create_entity("Rust", "language").unwrap();
         let ownership = store.create_entity("Ownership", "concept").unwrap();
@@ -8539,7 +8827,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&test_dir);
         let config = StoreConfig::new(test_dir);
         let mut store = MemoryX::new(config).unwrap();
-        let ctx = store.create_context(0);
+        let ctx = store.create_context(0).unwrap();
 
         let a = store.create_entity("A", "node").unwrap();
         let b = store.create_entity("B", "node").unwrap();

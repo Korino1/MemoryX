@@ -851,7 +851,9 @@ Structured claims: 0",
     /// Create new context
     async fn create_context(&mut self, policy_id: u64) -> Result<ToolResult, String> {
         let mut store = self.store.write().await;
-        let new_ctx = store.create_context(policy_id as CtxPolicyId);
+        let new_ctx = store
+            .create_context(policy_id as CtxPolicyId)
+            .map_err(|error| error.to_string())?;
         self.active_ctx = new_ctx;
 
         Ok(ToolResult {
