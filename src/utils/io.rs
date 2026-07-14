@@ -34,7 +34,16 @@ use windows_sys::Win32::{
 use std::os::windows::io::RawHandle;
 
 #[cfg(target_os = "linux")]
+use std::collections::{HashMap, VecDeque};
+
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileExt;
+
+#[cfg(target_os = "linux")]
 use std::os::unix::io::{AsRawFd, RawFd};
+
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 #[cfg(target_os = "macos")]
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -107,6 +116,8 @@ impl ReadRequest {
 pub struct ReadResult {
     pub offset: u64,
     pub bytes_read: usize,
+    /// Bytes read from the executor-owned buffer. Empty for failed reads.
+    pub data: Vec<u8>,
     pub error: Option<io::Error>,
 }
 
@@ -115,6 +126,7 @@ impl Clone for ReadResult {
         ReadResult {
             offset: self.offset,
             bytes_read: self.bytes_read,
+            data: self.data.clone(),
             error: self
                 .error
                 .as_ref()
@@ -128,6 +140,17 @@ impl ReadResult {
         ReadResult {
             offset,
             bytes_read,
+            data: Vec::new(),
+            error: None,
+        }
+    }
+
+    /// Create a successful result that returns ownership of the completed read buffer.
+    pub fn success_with_data(offset: u64, data: Vec<u8>) -> Self {
+        ReadResult {
+            offset,
+            bytes_read: data.len(),
+            data,
             error: None,
         }
     }
@@ -136,6 +159,7 @@ impl ReadResult {
         ReadResult {
             offset,
             bytes_read: 0,
+            data: Vec::new(),
             error: Some(err),
         }
     }
@@ -271,11 +295,19 @@ pub trait AsyncIoExecutor {
     /// Submit a batch of read requests
     fn submit_batch(&mut self, requests: &[ReadRequest]) -> io::Result<()>;
 
+    /// Bind a file for executors whose operations require an explicit file.
+    fn set_file(&mut self, _file: File) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this executor does not support file binding",
+        ))
+    }
+
     /// Poll for completed operations with timeout
     fn poll_completions(&mut self, timeout: Duration) -> io::Result<Vec<ReadResult>>;
 
     /// Synchronize/sync all pending operations
-    fn sync(&self) -> io::Result<()>;
+    fn sync(&mut self) -> io::Result<()>;
 }
 
 // ============================================================================
@@ -284,234 +316,437 @@ pub trait AsyncIoExecutor {
 
 #[cfg(target_os = "linux")]
 pub struct LinuxIoUringExecutor {
-    ring: IoUring,
-    pending_count: usize,
-    submitted_offsets: Vec<u64>,
+    backend: LinuxIoBackend,
+    file: Option<File>,
+    pending: HashMap<u64, PendingRead>,
+    ready_results: VecDeque<ReadResult>,
+    next_operation_id: u64,
 }
 
 #[cfg(target_os = "linux")]
-impl Default for LinuxIoUringExecutor {
-    fn default() -> Self {
-        Self::new()
-    }
+enum LinuxIoBackend {
+    IoUring(Box<IoUring>),
+    Synchronous,
 }
 
 #[cfg(target_os = "linux")]
-impl AsyncIoExecutor for LinuxIoUringExecutor {
-    fn new() -> Self {
-        // Create io_uring with 256 entries (configurable)
-        let ring =
-            IoUring::new(256).expect("Failed to create io_uring (requires Linux kernel 5.1+)");
+struct PendingRead {
+    offset: u64,
+    buffer: Vec<u8>,
+}
 
-        LinuxIoUringExecutor {
-            ring,
-            pending_count: 0,
-            submitted_offsets: Vec::new(),
-        }
+#[cfg(target_os = "linux")]
+impl LinuxIoUringExecutor {
+    const QUEUE_DEPTH: u32 = 256;
+    const DROP_QUIESCE_TIMEOUT: Duration = Duration::from_millis(100);
+
+    /// Creates an executor backed by a live io_uring instance.
+    ///
+    /// This is the fallible constructor for callers that need to distinguish an
+    /// unavailable kernel or sandbox policy from a usable executor.
+    pub fn try_new() -> io::Result<Self> {
+        Ok(Self {
+            backend: LinuxIoBackend::IoUring(Box::new(Self::create_ring()?)),
+            file: None,
+            pending: HashMap::new(),
+            ready_results: VecDeque::new(),
+            next_operation_id: 1,
+        })
     }
 
-    fn submit_batch(&mut self, requests: &[ReadRequest]) -> io::Result<()> {
-        use std::os::unix::io::AsRawFd;
+    fn create_ring() -> io::Result<IoUring> {
+        let ring = IoUring::new(Self::QUEUE_DEPTH)?;
+        let mut probe = io_uring::Probe::new();
+        ring.submitter().register_probe(&mut probe)?;
+        if !probe.is_supported(opcode::Read::CODE) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the running kernel does not support IORING_OP_READ",
+            ));
+        }
+        Ok(ring)
+    }
 
-        for (i, req) in requests.iter().enumerate() {
-            // Get a free submission queue entry
-            let sq = self.ring.submission().available();
-            if sq == 0 {
-                // Queue full, need to submit first
-                self.ring.submit()?;
-            }
+    /// Creates an executor and binds it to an owned file descriptor.
+    pub fn open_file(file: File) -> io::Result<Self> {
+        let mut executor = Self::new();
+        executor.set_file(file)?;
+        Ok(executor)
+    }
 
-            // Safety: We ensure the buffer lives long enough
-            // The buffer is owned by the caller and must not be modified
-            // until the I/O completes
-            unsafe {
-                let fd = types::Fd(req.fd);
-                let opcode = opcode::Read::new(fd, req.buffer.as_mut_ptr(), req.len as u32)
-                    .offset(req.offset as i64);
-
-                // Push to submission queue
-                let mut sqe = self
-                    .ring
-                    .submission()
-                    .push_with_flags(opcode.build().user_data(i as u64), 0);
-
-                if sqe.is_ok() {
-                    self.submitted_offsets.push(req.offset);
-                }
-            }
+    /// Binds a file for all subsequent reads.
+    ///
+    /// The executor owns the `File`, so its descriptor cannot be closed while
+    /// a submitted read still references it. Rebinding is rejected until all
+    /// prior reads have completed.
+    pub fn set_file(&mut self, file: File) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "cannot replace the io_uring file while reads are pending",
+            ));
         }
 
-        // Submit all entries to the kernel
-        self.ring.submit()?;
-        self.pending_count += self.submitted_offsets.len();
-
+        self.file = Some(file);
         Ok(())
     }
 
-    fn poll_completions(&mut self, timeout: Duration) -> io::Result<Vec<ReadResult>> {
-        let mut results = Vec::new();
-
-        // Set timeout for waiting using timeout operation
-        let timeout_spec = types::Timespec::new()
-            .sec(timeout.as_secs() as u64)
-            .nsec(timeout.subsec_nanos());
-
-        let timeout_e = opcode::Timeout::new(timeout_spec)
-            .build()
-            .user_data(u64::MAX);
-
-        // Submit timeout
-        unsafe {
-            self.ring.submission().push(&timeout_e).ok();
-        }
-
-        // Wait for completions
-        self.ring.submit_and_wait(1)?;
-
-        // Process completions
-        for cqe in self.ring.completion() {
-            let user_data = cqe.user_data();
-
-            // Skip timeout completion
-            if user_data == u64::MAX {
-                continue;
-            }
-
-            let idx = user_data as usize;
-            let result = cqe.result();
-
-            if let Some(&offset) = self.submitted_offsets.get(idx) {
-                if result >= 0 {
-                    results.push(ReadResult::success(offset, result as usize));
-                } else {
-                    let err = io::Error::from_raw_os_error(-result);
-                    results.push(ReadResult::error(offset, err));
-                }
-            }
-        }
-
-        self.pending_count = self.pending_count.saturating_sub(results.len());
-        self.submitted_offsets.clear();
-
-        Ok(results)
+    /// Binds a cloned descriptor while leaving ownership of `file` with the caller.
+    pub fn bind_file(&mut self, file: &File) -> io::Result<()> {
+        self.set_file(file.try_clone()?)
     }
 
-    fn sync(&self) -> io::Result<()> {
-        // Ensure all submissions are processed
-        let ring = &self.ring;
-        ring.submit_and_wait(0)?;
-        Ok(())
+    /// Returns whether this executor has a file available for read submission.
+    pub fn has_file(&self) -> bool {
+        self.file.is_some()
     }
-}
 
-#[cfg(target_os = "linux")]
-impl Default for LinuxIoUringExecutor {
-    fn default() -> Self {
-        Self::new()
+    /// Returns whether this executor is using the asynchronous io_uring backend.
+    pub fn is_uring_backend(&self) -> bool {
+        matches!(self.backend, LinuxIoBackend::IoUring(_))
     }
-}
 
-#[cfg(target_os = "linux")]
-impl AsyncIoExecutor for LinuxIoUringExecutor {
-    fn new() -> Self {
-        // Create io_uring with 256 entries (configurable)
-        let ring =
-            IoUring::new(256).expect("Failed to create io_uring (requires Linux kernel 5.1+)");
-
-        LinuxIoUringExecutor {
-            ring,
-            pending_count: 0,
-            submitted: RefCell::new(Vec::new()),
+    fn synchronous() -> Self {
+        Self {
+            backend: LinuxIoBackend::Synchronous,
+            file: None,
+            pending: HashMap::new(),
+            ready_results: VecDeque::new(),
+            next_operation_id: 1,
         }
     }
 
-    fn submit_batch(&mut self, requests: &[ReadRequest]) -> io::Result<()> {
-        use std::os::unix::io::AsRawFd;
-
-        let mut submission_count = 0;
-
-        for (i, req) in requests.iter().enumerate() {
-            // Get a free submission queue entry
-            let mut sq = self.ring.submission();
-
-            // Safety: We ensure the buffer lives long enough
-            // The buffer is owned by the caller and must not be modified
-            // until the I/O completes
-            unsafe {
-                let opcode =
-                    opcode::Read::new(types::Fd(req.fd), req.buffer.as_mut_ptr(), req.len as u32)
-                        .offset(req.offset);
-
-                // Use the index as user_data for matching completions
-                sq = sq.user_data(i as u64);
-
-                if sq.build().is_ok() {
-                    submission_count += 1;
-                    self.submitted.borrow_mut().push((req.offset, req.len));
-                }
-            }
+    fn ring_mut(&mut self) -> io::Result<&mut IoUring> {
+        match &mut self.backend {
+            LinuxIoBackend::IoUring(ring) => Ok(ring.as_mut()),
+            LinuxIoBackend::Synchronous => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "io_uring backend is unavailable",
+            )),
         }
-
-        // Submit all entries to the kernel
-        self.ring.submit()?;
-        self.pending_count += submission_count;
-
-        Ok(())
     }
 
-    fn poll_completions(&mut self, timeout: Duration) -> io::Result<Vec<ReadResult>> {
-        let mut results = Vec::new();
+    fn next_operation_id(&mut self) -> io::Result<u64> {
+        let operation_id = self.next_operation_id;
+        self.next_operation_id = self
+            .next_operation_id
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("io_uring operation identifier space exhausted"))?;
+        Ok(operation_id)
+    }
 
-        // Set timeout for waiting
-        self.ring
-            .submission()
-            .push(
-                &opcode::Timeout::new(
-                    types::Timespec::new()
-                        .sec(timeout.as_secs() as u64)
-                        .nsec(timeout.subsec_nanos()),
+    fn drain_completions(&mut self) -> io::Result<Vec<ReadResult>> {
+        let completions: Vec<(u64, i32)> = {
+            let ring = self.ring_mut()?;
+            ring.completion()
+                .map(|completion| (completion.user_data(), completion.result()))
+                .collect()
+        };
+
+        let mut results = Vec::with_capacity(completions.len());
+        for (operation_id, result) in completions {
+            let mut pending = self.pending.remove(&operation_id).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected or duplicate io_uring completion id {operation_id}"),
                 )
-                .build()
-                .user_data(u64::MAX), // Special user_data for timeout
-            )
-            .expect("Failed to submit timeout");
-
-        // Wait for completions
-        self.ring.submit_and_wait(1)?;
-
-        // Process completions
-        for cqe in self.ring.completion() {
-            let user_data = cqe.user_data();
-
-            // Skip timeout completion
-            if user_data == u64::MAX {
+            })?;
+            if result < 0 {
+                results.push(ReadResult::error(
+                    pending.offset,
+                    io::Error::from_raw_os_error(-result),
+                ));
                 continue;
             }
 
-            let idx = user_data as usize;
-            let result = cqe.result();
+            let bytes_read = result as usize;
+            if bytes_read > pending.buffer.len() {
+                results.push(ReadResult::error(
+                    pending.offset,
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "io_uring reported more bytes than the submitted buffer length",
+                    ),
+                ));
+                continue;
+            }
 
-            if let Some((offset, len)) = self.submitted.borrow().get(idx).copied() {
-                if result >= 0 {
-                    results.push(ReadResult::success(offset, result as usize));
+            pending.buffer.truncate(bytes_read);
+            results.push(ReadResult::success_with_data(
+                pending.offset,
+                pending.buffer,
+            ));
+        }
+        Ok(results)
+    }
+
+    fn wait_for_completion(ring: &IoUring, timeout: Duration) -> io::Result<()> {
+        let start = Instant::now();
+        let mut poll_fd = libc::pollfd {
+            fd: ring.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+
+        loop {
+            let remaining = match timeout.checked_sub(start.elapsed()) {
+                Some(remaining) => remaining,
+                None => return Ok(()),
+            };
+            let milliseconds = remaining.as_millis().saturating_add(u128::from(
+                if remaining.subsec_nanos() % 1_000_000 != 0 {
+                    1_u8
                 } else {
-                    let err = io::Error::from_raw_os_error(-result);
-                    results.push(ReadResult::error(offset, err));
+                    0_u8
+                },
+            ));
+            let poll_timeout = milliseconds.min(i32::MAX as u128) as i32;
+
+            // Safety: `poll_fd` is a valid, initialized stack value whose address remains valid
+            // for this synchronous call. The io_uring instance owns the descriptor for the
+            // entire call, and `nfds` exactly matches the one-element pollfd array.
+            let poll_result = unsafe { libc::poll(&mut poll_fd, 1, poll_timeout) };
+            if poll_result > 0 {
+                if poll_fd.revents & libc::POLLNVAL != 0 {
+                    return Err(io::Error::other(
+                        "io_uring file descriptor became invalid while waiting",
+                    ));
                 }
+                if poll_fd.revents & libc::POLLERR != 0 {
+                    return Err(io::Error::other("io_uring reported a polling error"));
+                }
+                return Ok(());
+            }
+            if poll_result == 0 {
+                return Ok(());
+            }
+
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
+        }
+    }
+
+    fn enqueue_read(&mut self, entry: &io_uring::squeue::Entry) -> io::Result<()> {
+        const MAX_QUEUE_FLUSH_ATTEMPTS: usize = 2;
+
+        for attempt in 0..=MAX_QUEUE_FLUSH_ATTEMPTS {
+            let push_result = {
+                let mut submission = self.ring_mut()?.submission();
+                // Safety: the entry's buffer points into a `Vec` retained by `self.pending`.
+                // That allocation is neither resized nor freed until `drain_completions` removes
+                // the matching operation after the kernel has reported its completion.
+                unsafe { submission.push(entry) }
+            };
+            if push_result.is_ok() {
+                return Ok(());
+            }
+            if attempt == MAX_QUEUE_FLUSH_ATTEMPTS {
+                break;
+            }
+            self.ring_mut()?.submit()?;
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "io_uring submission queue remained full after bounded flush attempts",
+        ))
+    }
+
+    fn submit_synchronous(&mut self, requests: &[ReadRequest]) -> io::Result<()> {
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "no file is bound"))?;
+
+        for request in requests {
+            let mut buffer = request.buffer.clone();
+            if buffer.len() < request.len {
+                buffer.resize(request.len, 0);
+            }
+
+            match file.read_at(&mut buffer[..request.len], request.offset) {
+                Ok(bytes_read) => {
+                    buffer.truncate(bytes_read);
+                    self.ready_results
+                        .push_back(ReadResult::success_with_data(request.offset, buffer));
+                }
+                Err(error) => self
+                    .ready_results
+                    .push_back(ReadResult::error(request.offset, error)),
             }
         }
 
-        self.pending_count = self.pending_count.saturating_sub(results.len());
-        self.submitted.borrow_mut().clear();
+        Ok(())
+    }
+
+    fn quiesce(&mut self) -> io::Result<()> {
+        if matches!(self.backend, LinuxIoBackend::Synchronous) {
+            return Ok(());
+        }
+
+        self.ring_mut()?.submit()?;
+        while !self.pending.is_empty() {
+            self.ring_mut()?.submit_and_wait(1)?;
+            let completed = self.drain_completions()?;
+            self.ready_results.extend(completed);
+        }
+        Ok(())
+    }
+
+    fn quiesce_until(&mut self, deadline: Instant) -> io::Result<()> {
+        if matches!(self.backend, LinuxIoBackend::Synchronous) {
+            return Ok(());
+        }
+
+        while !self.pending.is_empty() {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "io_uring drop quiescence deadline elapsed",
+                    )
+                })?;
+            {
+                let ring = self.ring_mut()?;
+                ring.submit()?;
+                Self::wait_for_completion(ring, remaining)?;
+            }
+
+            let completed = self.drain_completions()?;
+            self.ready_results.extend(completed);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxIoUringExecutor {
+    fn drop(&mut self) {
+        let deadline = Instant::now() + Self::DROP_QUIESCE_TIMEOUT;
+        if self.quiesce_until(deadline).is_ok() || self.pending.is_empty() {
+            return;
+        }
+
+        // The finite drop deadline elapsed or polling failed. Preserving process safety takes
+        // priority over reclaiming these resources: keeping the file and every submitted
+        // allocation alive prevents the kernel from observing freed memory during ring teardown.
+        if let Some(file) = self.file.take() {
+            std::mem::forget(file);
+        }
+        for pending in std::mem::take(&mut self.pending).into_values() {
+            std::mem::forget(pending.buffer);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Default for LinuxIoUringExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl AsyncIoExecutor for LinuxIoUringExecutor {
+    fn new() -> Self {
+        Self::try_new().unwrap_or_else(|_| Self::synchronous())
+    }
+
+    fn submit_batch(&mut self, requests: &[ReadRequest]) -> io::Result<()> {
+        if matches!(self.backend, LinuxIoBackend::Synchronous) {
+            return self.submit_synchronous(requests);
+        }
+        let fd = self
+            .file
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "no file is bound"))?
+            .as_raw_fd();
+
+        for request in requests {
+            if request.len > u32::MAX as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "io_uring read length exceeds u32::MAX",
+                ));
+            }
+        }
+
+        for request in requests {
+            if request.len == 0 {
+                self.ready_results
+                    .push_back(ReadResult::success(request.offset, 0));
+                continue;
+            }
+
+            let operation_id = self.next_operation_id()?;
+            let mut buffer = request.buffer.clone();
+            if buffer.len() < request.len {
+                buffer.resize(request.len, 0);
+            }
+            self.pending.insert(
+                operation_id,
+                PendingRead {
+                    offset: request.offset,
+                    buffer,
+                },
+            );
+
+            let entry = {
+                let pending = self
+                    .pending
+                    .get_mut(&operation_id)
+                    .expect("pending read was inserted immediately before submission");
+                opcode::Read::new(
+                    types::Fd(fd),
+                    pending.buffer.as_mut_ptr(),
+                    request.len as u32,
+                )
+                .offset(request.offset)
+                .build()
+                .user_data(operation_id)
+            };
+
+            if let Err(error) = self.enqueue_read(&entry) {
+                self.pending.remove(&operation_id);
+                return Err(error);
+            }
+        }
+
+        self.ring_mut()?.submit()?;
+
+        Ok(())
+    }
+
+    fn poll_completions(&mut self, timeout: Duration) -> io::Result<Vec<ReadResult>> {
+        let mut results: Vec<ReadResult> = self.ready_results.drain(..).collect();
+        if matches!(self.backend, LinuxIoBackend::Synchronous) {
+            return Ok(results);
+        }
+        results.extend(self.drain_completions()?);
+        if !results.is_empty() || self.pending.is_empty() {
+            return Ok(results);
+        }
+
+        {
+            let ring = self.ring_mut()?;
+            ring.submit()?;
+            Self::wait_for_completion(ring, timeout)?;
+        }
+        results.extend(self.drain_completions()?);
 
         Ok(results)
     }
 
-    fn sync(&self) -> io::Result<()> {
-        // Ensure all submissions are processed
-        let ring = &self.ring;
-        ring.submit_and_wait(0)?;
-        Ok(())
+    fn set_file(&mut self, file: File) -> io::Result<()> {
+        LinuxIoUringExecutor::set_file(self, file)
+    }
+
+    fn sync(&mut self) -> io::Result<()> {
+        self.quiesce()
     }
 }
 
@@ -672,7 +907,7 @@ impl AsyncIoExecutor for WindowsOverlappedExecutor {
         Ok(results)
     }
 
-    fn sync(&self) -> io::Result<()> {
+    fn sync(&mut self) -> io::Result<()> {
         // Wait for all pending I/O to complete
         unsafe {
             let result = WaitForSingleObject(self.event, INFINITE);
@@ -787,7 +1022,7 @@ impl AsyncIoExecutor for MmapExecutor {
         Ok(Vec::new())
     }
 
-    fn sync(&self) -> io::Result<()> {
+    fn sync(&mut self) -> io::Result<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             if let Some(ref mmap) = self.mmap {
@@ -963,7 +1198,7 @@ impl AsyncIoExecutor for DirectIoExecutor {
         Ok(Vec::new())
     }
 
-    fn sync(&self) -> io::Result<()> {
+    fn sync(&mut self) -> io::Result<()> {
         if let Some(ref file) = self.file {
             file.sync_all()?;
         }
@@ -994,8 +1229,7 @@ pub fn current_platform() -> &'static str {
 pub fn is_uring_available() -> bool {
     #[cfg(target_os = "linux")]
     {
-        // Try to create a small io_uring to check availability
-        io_uring::IoUring::new(1).is_ok()
+        LinuxIoUringExecutor::try_new().is_ok()
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1009,11 +1243,9 @@ pub fn is_uring_available() -> bool {
 pub fn recommended_io_mode() -> IoMode {
     #[cfg(target_os = "linux")]
     {
-        if is_uring_available() {
-            IoMode::IoUring
-        } else {
-            IoMode::Mmap
-        }
+        // LinuxIoUringExecutor::new provides a synchronous FileExt fallback when the ring or
+        // IORING_OP_READ probe is unavailable, so default callers must keep this mode.
+        IoMode::IoUring
     }
 
     #[cfg(target_os = "windows")]
@@ -1137,7 +1369,12 @@ mod tests {
         let success = ReadResult::success(100, 256);
         assert_eq!(success.offset, 100);
         assert_eq!(success.bytes_read, 256);
+        assert!(success.data.is_empty());
         assert!(success.error.is_none());
+
+        let data = ReadResult::success_with_data(100, vec![1, 2, 3]);
+        assert_eq!(data.bytes_read, 3);
+        assert_eq!(data.data, vec![1, 2, 3]);
 
         let error = ReadResult::error(100, io::Error::from(io::ErrorKind::UnexpectedEof));
         assert_eq!(error.offset, 100);
@@ -1163,8 +1400,7 @@ mod tests {
 
         #[cfg(target_os = "linux")]
         {
-            // On Linux, should be IoUring if available, otherwise Mmap
-            assert!(mode == IoMode::IoUring || mode == IoMode::Mmap);
+            assert_eq!(mode, IoMode::IoUring);
         }
 
         #[cfg(target_os = "windows")]
@@ -1222,23 +1458,93 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_uring_availability() {
-        // io_uring should be available on modern Linux
-        let available = is_uring_available();
-        // Note: May be false in some containerized environments
-        println!("io_uring available: {}", available);
+        assert_eq!(
+            is_uring_available(),
+            LinuxIoUringExecutor::try_new().is_ok()
+        );
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_linux_uring_executor() {
-        // This test may fail in environments without io_uring support
-        let result = std::panic::catch_unwind(|| LinuxIoUringExecutor::new());
+    fn test_linux_uring_constructor_and_file_binding_are_non_panicking() {
+        let mut executor = LinuxIoUringExecutor::new();
+        assert!(!executor.has_file());
 
-        if result.is_ok() {
-            println!("LinuxIoUringExecutor created successfully");
-        } else {
-            println!("LinuxIoUringExecutor creation failed (expected in some environments)");
-        }
+        let file = File::open(std::env::current_exe().unwrap()).unwrap();
+        executor.set_file(file).unwrap();
+        assert!(executor.has_file());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_executor_factory_exposes_file_binding() {
+        let mut executor = create_default_executor();
+        let file = File::open(std::env::current_exe().unwrap()).unwrap();
+        executor.set_file(file).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_uring_synchronous_fallback_returns_owned_data() -> io::Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "memoryx-io-fallback-{}-{}.bin",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, [1_u8, 2, 3, 4])?;
+
+        let mut executor = LinuxIoUringExecutor::synchronous();
+        assert!(!executor.is_uring_backend());
+        executor.set_file(File::open(&path)?)?;
+        let request = ReadRequest::with_buffer(0, vec![0; 4]);
+        executor.submit_batch(std::slice::from_ref(&request))?;
+        let results = executor.poll_completions(Duration::ZERO)?;
+
+        let _ = std::fs::remove_file(path);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data, vec![1, 2, 3, 4]);
+        assert_eq!(request.buffer, vec![0; 4]);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_uring_requires_explicit_file_binding() {
+        let Ok(mut executor) = LinuxIoUringExecutor::try_new() else {
+            return;
+        };
+
+        let error = executor
+            .submit_batch(&[ReadRequest::new(0, 1)])
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_uring_keeps_request_buffers_caller_owned() -> io::Result<()> {
+        let Ok(mut executor) = LinuxIoUringExecutor::try_new() else {
+            return Ok(());
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "memoryx-io-uring-{}-{}.bin",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, [1_u8, 2, 3, 4])?;
+        executor.set_file(File::open(&path)?)?;
+
+        let request = ReadRequest::with_buffer(0, vec![0; 4]);
+        executor.submit_batch(std::slice::from_ref(&request))?;
+        let results = executor.poll_completions(Duration::from_secs(1))?;
+
+        let _ = std::fs::remove_file(path);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].offset, 0);
+        assert_eq!(results[0].data, vec![1, 2, 3, 4]);
+        assert_eq!(request.buffer, vec![0; 4]);
+        Ok(())
     }
 
     // Windows-specific tests

@@ -6801,6 +6801,7 @@ mod tests {
         (store, atom_id)
     }
 
+    #[cfg(feature = "mcp")]
     fn mcp_text(response: &str) -> String {
         let value: serde_json::Value = serde_json::from_str(response).unwrap();
         value["result"]["content"][0]["text"]
