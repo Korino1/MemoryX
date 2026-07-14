@@ -2005,6 +2005,18 @@ impl Default for AnswerGraph {
 }
 
 impl AnswerGraph {
+    fn same_evidence_ref_identity(left: &EvidenceRef, right: &EvidenceRef) -> bool {
+        left.atom_id == right.atom_id
+            && left.section_kind == right.section_kind
+            && left.offset == right.offset
+            && left.length == right.length
+    }
+
+    fn same_evidence_record_identity(left: &EvidenceRecord, right: &EvidenceRecord) -> bool {
+        Self::same_evidence_ref_identity(&left.legacy_ref, &right.legacy_ref)
+            && left.source_id == right.source_id
+    }
+
     /// Create a new empty answer graph
     #[inline]
     pub fn new() -> Self {
@@ -2021,21 +2033,51 @@ impl AnswerGraph {
         }
     }
 
+    /// Number of unique physical evidence references exposed by graph nodes.
+    pub fn evidence_ref_count(&self) -> usize {
+        let mut unique = Vec::<&EvidenceRef>::new();
+        for evidence in self.nodes.iter().flat_map(|node| &node.evidence_refs) {
+            if !unique
+                .iter()
+                .any(|existing| Self::same_evidence_ref_identity(existing, evidence))
+            {
+                unique.push(evidence);
+            }
+        }
+        unique.len()
+    }
+
     /// Number of source-bearing evidence records exposed by graph nodes.
     pub fn evidence_record_count(&self) -> usize {
-        self.nodes
-            .iter()
-            .map(|node| node.direct_evidence.len())
-            .sum()
+        let mut unique = Vec::<&EvidenceRecord>::new();
+        for record in self.nodes.iter().flat_map(|node| &node.direct_evidence) {
+            if !unique
+                .iter()
+                .any(|existing| Self::same_evidence_record_identity(existing, record))
+            {
+                unique.push(record);
+            }
+        }
+        unique.len()
     }
 
     /// Number of graph evidence records linked to registered external sources.
     pub fn source_link_count(&self) -> usize {
-        self.nodes
+        let mut unique = Vec::<&EvidenceRecord>::new();
+        for record in self
+            .nodes
             .iter()
             .flat_map(|node| &node.direct_evidence)
             .filter(|record| record.source_id.is_some())
-            .count()
+        {
+            if !unique
+                .iter()
+                .any(|existing| Self::same_evidence_record_identity(existing, record))
+            {
+                unique.push(record);
+            }
+        }
+        unique.len()
     }
     /// Create with capacity
     #[inline]
@@ -2059,6 +2101,111 @@ impl AnswerGraph {
         let idx = self.nodes.len();
         self.nodes.push(node);
         idx
+    }
+
+    /// Merge duplicate physical atoms within the same branch and rewire graph indices.
+    ///
+    /// The same atom in different branch contexts remains a distinct semantic node.
+    /// Evidence identity is merged by physical atom section/span, independently of
+    /// trust decoration, so one source observation contributes once to proof counts.
+    pub fn canonicalize_nodes(&mut self) {
+        let old_nodes = std::mem::take(&mut self.nodes);
+        let mut canonical = Vec::<AgNode>::with_capacity(old_nodes.len());
+        let mut node_indices = HashMap::<(AtomId, Option<CtxId>), usize>::new();
+        let mut old_to_new = Vec::<usize>::with_capacity(old_nodes.len());
+
+        for node in old_nodes {
+            let key = (node.atom_ref.atom_id, node.branch_ctx_id);
+            if let Some(&idx) = node_indices.get(&key) {
+                let target = &mut canonical[idx];
+                target.gaps_covered.extend(node.gaps_covered);
+                target.trust = target.trust.max(node.trust);
+                target.io_bytes = target.io_bytes.max(node.io_bytes);
+                target.age_ns = target.age_ns.max(node.age_ns);
+                target.domain_mask |= node.domain_mask;
+                target.hard_conflicts = target.hard_conflicts.max(node.hard_conflicts);
+                target.soft_conflicts = target.soft_conflicts.max(node.soft_conflicts);
+
+                for evidence in node.evidence_refs {
+                    if let Some(existing) = target
+                        .evidence_refs
+                        .iter_mut()
+                        .find(|existing| Self::same_evidence_ref_identity(existing, &evidence))
+                    {
+                        existing.trust = existing.trust.max(evidence.trust);
+                    } else {
+                        target.evidence_refs.push(evidence);
+                    }
+                }
+                for record in node.direct_evidence {
+                    if !target
+                        .direct_evidence
+                        .iter()
+                        .any(|existing| Self::same_evidence_record_identity(existing, &record))
+                    {
+                        target.direct_evidence.push(record);
+                    }
+                }
+                for claim in node.derived_claims {
+                    if !target.derived_claims.iter().any(|existing| {
+                        existing.subj == claim.subj
+                            && existing.pred == claim.pred
+                            && existing.obj_tag == claim.obj_tag
+                            && existing.obj_val == claim.obj_val
+                            && existing.qualifiers_mask == claim.qualifiers_mask
+                    }) {
+                        target.derived_claims.push(claim);
+                    }
+                }
+                old_to_new.push(idx);
+            } else {
+                let idx = canonical.len();
+                node_indices.insert(key, idx);
+                canonical.push(node);
+                old_to_new.push(idx);
+            }
+        }
+        self.nodes = canonical;
+
+        let old_edges = std::mem::take(&mut self.edges);
+        for mut edge in old_edges {
+            let (Some(&src_idx), Some(&dst_idx)) =
+                (old_to_new.get(edge.src_idx), old_to_new.get(edge.dst_idx))
+            else {
+                continue;
+            };
+            if src_idx == dst_idx && edge.src_idx != edge.dst_idx {
+                continue;
+            }
+            edge.src_idx = src_idx;
+            edge.dst_idx = dst_idx;
+            if let Some(existing) = self.edges.iter_mut().find(|existing| {
+                existing.src_idx == edge.src_idx
+                    && existing.dst_idx == edge.dst_idx
+                    && existing.edge_type == edge.edge_type
+                    && existing.derived == edge.derived
+            }) {
+                existing.confidence = existing.confidence.max(edge.confidence);
+            } else {
+                self.edges.push(edge);
+            }
+        }
+
+        let old_steps = std::mem::take(&mut self.proof_steps);
+        for mut step in old_steps {
+            let Some(&conclusion) = old_to_new.get(step.conclusion) else {
+                continue;
+            };
+            step.conclusion = conclusion;
+            step.premises = step
+                .premises
+                .into_iter()
+                .filter_map(|idx| old_to_new.get(idx).copied())
+                .collect();
+            step.premises.sort_unstable();
+            step.premises.dedup();
+            self.proof_steps.push(step);
+        }
     }
 
     /// Add an edge to the graph
@@ -3325,11 +3472,14 @@ impl AnswerPack {
     /// - Outdated information
     /// - Domain mismatches
     pub fn from_solver(
-        graph: AnswerGraph,
+        mut graph: AnswerGraph,
         ctx_id: CtxId,
         gaps: &[Gap],
         weights: &CostWeights,
     ) -> Self {
+        graph.canonicalize_nodes();
+        graph.total_cost = graph.nodes.iter().map(|node| node.cost).sum::<f64>()
+            + weights.wE * graph.edge_count() as f64;
         let total_gaps = gaps.len();
         let covered_gaps = graph.covered_gaps.len();
         let node_count = graph.nodes.len();
@@ -3567,6 +3717,8 @@ impl AnswerPack {
 
     /// Recompute coverage counters that depend on post-solver enrichment.
     pub fn refresh_coverage_counts(&mut self) {
+        self.coverage_report.graph_nodes = self.graph.node_count();
+        self.coverage_report.graph_edges = self.graph.edge_count();
         self.coverage_report.claim_count = self.claims.len();
         self.coverage_report.evidence_ref_count = self.evidence.len();
         self.coverage_report.evidence_record_count = self.evidence_records.len();
@@ -5528,17 +5680,49 @@ impl MemoryX {
     }
 
     fn enrich_answer_sources(&self, pack: &mut AnswerPack) -> Result<(), StoreError> {
+        pack.graph.canonicalize_nodes();
+        pack.evidence.clear();
         pack.evidence_records.clear();
         for node in &mut pack.graph.nodes {
+            let mut unique_refs = Vec::with_capacity(node.evidence_refs.len());
+            for evidence in std::mem::take(&mut node.evidence_refs) {
+                if !unique_refs
+                    .iter()
+                    .any(|existing| AnswerGraph::same_evidence_ref_identity(existing, &evidence))
+                {
+                    unique_refs.push(evidence);
+                }
+            }
+            node.evidence_refs = unique_refs;
             node.direct_evidence.clear();
             for evidence in &node.evidence_refs {
-                node.direct_evidence
-                    .push(self.evidence_record_for_ref(evidence)?);
+                if !pack
+                    .evidence
+                    .iter()
+                    .any(|existing| AnswerGraph::same_evidence_ref_identity(existing, evidence))
+                {
+                    pack.evidence.push(evidence.clone());
+                }
+                let record = self.evidence_record_for_ref(evidence)?;
+                if !node
+                    .direct_evidence
+                    .iter()
+                    .any(|existing| AnswerGraph::same_evidence_record_identity(existing, &record))
+                {
+                    node.direct_evidence.push(record);
+                }
             }
             // AnswerPack keeps a compatibility aggregate derived from the
             // canonical graph-node records, never independently enriched.
-            pack.evidence_records
-                .extend(node.direct_evidence.iter().cloned());
+            for record in &node.direct_evidence {
+                if !pack
+                    .evidence_records
+                    .iter()
+                    .any(|existing| AnswerGraph::same_evidence_record_identity(existing, record))
+                {
+                    pack.evidence_records.push(record.clone());
+                }
+            }
         }
         pack.refresh_coverage_counts();
         for alternate in &mut pack.alternates {
@@ -8921,6 +9105,95 @@ mod tests {
                 .flat_map(|node| node.direct_evidence.iter().cloned())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_answer_aggregation_canonicalizes_duplicate_nodes_and_evidence() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp_dir.path().join("memoryx"));
+        let mut store = MemoryX::new(config).unwrap();
+        let source = store
+            .register_source(
+                SourceKind::File,
+                "canonical-source",
+                SourceLocation {
+                    path: Some("docs/canonical.txt".to_string()),
+                    line_range: Some((4, 8)),
+                    ..SourceLocation::default()
+                },
+            )
+            .unwrap();
+        let claim = ClaimData {
+            subj: 501,
+            pred: 502,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 503,
+            qualifiers_mask: 0,
+        };
+        let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+        let atom_id = store
+            .ingest(&payload, AtomType::FACT, &[claim], &[])
+            .unwrap();
+        store.set_atom_source(atom_id, source.source_id).unwrap();
+        let metadata = store.meta.get_meta(&atom_id).unwrap();
+        let evidence = MemoryX::attached_source_evidence_ref(atom_id, metadata).unwrap();
+        let atom_ref = AtomRef::new(atom_id, store.get_node_num(&atom_id).unwrap(), 0, 0);
+
+        let mut first = AgNode::new(atom_ref, AtomType::FACT);
+        first.add_gap(1);
+        first.evidence_refs.push(evidence.clone());
+        let mut duplicate = AgNode::new(atom_ref, AtomType::FACT);
+        duplicate.add_gap(2);
+        duplicate.evidence_refs.push(evidence.clone());
+        let mut branch = AgNode::new(atom_ref, AtomType::FACT);
+        branch.add_gap(3);
+        branch.evidence_refs.push(evidence);
+        branch.branch_ctx_id = Some(7);
+        let other = AgNode::new(AtomRef::new([9u8; 32], 999, 0, 0), AtomType::OBSERVATION);
+
+        let mut graph = AnswerGraph::new();
+        graph.add_node(first);
+        graph.add_node(duplicate);
+        graph.add_node(branch);
+        graph.add_node(other);
+        graph.add_edge(AgEdge::new(0, 1, AgEdgeType::Supports, 5000));
+        graph.add_edge(AgEdge::new(1, 3, AgEdgeType::References, 6000));
+        graph.add_proof_step(ProofStep::new(0, atom_id, vec![0], 1, Vec::new()));
+        graph.branch_lineage.push(7);
+
+        let mut answer = AnswerPack::from_solver(graph, 0, &[], &CostWeights::default());
+        store.enrich_answer_sources(&mut answer).unwrap();
+
+        assert_eq!(answer.graph.node_count(), 3);
+        let root = answer
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.branch_ctx_id.is_none())
+            .unwrap();
+        assert!(root.gaps_covered.contains(&1));
+        assert!(root.gaps_covered.contains(&2));
+        assert!(
+            answer
+                .graph
+                .nodes
+                .iter()
+                .any(|node| node.branch_ctx_id == Some(7) && node.gaps_covered.contains(&3))
+        );
+        assert_eq!(answer.graph.edges.len(), 1);
+        assert_eq!(answer.graph.edges[0].src_idx, 0);
+        assert_eq!(answer.graph.edges[0].dst_idx, 2);
+        assert_eq!(answer.graph.edges[0].edge_type, AgEdgeType::References);
+        assert_eq!(answer.graph.proof_steps[0].premises, vec![0]);
+        assert_eq!(answer.graph.proof_steps[0].conclusion, 0);
+        assert_eq!(answer.graph.evidence_record_count(), 1);
+        assert_eq!(answer.graph.evidence_ref_count(), 1);
+        assert_eq!(answer.graph.source_link_count(), 1);
+        assert_eq!(answer.evidence.len(), 1);
+        assert_eq!(answer.evidence_records.len(), 1);
+        assert_eq!(answer.coverage_report.evidence_ref_count, 1);
+        assert_eq!(answer.coverage_report.evidence_record_count, 1);
+        assert_eq!(answer.coverage_report.source_link_count, 1);
     }
 
     #[test]

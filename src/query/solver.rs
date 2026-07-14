@@ -1931,6 +1931,11 @@ impl FixedPointSolver {
             prev_graph_cost = current_cost;
         }
 
+        // Fixed-point iterations can select the same physical atom for several
+        // gaps. Collapse only same-branch duplicates before claims, proof counts,
+        // and costs are finalized; branch-qualified nodes remain distinct.
+        state.answer_graph.canonicalize_nodes();
+
         // Final cost calculation
         state
             .answer_graph

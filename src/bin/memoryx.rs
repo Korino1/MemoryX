@@ -2684,6 +2684,7 @@ fn answer_graph_json(graph: &memoryx::store::api::AnswerGraph) -> serde_json::Va
         "ctx_id": graph.ctx_id,
         "node_count": graph.node_count(),
         "edge_count": graph.edge_count(),
+        "evidence_ref_count": graph.evidence_ref_count(),
         "evidence_record_count": graph.evidence_record_count(),
         "source_link_count": graph.source_link_count(),
         "branch_lineage": graph.branch_lineage,
