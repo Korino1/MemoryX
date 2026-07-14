@@ -632,9 +632,41 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
         explanation["coverage_report"]["source_link_count"],
         explanation["graph"]["source_link_count"]
     );
+    assert_eq!(answer["graph"], explanation["graph"]);
+    assert_eq!(
+        answer["graph"]["nodes"][0]["direct_evidence"][0]["observed_at_unix_ns"],
+        answer["evidence_records"][0]["observed_at_unix_ns"]
+    );
+    assert!(
+        answer["evidence_records"][0]["observed_at_unix_ns"]
+            .as_u64()
+            .is_some_and(|timestamp| timestamp > 0)
+    );
+
+    let repeated_answer = reopened
+        .request(tool_request(
+            2015,
+            "query",
+            json!({"query_text": "mx01sourceprojection", "ctx_id": 0}),
+        ))
+        .expect("repeat query for deterministic graph");
+    let repeated_answer: Value =
+        serde_json::from_str(response_text(&repeated_answer)).expect("repeated AnswerPack JSON");
+    assert_eq!(answer["graph"], repeated_answer["graph"]);
+
+    let repeated_explanation = reopened
+        .request(tool_request(
+            2016,
+            "explain_answer_graph",
+            json!({"query_text": "mx01sourceprojection", "ctx_id": 0}),
+        ))
+        .expect("repeat explanation for deterministic graph");
+    let repeated_explanation: Value = serde_json::from_str(response_text(&repeated_explanation))
+        .expect("repeated AnswerGraph explanation JSON");
+    assert_eq!(answer["graph"], repeated_explanation["graph"]);
 
     let contexts = reopened
-        .request(tool_request(2015, "list_contexts", json!({})))
+        .request(tool_request(2017, "list_contexts", json!({})))
         .expect("list reopened contexts");
     let contexts = response_text(&contexts);
     assert!(contexts.contains("Total: 2"), "{contexts}");
