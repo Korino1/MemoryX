@@ -191,9 +191,18 @@ fn codex_initialize_request(id: u64) -> Value {
         "id": id,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "codex", "version": "1.0"}
+            "protocolVersion": "2025-06-18",
+            "capabilities": {
+                "elicitation": {
+                    "form": {},
+                    "url": {}
+                }
+            },
+            "clientInfo": {
+                "name": "codex-mcp-client",
+                "title": "Codex",
+                "version": "0.144.4"
+            }
         }
     })
 }
@@ -333,7 +342,7 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
             "jsonrpc": "2.0",
             "id": 1001,
             "result": {
-                "protocolVersion": "2025-11-25",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {}},
                 "serverInfo": {
                     "name": "memoryx",
@@ -366,6 +375,26 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
     assert_success(&tools);
     assert_eq!(tools["id"], json!("codex-tools-list"));
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(38));
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "active_base"))
+    );
+
+    let active_base = process
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": "codex-active-base",
+            "method": "tools/call",
+            "params": {
+                "name": "active_base",
+                "arguments": {}
+            }
+        }))
+        .expect("Codex active_base call failed after tools/list");
+    assert_success(&active_base);
+    assert_eq!(active_base["id"], json!("codex-active-base"));
+    assert!(response_text(&active_base).contains("\"active_base_ref\": \"active\""));
 
     let report = process.finish();
     assert!(
