@@ -1719,9 +1719,16 @@ impl FixedPointSolver {
         // Validate configuration
         self.config.validate()?;
 
-        // Create initial context
-        // Create initial context with persistent mutation
-        let ctx_id = self.ctx_manager.lock().create_context(ctx_policy);
+        // Reuse an explicitly selected context. Legacy callers pass a policy id
+        // here, so a missing id still creates a context with that policy.
+        let ctx_id = {
+            let mut contexts = self.ctx_manager.lock();
+            if contexts.get_ctx(ctx_policy).is_some() {
+                ctx_policy
+            } else {
+                contexts.create_context(ctx_policy)
+            }
+        };
 
         // Generate initial gaps via BackwardWave
         let gaps = BackwardWaveGenerator::generate(&goal);

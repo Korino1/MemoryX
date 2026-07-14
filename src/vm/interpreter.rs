@@ -674,7 +674,7 @@ pub struct AtomView<'a> {
 }
 
 /// Claim data for VM access
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClaimData {
     pub subj: u64, // SymId or NodeNum
     pub pred: u64, // SymId

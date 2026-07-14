@@ -1173,7 +1173,9 @@ impl MemoryXMcpServer {
     /// 18. create_context - Create context
     async fn create_context(&self, policy_id: Option<u64>) -> Result<ToolResult, String> {
         let mut store = self.store.write().await;
-        let new_ctx = store.create_context(policy_id.unwrap_or(0) as CtxPolicyId);
+        let new_ctx = store
+            .create_context(policy_id.unwrap_or(0) as CtxPolicyId)
+            .map_err(|error| error.to_string())?;
 
         let mut output = String::new();
         writeln!(output, "Created new context: {}", new_ctx).unwrap();
@@ -1220,7 +1222,7 @@ impl MemoryXMcpServer {
             branch_reason,
             policy_id.unwrap_or(0) as u32,
         ) {
-            Some(new_ctx) => {
+            Ok(Some(new_ctx)) => {
                 let mut output = String::new();
                 writeln!(output, "Created branch context: {}", new_ctx).unwrap();
                 writeln!(output, "Parent context: {}", parent_ctx).unwrap();
@@ -1232,7 +1234,8 @@ impl MemoryXMcpServer {
                     is_error: None,
                 })
             }
-            None => Err("Failed to create branch context".to_string()),
+            Ok(None) => Err("Failed to create branch context".to_string()),
+            Err(error) => Err(format!("Failed to persist branch context: {error}")),
         }
     }
 

@@ -176,7 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("5. Context branching demonstration...");
 
     // Create initial context
-    let ctx_main = store.create_context(0);
+    let ctx_main = store.create_context(0)?;
     println!("   Created main context: {}", ctx_main);
 
     // Create a hypothesis branch using a concrete claim and source atom.
@@ -451,10 +451,10 @@ mod tests {
         let config = StoreConfig::new(dir.path().join("test_ctx"));
         let mut store = MemoryX::new(config).unwrap();
 
-        let ctx0 = store.create_context(0);
+        let ctx0 = store.create_context(0).unwrap();
         assert_eq!(ctx0, 0);
 
-        let ctx1 = store.create_context(1);
+        let ctx1 = store.create_context(1).unwrap();
         assert_eq!(ctx1, 1);
 
         assert!(store.set_active_context(ctx0).is_ok());

@@ -225,7 +225,7 @@ impl MemoryXNative {
     // ========================================================================
 
     /// Создать новый контекст
-    pub async fn create_context(&self, policy_id: CtxPolicyId) -> CtxId {
+    pub async fn create_context(&self, policy_id: CtxPolicyId) -> Result<CtxId, StoreError> {
         let mut store = self.store.write().await;
         store.create_context(policy_id)
     }
@@ -607,7 +607,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Example 4: Context Management");
     println!("-----------------------------");
 
-    let ctx_id = api.create_context(0).await;
+    let ctx_id = api.create_context(0).await?;
     println!("Created context: {}", ctx_id);
 
     let active = api.active_context().await;
