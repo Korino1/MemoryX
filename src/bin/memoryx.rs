@@ -3635,7 +3635,7 @@ fn add_base_ref_to_store_tool_schemas(response: &mut serde_json::Value) {
 }
 
 #[cfg(feature = "mcp")]
-const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2024-11-05"];
+const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2024-11-05"];
 
 /// MCP initialize policy: echo an explicitly supported client date-version.
 /// Missing, non-string, and non-allowlisted versions are rejected rather than
