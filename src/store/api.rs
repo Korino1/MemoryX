@@ -1271,7 +1271,9 @@ impl EvidenceRecord {
             legacy_ref: evidence,
             source_id: None,
             source_location: None,
-            observed_at_unix_ns: current_unix_ns(),
+            // Legacy EvidenceRef has no durable observation timestamp. Zero is
+            // an explicit unknown value; response time is not proof metadata.
+            observed_at_unix_ns: 0,
             extractor: "legacy_evidence_ref".to_string(),
             human_verified: false,
         }
@@ -1280,6 +1282,10 @@ impl EvidenceRecord {
     pub fn with_source(mut self, source: &SourceRecord) -> Self {
         self.source_id = Some(source.source_id);
         self.source_location = Some(source.location.clone());
+        self.observed_at_unix_ns = source
+            .location
+            .timestamp_unix_ns
+            .unwrap_or(source.registered_at_unix_ns);
         self
     }
 }
@@ -2204,7 +2210,17 @@ impl AnswerGraph {
                 .collect();
             step.premises.sort_unstable();
             step.premises.dedup();
-            self.proof_steps.push(step);
+            if step.premises.is_empty() || step.premises.contains(&step.conclusion) {
+                continue;
+            }
+            if !self.proof_steps.iter().any(|existing| {
+                existing.rule_atom_id == step.rule_atom_id
+                    && existing.premises == step.premises
+                    && existing.conclusion == step.conclusion
+                    && existing.bindings == step.bindings
+            }) {
+                self.proof_steps.push(step);
+            }
         }
     }
 
@@ -8925,6 +8941,9 @@ mod tests {
 
         let evidence = EvidenceRef::new(atom_id, SectionKind::CLAIMS, 128, 32, 9000);
         let record = store.evidence_record_for_ref(&evidence).unwrap();
+        let repeated_record = store.evidence_record_for_ref(&evidence).unwrap();
+        assert_eq!(record, repeated_record);
+        assert_eq!(record.observed_at_unix_ns, source.registered_at_unix_ns);
         assert_eq!(record.source_id, Some(source.source_id));
         assert_eq!(
             record
@@ -9159,6 +9178,11 @@ mod tests {
         graph.add_edge(AgEdge::new(0, 1, AgEdgeType::Supports, 5000));
         graph.add_edge(AgEdge::new(1, 3, AgEdgeType::References, 6000));
         graph.add_proof_step(ProofStep::new(0, atom_id, vec![0], 1, Vec::new()));
+        graph.add_proof_step(ProofStep::new(1, atom_id, vec![1, 1], 3, Vec::new()));
+        graph.add_proof_step(ProofStep::new(2, atom_id, vec![3], 2, Vec::new()));
+        graph.add_proof_step(ProofStep::new(3, atom_id, vec![1, 2], 2, Vec::new()));
+        graph.add_proof_step(ProofStep::new(4, atom_id, vec![99], 3, Vec::new()));
+        graph.add_proof_step(ProofStep::new(5, atom_id, vec![0], 3, Vec::new()));
         graph.branch_lineage.push(7);
 
         let mut answer = AnswerPack::from_solver(graph, 0, &[], &CostWeights::default());
@@ -9184,8 +9208,14 @@ mod tests {
         assert_eq!(answer.graph.edges[0].src_idx, 0);
         assert_eq!(answer.graph.edges[0].dst_idx, 2);
         assert_eq!(answer.graph.edges[0].edge_type, AgEdgeType::References);
+        assert_eq!(answer.graph.proof_steps.len(), 2);
         assert_eq!(answer.graph.proof_steps[0].premises, vec![0]);
-        assert_eq!(answer.graph.proof_steps[0].conclusion, 0);
+        assert_eq!(answer.graph.proof_steps[0].conclusion, 2);
+        assert_eq!(answer.graph.proof_steps[1].premises, vec![2]);
+        assert_eq!(answer.graph.proof_steps[1].conclusion, 1);
+        assert!(answer.graph.proof_steps.iter().all(|step| {
+            !step.premises.is_empty() && !step.premises.contains(&step.conclusion)
+        }));
         assert_eq!(answer.graph.evidence_record_count(), 1);
         assert_eq!(answer.graph.evidence_ref_count(), 1);
         assert_eq!(answer.graph.source_link_count(), 1);
