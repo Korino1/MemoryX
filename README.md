@@ -284,6 +284,14 @@ Existing store-backed MCP tools use the active base by default. Most of them can
 also accept `base_ref` to operate on a connected base without changing the
 active base.
 
+Different physical bases can be used in parallel by different MCP clients. One
+physical base root has exactly one mutable owner at a time: a second process is
+rejected with an explicit writer-lease error before it can open mutable store
+components. If several applications need the same live logical base, route them
+through one coordinating owner service or use separate replicas synchronized
+through CRDT/federation; do not point independent writer processes at the same
+directory.
+
 ### MCP Tool Map
 
 | Category | Tools | Purpose |
@@ -315,6 +323,10 @@ MemoryX keeps bases in explicit scoped roots:
 
 - Project scope: `<repo>/.memoryx/bases/<name>`
 - User scope: `<home>/.memoryx/bases/<name>`
+
+Each opened base contains a persistent `.memoryx.writer.lock` file. The file is
+not a stale-lock sentinel: the operating system lock is held only for the owner
+process lifetime and is released automatically on normal exit or process death.
 
 The user chooses the storage location with `--base-scope`:
 
@@ -655,6 +667,14 @@ Multi-base MCP workflow:
 store-backed tools также могут принять `base_ref`, чтобы работать с
 подключённой базой без смены active base.
 
+Разные физические базы могут параллельно использоваться разными MCP-клиентами.
+У одного физического корня базы одновременно может быть только один процесс,
+изменяющий данные: второй процесс получит явную ошибку writer lease до открытия
+изменяемых компонентов хранилища. Если нескольким приложениям нужна одна живая
+логическая база, они должны работать через один координирующий owner-сервис или
+через отдельные реплики с синхронизацией CRDT/federation. Нельзя направлять два
+независимых writer-процесса в одну папку.
+
 ### Карта MCP Инструментов
 
 | Категория | Tools | Назначение |
@@ -686,6 +706,11 @@ MemoryX хранит базы в явных scoped roots:
 
 - Project scope: `<repo>/.memoryx/bases/<name>`
 - User scope: `<home>/.memoryx/bases/<name>`
+
+В каждой открытой базе сохраняется файл `.memoryx.writer.lock`. Это не маркер
+устаревшей блокировки: операционная система удерживает lock только пока жив
+процесс-владелец и автоматически освобождает его при штатном завершении или
+аварийной остановке процесса.
 
 Пользователь выбирает место хранения через `--base-scope`:
 

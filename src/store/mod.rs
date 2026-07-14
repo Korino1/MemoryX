@@ -21,6 +21,7 @@ use std::hash::Hash;
 
 // Main Store API
 pub mod api;
+pub(crate) mod base_lease;
 
 // ============================================================================
 // AtomType (u32)

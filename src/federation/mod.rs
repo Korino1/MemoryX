@@ -3550,7 +3550,9 @@ mod tests {
         // Create a simple store for testing
         let local_base = [1u8; 32];
         let config = FederationConfig::new(local_base);
-        let store = Arc::new(MemoryX::new(StoreConfig::default()).unwrap());
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let store =
+            Arc::new(MemoryX::new(StoreConfig::new(temp_dir.path().join("store"))).unwrap());
         let gateway = Gateway::new(store, config);
 
         let local_id = [10u8; 32];
@@ -3617,7 +3619,9 @@ mod tests {
             .with_peer(trusted_peer)
             .with_peer(untrusted_peer);
 
-        let store = Arc::new(MemoryX::new(StoreConfig::default()).unwrap());
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let store =
+            Arc::new(MemoryX::new(StoreConfig::new(temp_dir.path().join("store"))).unwrap());
         let gateway = Gateway::new(store, config);
 
         let local_id = [10u8; 32];
@@ -3655,7 +3659,9 @@ mod tests {
 
         let local_base = [1u8; 32];
         let config = FederationConfig::new(local_base);
-        let store = Arc::new(MemoryX::new(StoreConfig::default()).unwrap());
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let store =
+            Arc::new(MemoryX::new(StoreConfig::new(temp_dir.path().join("store"))).unwrap());
         let gateway = Gateway::new(store, config);
 
         let local_id = [10u8; 32];
@@ -3746,7 +3752,9 @@ mod tests {
         );
         let config = FederationConfig::new(local_base).with_peer(trusted_peer);
 
-        let store = Arc::new(MemoryX::new(StoreConfig::default()).unwrap());
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let store =
+            Arc::new(MemoryX::new(StoreConfig::new(temp_dir.path().join("store"))).unwrap());
         let gateway = Gateway::new(store, config);
 
         // Create mapping
@@ -3838,7 +3846,9 @@ mod tests {
         let peer = PeerConfig::new(known_base, "https://known.example.com".to_string(), 7000);
         let config = FederationConfig::new(local_base).with_peer(peer);
 
-        let store = Arc::new(MemoryX::new(StoreConfig::default()).unwrap());
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let store =
+            Arc::new(MemoryX::new(StoreConfig::new(temp_dir.path().join("store"))).unwrap());
         let gateway = Gateway::new(store, config);
 
         // Known base should have configured trust

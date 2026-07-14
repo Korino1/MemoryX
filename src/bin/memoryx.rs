@@ -32,6 +32,9 @@
 #[cfg(feature = "mcp")]
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
@@ -39,6 +42,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 use csv::{ReaderBuilder, WriterBuilder};
+use fs2::FileExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 
@@ -1596,8 +1600,8 @@ struct McpServerState {
 
 #[cfg(feature = "mcp")]
 impl McpServerState {
-    fn new(active_path: PathBuf, store: MemoryX) -> CliResult<Self> {
-        let active_path = absolute_or_cwd(&active_path)?;
+    fn new(_active_path: PathBuf, store: MemoryX) -> CliResult<Self> {
+        let active_path = store.config().root_path.clone();
         let active_name = active_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -1650,11 +1654,22 @@ impl McpServerState {
                 .get(base_ref)
                 .ok_or_else(|| format!("Unknown base_ref '{}'", base_ref))?
                 .clone();
+            let canonical_path = canonical_base_identity(&info.path)?;
+            if let Some(existing_ref) =
+                self.connected_ref_for_path(&canonical_path, Some(base_ref))?
+            {
+                return Err(format!(
+                    "Base '{}' resolves to a physical root already connected as '{}'; use the existing base_ref",
+                    base_ref, existing_ref
+                ));
+            }
             let store = MemoryX::new(StoreConfig::new(info.path.clone()))
                 .map_err(|err| format!("Failed to open base '{}': {}", base_ref, err))?;
+            let canonical_path = store.config().root_path.clone();
             self.stores.insert(base_ref.to_string(), store);
             if let Some(base) = self.bases.get_mut(base_ref) {
                 base.connected = true;
+                base.path = canonical_path;
             }
         }
 
@@ -1676,10 +1691,12 @@ impl McpServerState {
         } else {
             let scope = scope.unwrap_or(BaseScope::Project);
             let name = name.unwrap_or("default");
-            scoped_base_path(scope, name).map_err(|err| err.to_string())?
+            validate_allowed_base_path(
+                &scoped_base_path(scope, name).map_err(|err| err.to_string())?,
+            )
+            .map_err(|err| err.to_string())?
         };
 
-        let path = absolute_or_cwd(&path).map_err(|err| err.to_string())?;
         let name = name
             .map(str::to_string)
             .or_else(|| {
@@ -1695,13 +1712,41 @@ impl McpServerState {
             .map(str::to_string)
             .unwrap_or_else(|| format!("{}:{}", inferred_scope, name));
 
+        let canonical_candidate = canonical_base_identity(&path)?;
+        if self.stores.contains_key(&base_ref) {
+            let existing = self.bases.get(&base_ref).ok_or_else(|| {
+                format!("Connected base_ref '{}' has no registry entry", base_ref)
+            })?;
+            let canonical_existing = canonical_base_identity(&existing.path)?;
+            if canonical_existing == canonical_candidate {
+                return Ok(existing.clone());
+            }
+            return Err(format!(
+                "base_ref '{}' is already connected to '{}' and cannot be rebound to '{}'",
+                base_ref,
+                existing.path.display(),
+                path.display()
+            ));
+        }
+        if let Some(existing_ref) =
+            self.connected_ref_for_path(&canonical_candidate, Some(&base_ref))?
+        {
+            return Err(format!(
+                "Physical base '{}' is already connected as '{}'; reuse that base_ref instead of creating alias '{}'",
+                canonical_candidate.display(),
+                existing_ref,
+                base_ref
+            ));
+        }
+
         let store = MemoryX::new(StoreConfig::new(path.clone()))
             .map_err(|err| format!("Failed to open base '{}': {}", base_ref, err))?;
+        let canonical_path = store.config().root_path.clone();
         let info = McpBaseInfo {
             base_ref: base_ref.clone(),
             scope: inferred_scope,
             name,
-            path,
+            path: canonical_path,
             connected: true,
             active: base_ref == self.active_base_ref,
         };
@@ -1709,6 +1754,22 @@ impl McpServerState {
         self.bases.insert(base_ref, info.clone());
         self.refresh_active_markers();
         Ok(info)
+    }
+
+    fn connected_ref_for_path(
+        &self,
+        canonical_path: &Path,
+        except_ref: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        for (base_ref, base) in &self.bases {
+            if except_ref == Some(base_ref.as_str()) || !self.stores.contains_key(base_ref) {
+                continue;
+            }
+            if canonical_base_identity(&base.path)? == canonical_path {
+                return Ok(Some(base_ref.clone()));
+            }
+        }
+        Ok(None)
     }
 
     fn switch_base(&mut self, base_ref: &str) -> Result<McpBaseInfo, String> {
@@ -1780,21 +1841,33 @@ impl BaseScope {
 
 #[cfg(feature = "mcp")]
 fn infer_base_scope_label(path: &Path) -> String {
-    let project_root = project_base_root().ok();
-    let user_root = user_base_root().ok();
-    if project_root
-        .as_ref()
-        .is_some_and(|root| path.starts_with(root))
-    {
+    let canonical_path = canonical_physical_path(path).ok();
+    let project_root = project_base_root()
+        .ok()
+        .and_then(|root| canonical_physical_path(&root).ok());
+    let user_root = user_base_root()
+        .ok()
+        .and_then(|root| canonical_physical_path(&root).ok());
+    if project_root.as_ref().is_some_and(|root| {
+        canonical_path
+            .as_ref()
+            .is_some_and(|path| path.starts_with(root))
+    }) {
         "project".to_string()
-    } else if user_root
-        .as_ref()
-        .is_some_and(|root| path.starts_with(root))
-    {
+    } else if user_root.as_ref().is_some_and(|root| {
+        canonical_path
+            .as_ref()
+            .is_some_and(|path| path.starts_with(root))
+    }) {
         "user".to_string()
     } else {
         "path".to_string()
     }
+}
+
+#[cfg(feature = "mcp")]
+fn canonical_base_identity(path: &Path) -> Result<PathBuf, String> {
+    canonical_physical_path(path).map_err(|err| err.to_string())
 }
 
 #[cfg(feature = "mcp")]
@@ -1848,10 +1921,81 @@ fn absolute_or_cwd(path: &Path) -> CliResult<PathBuf> {
     }
 }
 
+fn normalize_absolute_path(path: PathBuf) -> CliResult<PathBuf> {
+    if !path.is_absolute() {
+        return Err(CliError::Validation(format!(
+            "Base path '{}' must be absolute",
+            path.display()
+        )));
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(CliError::Validation(format!(
+                        "Base path '{}' escapes its filesystem root",
+                        path.display()
+                    )));
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    Ok(normalized)
+}
+
+/// Resolve existing ancestors physically while preserving missing leaf components.
+///
+/// A dangling symlink is rejected rather than treated as a missing directory,
+/// so a later create cannot escape an authorized storage root through it.
+fn canonical_physical_path(path: &Path) -> CliResult<PathBuf> {
+    let mut current = normalize_absolute_path(absolute_or_cwd(path)?)?;
+    let mut missing_components: Vec<OsString> = Vec::new();
+
+    loop {
+        match std::fs::symlink_metadata(&current) {
+            Ok(_) => {
+                let mut canonical = std::fs::canonicalize(&current).map_err(|err| {
+                    CliError::Validation(format!(
+                        "Base path '{}' cannot be resolved physically: {}",
+                        current.display(),
+                        err
+                    ))
+                })?;
+                for component in missing_components.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let component = current.file_name().ok_or_else(|| {
+                    CliError::Validation(format!(
+                        "Base path '{}' has no existing filesystem ancestor",
+                        path.display()
+                    ))
+                })?;
+                missing_components.push(component.to_os_string());
+                if !current.pop() {
+                    return Err(CliError::Validation(format!(
+                        "Base path '{}' has no existing filesystem ancestor",
+                        path.display()
+                    )));
+                }
+            }
+            Err(err) => return Err(CliError::Io(err)),
+        }
+    }
+}
+
 fn validate_allowed_base_path(path: &Path) -> CliResult<PathBuf> {
-    let candidate = absolute_or_cwd(path)?;
-    let project_root = project_base_root()?;
-    let user_root = user_base_root()?;
+    let candidate = canonical_physical_path(path)?;
+    let project_root = canonical_physical_path(&project_base_root()?)?;
+    let user_root = canonical_physical_path(&user_base_root()?)?;
 
     if candidate.starts_with(&project_root) || candidate.starts_with(&user_root) {
         Ok(candidate)
@@ -1926,7 +2070,7 @@ fn resolve_base_path(
             let scope = cli_scope
                 .or(config.default_base_scope)
                 .unwrap_or(BaseScope::Project);
-            return scoped_base_path(scope, &base.to_string_lossy());
+            return validate_allowed_base_path(&scoped_base_path(scope, &base.to_string_lossy())?);
         }
         return validate_allowed_base_path(base);
     }
@@ -1942,7 +2086,7 @@ fn resolve_base_path(
         .or(config.default_base_name.as_deref())
         .unwrap_or("default");
 
-    scoped_base_path(scope, name)
+    validate_allowed_base_path(&scoped_base_path(scope, name)?)
 }
 
 // ============================================================================
@@ -2539,6 +2683,8 @@ fn cmd_compact(base: &Path, compaction_type: CompactionType, dry_run: bool) -> C
     use memoryx::cas::io::{CasStore as CasIoStore, Compactor};
     use memoryx::graph::GraphStore;
 
+    let (base, _lease) = acquire_compaction_lease(base)?;
+
     print_info(&format!(
         "Running compaction on '{}' (type: {:?})",
         base.display(),
@@ -2702,6 +2848,59 @@ fn cmd_compact(base: &Path, compaction_type: CompactionType, dry_run: bool) -> C
     }
 
     Ok(())
+}
+
+const BASE_LEASE_FILE_NAME: &str = ".memoryx.writer.lock";
+
+/// CLI-local guard for the same OS lock used by `BaseLease`.
+///
+/// `BaseLease` is intentionally crate-private, so the binary acquires the
+/// identical physical lock without constructing a second MemoryX store.
+struct CompactionLease {
+    file: File,
+}
+
+impl Drop for CompactionLease {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+fn is_lock_contended(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        matches!(error.raw_os_error(), Some(32 | 33))
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn acquire_compaction_lease(base: &Path) -> CliResult<(PathBuf, CompactionLease)> {
+    std::fs::create_dir_all(base)?;
+    let canonical_root = canonical_physical_path(base)?;
+    let lock_path = canonical_root.join(BASE_LEASE_FILE_NAME);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok((canonical_root, CompactionLease { file })),
+        Err(error) if is_lock_contended(&error) => Err(CliError::Store(format!(
+            "Cannot compact '{}': exclusive writer lease is already held by another MemoryX instance",
+            canonical_root.display()
+        ))),
+        Err(error) => Err(CliError::Io(error)),
+    }
 }
 
 /// Format bytes to human-readable string
@@ -3333,6 +3532,107 @@ fn cmd_serve(_base: &Path, _port: u16, _host: &str, _stdio: bool) -> CliResult<(
     ))
 }
 
+#[cfg(feature = "mcp")]
+const BASE_SELECTABLE_MCP_TOOLS: &[&str] = &[
+    "query",
+    "query_base",
+    "explain_answer_graph",
+    "get_provenance_path",
+    "search_lex",
+    "search_graph",
+    "search_semantic",
+    "ingest",
+    "batch_ingest",
+    "update_atom",
+    "supersede_claim",
+    "correct_claim",
+    "delete_atom",
+    "history",
+    "register_source",
+    "list_sources",
+    "attach_atom_source",
+    "create_entity",
+    "list_entities",
+    "alias_entity",
+    "merge_entities",
+    "split_entity",
+    "add_claim",
+    "assert_relation",
+    "correct_relation",
+    "create_context",
+    "list_contexts",
+    "branch_context",
+    "list_conflicts",
+    "graph_neighbors",
+    "graph_walk",
+    "extract_subgraph",
+];
+
+#[cfg(feature = "mcp")]
+fn add_base_ref_to_store_tool_schemas(response: &mut serde_json::Value) {
+    let Some(tools) = response
+        .pointer_mut("/result/tools")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+
+    for tool in tools {
+        let is_base_selectable = tool
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| BASE_SELECTABLE_MCP_TOOLS.contains(&name));
+        if !is_base_selectable {
+            continue;
+        }
+
+        let Some(schema) = tool
+            .get_mut("inputSchema")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        let Some(properties) = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+
+        properties.entry("base_ref".to_string()).or_insert_with(|| {
+            serde_json::json!({
+                "type": "string",
+                "description": "Optional connected base_ref. Omit it to use the active base."
+            })
+        });
+
+        let examples = schema
+            .entry("examples".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        let Some(examples) = examples.as_array_mut() else {
+            continue;
+        };
+        if examples
+            .iter()
+            .any(|example| example.get("base_ref").is_some())
+        {
+            continue;
+        }
+
+        let mut explicit_base_example = examples
+            .first()
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(example) = explicit_base_example.as_object_mut() {
+            example.insert(
+                "base_ref".to_string(),
+                serde_json::Value::String("project:client-a".to_string()),
+            );
+            examples.push(explicit_base_example);
+        }
+    }
+}
+
 /// Process MCP JSON-RPC request
 #[cfg(feature = "mcp")]
 async fn process_mcp_request(state: &mut McpServerState, request: &str) -> String {
@@ -3342,7 +3642,7 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Strin
             let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
             let id = req.get("id").cloned().unwrap_or(serde_json::json!(null));
 
-            let resp = match method {
+            let mut resp = match method {
                 "initialize" => serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -4341,6 +4641,10 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Strin
                     "error": { "code": -32601, "message": "Method not found" }
                 }),
             };
+
+            if method == "tools/list" {
+                add_base_ref_to_store_tool_schemas(&mut resp);
+            }
 
             serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string())
         }
@@ -6649,6 +6953,64 @@ mod tests {
         assert!(matches!(err, CliError::Validation(_)));
     }
 
+    #[test]
+    fn test_validate_allowed_base_path_accepts_scoped_missing_leaf() {
+        let base = project_base_root()
+            .unwrap()
+            .join(format!("mp_lock_02_valid_{}", std::process::id()));
+
+        let validated = validate_allowed_base_path(&base).unwrap();
+        let project_root = canonical_physical_path(&project_base_root().unwrap()).unwrap();
+
+        assert!(validated.starts_with(project_root));
+    }
+
+    #[test]
+    fn test_compact_rejects_held_memoryx_lease_then_succeeds_after_drop() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("memoryx");
+        let store = MemoryX::new(StoreConfig::new(base.clone())).unwrap();
+
+        let error = cmd_compact(&base, CompactionType::All, true).unwrap_err();
+        assert!(matches!(error, CliError::Store(_)));
+        assert!(error.to_string().contains("exclusive writer lease"));
+
+        drop(store);
+        cmd_compact(&base, CompactionType::All, true).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn create_directory_link(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_directory_link(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn test_validate_allowed_base_path_rejects_scoped_symlink_escape() {
+        let project_root = project_base_root().unwrap();
+        std::fs::create_dir_all(&project_root).unwrap();
+        let link = project_root.join(format!("mp_lock_02_escape_{}", std::process::id()));
+        let outside = tempdir().unwrap();
+
+        let link_result = create_directory_link(outside.path(), &link);
+        if let Err(error) = link_result {
+            if error.kind() == io::ErrorKind::PermissionDenied {
+                return;
+            }
+            panic!("failed to create test directory link: {error}");
+        }
+
+        let result = validate_allowed_base_path(&link.join("escaped_base"));
+        let _ = std::fs::remove_dir(&link);
+
+        assert!(matches!(result, Err(CliError::Validation(_))));
+    }
+
     #[cfg(feature = "mcp")]
     #[test]
     fn test_federation_base_id_is_persistent_and_unique_per_base() {
@@ -6701,6 +7063,26 @@ mod tests {
                 examples_len > 0,
                 "tool {} must have at least one example",
                 tool["name"].as_str().unwrap_or("<unknown>")
+            );
+        }
+
+        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 32);
+        for name in BASE_SELECTABLE_MCP_TOOLS {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"].as_str() == Some(name))
+                .unwrap_or_else(|| panic!("base-selectable tool {name} is missing"));
+            assert!(
+                tool["inputSchema"]["properties"].get("base_ref").is_some(),
+                "tool {name} must advertise optional base_ref"
+            );
+            assert!(
+                tool["inputSchema"]["examples"]
+                    .as_array()
+                    .is_some_and(|examples| examples
+                        .iter()
+                        .any(|example| example.get("base_ref").is_some())),
+                "tool {name} must include an explicit base_ref example"
             );
         }
 
@@ -6784,6 +7166,29 @@ mod tests {
         let connect_text = mcp_text(&connect_response);
         assert!(connect_text.contains("\"base_ref\": \"secondary\""));
         assert!(connect_text.contains("\"connected\": true"));
+
+        let stores_after_first_connect = state.stores.len();
+        let repeated_connect_response = process_mcp_request(&mut state, &connect_request).await;
+        assert!(!repeated_connect_response.contains("\"error\""));
+        assert_eq!(state.stores.len(), stores_after_first_connect);
+
+        let alias_connect_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1021,
+            "method": "tools/call",
+            "params": {
+                "name": "connect_base",
+                "arguments": {
+                    "base_ref": "secondary_alias",
+                    "scope": "project",
+                    "name": secondary_name
+                }
+            }
+        })
+        .to_string();
+        let alias_connect_response = process_mcp_request(&mut state, &alias_connect_request).await;
+        assert!(alias_connect_response.contains("already connected as 'secondary'"));
+        assert_eq!(state.stores.len(), stores_after_first_connect);
 
         let list_request = serde_json::json!({
             "jsonrpc": "2.0",
