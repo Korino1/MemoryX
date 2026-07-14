@@ -915,7 +915,11 @@ impl IndexFile {
         let mut bloom_bytes = vec![0u8; bloom_size];
         reader.read_exact(&mut bloom_bytes)?;
 
-        let num_bits = entry_count * BLOOM_BITS_PER_ENTRY;
+        // The writer may reserve more Bloom capacity than the current entry
+        // count. Reconstruct the original modulus from the serialized bitset;
+        // deriving it from entry_count changes hash positions after reopen and
+        // introduces false negatives for persisted entries.
+        let num_bits = bloom_bytes.len() * 8;
         let bloom = BloomFilter::from_bytes(&bloom_bytes, num_bits);
 
         // Sort entries by fp64
@@ -2171,9 +2175,17 @@ mod tests {
             "Index should have entries after reload"
         );
 
-        // Verify some entries exist (Bloom filter may have false negatives during reload)
+        // Reopened lookup must preserve Bloom hash positions and never produce
+        // a false negative for a persisted entry.
         let entries = index.get_all_entries();
         assert!(!entries.is_empty(), "Should have entries after reload");
+        for i in 0..5 {
+            let atom_id = create_test_atom_id(i as u8);
+            assert!(
+                index.find(&atom_id).is_some(),
+                "persisted atom {i} should be found after reload"
+            );
+        }
     }
 
     #[test]
@@ -2553,7 +2565,10 @@ pub const SKFI_VERSION: u16 = 0x0001;
 pub struct SegmentIndex {
     /// Index entries
     entries: Vec<SegmentIndexEntry>,
-    /// Bloom filter for fast negative lookups
+    /// Optional Bloom filter for fast negative lookups.
+    ///
+    /// SKFI v1 entries persist only `fp64`, not the full AtomId required by
+    /// `BloomFilter`, so the filter remains disabled for correctness.
     bloom_filter: Option<BloomFilter>,
 }
 
@@ -2572,7 +2587,7 @@ impl SegmentIndex {
     pub fn with_capacity(capacity: usize) -> Self {
         SegmentIndex {
             entries: Vec::with_capacity(capacity),
-            bloom_filter: Some(BloomFilter::new(capacity)),
+            bloom_filter: None,
         }
     }
 
@@ -2707,15 +2722,15 @@ impl SegmentIndex {
         reader.read_exact(&mut bloom_size_bytes)?;
         let bloom_size = u32::from_le_bytes(bloom_size_bytes) as usize;
 
-        // Read bloom filter if present
-        let bloom_filter = if bloom_size > 0 {
+        // Consume legacy SKFI v1 Bloom bytes, but do not use them to reject a
+        // lookup. Segment entries do not preserve the full AtomId needed to
+        // construct the filter, and legacy writers could therefore persist an
+        // empty filter that would produce false negatives.
+        if bloom_size > 0 {
             let mut bloom_bytes = vec![0u8; bloom_size];
             reader.read_exact(&mut bloom_bytes)?;
-            let num_bits = count * BLOOM_BITS_PER_ENTRY;
-            Some(BloomFilter::from_bytes(&bloom_bytes, num_bits))
-        } else {
-            None
-        };
+        }
+        let bloom_filter = None;
 
         Ok(SegmentIndex {
             entries,
@@ -3249,6 +3264,10 @@ mod task_tests {
         // Verify entries
         for i in 0..5 {
             let atom_id = create_test_atom_id(i as u8 * 3);
+            assert!(
+                index.might_contain(&atom_id),
+                "persisted segment Bloom filter rejected entry {i}"
+            );
             let found = index.find_by_atom_id(&atom_id);
             assert!(found.is_some(), "Entry {} not found", i);
             assert_eq!(found.unwrap().offset, (i as u64) * 1000);
