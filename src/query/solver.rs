@@ -365,6 +365,9 @@ pub struct GoalSpec {
     pub domain_mask: DomainMask,
     /// Entity references
     pub entities: Vec<EntityRef>,
+    /// True when a natural-language target was resolved against the durable
+    /// lexicon. In this mode an empty resolution must not broaden to all atoms.
+    pub lexical_resolution_required: bool,
     /// Query embedding vectors for ANN-backed semantic retrieval.
     pub semantic_vectors: Vec<Vec<f32>>,
     /// Hard/soft/negative constraints lowered from the public QueryContract.
@@ -396,6 +399,7 @@ impl GoalSpec {
             trust_min: 0,
             domain_mask: 0,
             entities: Vec::new(),
+            lexical_resolution_required: false,
             semantic_vectors: Vec::new(),
             constraints: Vec::new(),
             context_scope: crate::query::contract::ContextScope::default(),
@@ -432,6 +436,13 @@ impl GoalSpec {
     #[inline]
     pub fn with_entities(mut self, entities: Vec<EntityRef>) -> Self {
         self.entities = entities;
+        self
+    }
+
+    /// Mark this goal as a lexicon-resolved natural-language query.
+    #[inline]
+    pub fn with_lexical_resolution_required(mut self, required: bool) -> Self {
+        self.lexical_resolution_required = required;
         self
     }
 
@@ -1700,6 +1711,53 @@ impl FixedPointSolver {
             .ok_or_else(|| SolverError::CasError(format!("Atom not found: {:?}", atom_id)))
     }
 
+    fn claims_from_atom_body(body: &[u8]) -> Vec<ClaimData> {
+        let Ok(header) = crate::cas::AtomBodyHeader::from_bytes(body) else {
+            return Vec::new();
+        };
+        let table_start = header.section_table_off as usize;
+        for index in 0..header.section_count as usize {
+            let descriptor_offset = table_start + index * crate::cas::SectionDesc::SIZE;
+            let Some(descriptor_bytes) =
+                body.get(descriptor_offset..descriptor_offset + crate::cas::SectionDesc::SIZE)
+            else {
+                return Vec::new();
+            };
+            let Ok(descriptor) = crate::cas::SectionDesc::from_bytes_unaligned(descriptor_bytes)
+            else {
+                continue;
+            };
+            if descriptor.kind() != Some(crate::store::SectionKind::CLAIMS) {
+                continue;
+            }
+            let start = descriptor.off as usize;
+            let end = start.saturating_add(descriptor.len as usize);
+            let Some(section_bytes) = body.get(start..end) else {
+                return Vec::new();
+            };
+            let Ok(section) = crate::cas::claims::ClaimsSection::from_bytes(section_bytes) else {
+                return Vec::new();
+            };
+            return section
+                .claims
+                .iter()
+                .map(|claim| {
+                    let mut object = [0u8; 8];
+                    let copy_len = claim.object_value.len().min(object.len());
+                    object[..copy_len].copy_from_slice(&claim.object_value[..copy_len]);
+                    ClaimData {
+                        subj: u64::from(claim.subject_local),
+                        pred: u64::from(claim.predicate_local),
+                        obj_tag: claim.object_tag.to_u8(),
+                        obj_val: u64::from_le_bytes(object),
+                        qualifiers_mask: 0,
+                    }
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
     /// Run fixed-point solving
     ///
     /// # Arguments
@@ -1749,6 +1807,16 @@ impl FixedPointSolver {
 
         // Extract claims with full provenance chains
         self.extract_claims(&mut pack, &state);
+        if pack.graph.nodes.is_empty() && state.goal.lexical_resolution_required {
+            pack.status = AnswerStatus::NoMatch;
+        } else if !pack.graph.nodes.is_empty() && pack.claims.is_empty() {
+            pack.status = AnswerStatus::InsufficientEvidence;
+            pack.limitations.push(Limitation::warning(
+                LimitationCode::IncompleteEvidence,
+                "Lexical candidates were found, but they contain no knowledge claims; only source-backed candidate evidence is returned"
+                    .to_owned(),
+            ));
+        }
 
         pack.rejected_candidates = state.rejected_candidates.clone();
         if !pack.rejected_candidates.is_empty() {
@@ -2328,6 +2396,8 @@ impl FixedPointSolver {
                     continue;
                 }
             };
+            let mut candidate = candidate.clone();
+            candidate.derived_claims = Self::claims_from_atom_body(&atom_body);
 
             // Call eval_invariants_for_atom from abi module
             // This evaluates the real INVARIANTS bytecode from the atom
@@ -2722,18 +2792,6 @@ impl FixedPointSolver {
                     .or_default()
                     .push((claim.clone(), trust));
             }
-            // Also create implicit claims from candidate metadata
-            let implicit = ClaimData {
-                subj: candidate.node_num,
-                pred: 1, // "has_type" predicate
-                obj_tag: 0,
-                obj_val: candidate.atom_type.to_u32() as u64,
-                qualifiers_mask: 0,
-            };
-            claims_by_subj
-                .entry(candidate.node_num)
-                .or_default()
-                .push((implicit, trust));
         }
 
         // Rule 1: Transitive inference (A→B, B→C => A→C)
@@ -2816,6 +2874,9 @@ impl FixedPointSolver {
                 for j in (i + 1)..sharing_candidates.len() {
                     let a = &candidates[sharing_candidates[i]];
                     let b = &candidates[sharing_candidates[j]];
+                    if a.atom_id == b.atom_id {
+                        continue;
+                    }
                     let supports_trust =
                         ((a.trust as f64).min(b.trust as f64) * inference_decay) as TrustLevel;
                     if supports_trust < 100 {
@@ -3222,64 +3283,42 @@ impl FixedPointSolver {
                 let chain = node.evidence_refs.clone();
                 evidence_chains.push((claim, chain));
             }
-            let structural_claim = ClaimView::new(
-                EntityRef::Node(node.atom_ref.node_num),
-                1, // "has_type" predicate
-                ObjTag::NULL,
-                ConstValue::u64(node.atom_type.to_u32() as u64),
-                0,
-                node.trust,
-                node.atom_ref.atom_id,
-            )
-            .with_provenance(
-                ClaimStatus::Structural,
-                node.evidence_refs.clone(),
-                node.evidence_refs.clone(),
-            );
-            pack.add_claim(structural_claim);
-
             // Add all evidence references to the pack
             for ev in &node.evidence_refs {
                 pack.add_evidence(ev.clone());
             }
 
-            // Create claims for gaps covered by this node
-            for &gap_id in &node.gaps_covered {
-                if let Some(gap) = state.gaps.get(gap_id as usize) {
-                    let gap_claim = ClaimView::new(
-                        EntityRef::Node(node.atom_ref.node_num),
-                        gap.kind.to_u8() as SymId,
-                        ObjTag::NULL,
-                        ConstValue::u64(gap_id as u64),
-                        0,
-                        node.trust,
-                        node.atom_ref.atom_id,
-                    )
-                    .with_provenance(
-                        ClaimStatus::Derived,
-                        node.evidence_refs.clone(),
-                        node.evidence_refs.clone(),
-                    );
-                    pack.add_claim(gap_claim);
-                }
-            }
+            // Structural and routing-derived claims are useful annotations only
+            // when the atom supplied at least one real semantic claim. A
+            // symbol-only atom must remain a candidate, not become a fabricated
+            // factual answer through solver bookkeeping.
+            if !node.derived_claims.is_empty() {
+                let structural_claim = ClaimView::new(
+                    EntityRef::Node(node.atom_ref.node_num),
+                    1, // "has_type" predicate
+                    ObjTag::NULL,
+                    ConstValue::u64(node.atom_type.to_u32() as u64),
+                    0,
+                    node.trust,
+                    node.atom_ref.atom_id,
+                )
+                .with_provenance(
+                    ClaimStatus::Structural,
+                    node.evidence_refs.clone(),
+                    node.evidence_refs.clone(),
+                );
+                pack.add_claim(structural_claim);
 
-            // Create edge-based claims for connectivity
-            for edge in &state.answer_graph.edges {
-                if edge.src_idx == node_idx || edge.dst_idx == node_idx {
-                    let other_idx = if edge.src_idx == node_idx {
-                        edge.dst_idx
-                    } else {
-                        edge.src_idx
-                    };
-                    if let Some(other_node) = state.answer_graph.get_node(other_idx) {
-                        let edge_claim = ClaimView::new(
+                // Create claims for gaps covered by this node
+                for &gap_id in &node.gaps_covered {
+                    if let Some(gap) = state.gaps.get(gap_id as usize) {
+                        let gap_claim = ClaimView::new(
                             EntityRef::Node(node.atom_ref.node_num),
-                            Self::edge_type_to_pred(&edge.edge_type),
-                            ObjTag::REF,
-                            ConstValue::u64(other_node.atom_ref.node_num),
+                            gap.kind.to_u8() as SymId,
+                            ObjTag::NULL,
+                            ConstValue::u64(gap_id as u64),
                             0,
-                            edge.confidence,
+                            node.trust,
                             node.atom_ref.atom_id,
                         )
                         .with_provenance(
@@ -3287,7 +3326,35 @@ impl FixedPointSolver {
                             node.evidence_refs.clone(),
                             node.evidence_refs.clone(),
                         );
-                        pack.add_claim(edge_claim);
+                        pack.add_claim(gap_claim);
+                    }
+                }
+
+                // Create edge-based claims for connectivity
+                for edge in &state.answer_graph.edges {
+                    if edge.src_idx == node_idx || edge.dst_idx == node_idx {
+                        let other_idx = if edge.src_idx == node_idx {
+                            edge.dst_idx
+                        } else {
+                            edge.src_idx
+                        };
+                        if let Some(other_node) = state.answer_graph.get_node(other_idx) {
+                            let edge_claim = ClaimView::new(
+                                EntityRef::Node(node.atom_ref.node_num),
+                                Self::edge_type_to_pred(&edge.edge_type),
+                                ObjTag::REF,
+                                ConstValue::u64(other_node.atom_ref.node_num),
+                                0,
+                                edge.confidence,
+                                node.atom_ref.atom_id,
+                            )
+                            .with_provenance(
+                                ClaimStatus::Derived,
+                                node.evidence_refs.clone(),
+                                node.evidence_refs.clone(),
+                            );
+                            pack.add_claim(edge_claim);
+                        }
                     }
                 }
             }
@@ -3357,6 +3424,16 @@ impl FixedPointSolver {
             &self.cost_weights,
         );
         self.extract_claims(&mut pack, &state);
+        if pack.graph.nodes.is_empty() && state.goal.lexical_resolution_required {
+            pack.status = AnswerStatus::NoMatch;
+        } else if !pack.graph.nodes.is_empty() && pack.claims.is_empty() {
+            pack.status = AnswerStatus::InsufficientEvidence;
+            pack.limitations.push(Limitation::warning(
+                LimitationCode::IncompleteEvidence,
+                "Lexical candidates were found, but they contain no knowledge claims; only source-backed candidate evidence is returned"
+                    .to_owned(),
+            ));
+        }
 
         // Generate alternates
         let all_candidates = self.collect_final_candidates(&state);
@@ -4407,7 +4484,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_claims_produces_structural_claims() {
+    fn test_extract_claims_does_not_fabricate_structural_claims() {
         let solver = FixedPointSolver::new();
 
         let mut graph = AnswerGraph::new();
@@ -4427,10 +4504,10 @@ mod tests {
 
         solver.extract_claims(&mut pack, &state_with_graph);
 
-        // Should have structural claims (has_type)
+        // Graph metadata is not semantic evidence and must not become an answer claim.
         assert!(
-            !pack.claims.is_empty(),
-            "Should have extracted claims from graph"
+            pack.claims.is_empty(),
+            "Zero-claim graph nodes must not fabricate structural claims"
         );
     }
 

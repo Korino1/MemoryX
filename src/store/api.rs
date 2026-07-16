@@ -27,6 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::cas::canonical::compute_atom_id_from_payload;
 use crate::cas::io as cas_io;
@@ -1217,6 +1218,60 @@ pub struct SourceRecord {
     pub kind: SourceKind,
     pub label: String,
     pub location: SourceLocation,
+    pub registered_at_unix_ns: u64,
+}
+
+/// Durable, accumulating link between an atom and one registered source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AtomSourceLink {
+    pub atom_id: AtomId,
+    pub source_id: SourceId,
+    pub attached_at_unix_ns: u64,
+}
+
+/// First managed predicate id. Lower ids remain available to legacy numeric APIs.
+pub const MANAGED_PREDICATE_ID_START: SymId = 0x8000_0000;
+
+/// Direction contract for a project-authored predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PredicateDirection {
+    #[default]
+    Directed,
+    Symmetric,
+}
+
+/// Cardinality contract for a project-authored predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PredicateCardinality {
+    OneToOne,
+    OneToMany,
+    ManyToOne,
+    #[default]
+    ManyToMany,
+}
+
+/// Immutable semantic contract behind a managed numeric predicate id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PredicateContract {
+    pub stable_key: String,
+    pub canonical_name: String,
+    pub description: String,
+    #[serde(default)]
+    pub direction: PredicateDirection,
+    #[serde(default)]
+    pub inverse_stable_key: Option<String>,
+    #[serde(default)]
+    pub cardinality: PredicateCardinality,
+}
+
+/// Durable predicate registry entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PredicateRecord {
+    pub predicate_id: SymId,
+    pub stable_identity: String,
+    pub contract: PredicateContract,
     pub registered_at_unix_ns: u64,
 }
 
@@ -2482,6 +2537,18 @@ impl StoreConfig {
     #[inline]
     pub fn sources_path(&self) -> PathBuf {
         self.meta_dir().join("sources.jsonl")
+    }
+
+    /// Get append-only atom-to-source attachment path.
+    #[inline]
+    pub fn atom_sources_path(&self) -> PathBuf {
+        self.meta_dir().join("atom_sources.jsonl")
+    }
+
+    /// Get append-only managed predicate registry path.
+    #[inline]
+    pub fn predicates_path(&self) -> PathBuf {
+        self.meta_dir().join("predicates.jsonl")
     }
 
     /// Get append-only entity authoring registry path.
@@ -4922,6 +4989,12 @@ impl TermIndex {
         self.index.search(term)
     }
 
+    /// Resolve an exact normalized term to its durable lexicon id.
+    #[inline]
+    pub fn resolve_term_id(&self, term: &str) -> Option<u32> {
+        self.index.lexicon().find(&term.to_lowercase())
+    }
+
     /// Get reference to the underlying InvertedIndex
     #[inline]
     pub fn as_index(&self) -> &InvertedIndex {
@@ -5603,7 +5676,80 @@ impl MemoryX {
         self.read_sources()
     }
 
-    /// Attach a registered source id to an atom metadata record.
+    fn read_atom_source_links(&self) -> Result<Vec<AtomSourceLink>, StoreError> {
+        let path = self.config.atom_sources_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = File::open(path).map_err(StoreError::from)?;
+        let mut links = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.map_err(StoreError::from)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            links.push(
+                serde_json::from_str(&line).map_err(|error| StoreError::Io(error.to_string()))?,
+            );
+        }
+        Ok(links)
+    }
+
+    fn append_atom_source_link(&self, link: &AtomSourceLink) -> Result<(), StoreError> {
+        let path = self.config.atom_sources_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(StoreError::from)?;
+        serde_json::to_writer(&mut file, link)
+            .map_err(|error| StoreError::Io(error.to_string()))?;
+        file.write_all(b"\n").map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_data().map_err(StoreError::from)
+    }
+
+    /// Return all durable source ids attached to an atom.
+    ///
+    /// The legacy single `AtomMetadata.source_id` is merged with the accumulating
+    /// attachment journal so bases created by earlier releases remain readable.
+    pub fn list_atom_source_ids(&self, atom_id: &AtomId) -> Result<Vec<SourceId>, StoreError> {
+        let metadata = self
+            .meta
+            .get_meta(atom_id)
+            .ok_or(StoreError::AtomNotFound(*atom_id))?;
+        let mut source_ids = Vec::new();
+        if metadata.source_id != 0 {
+            source_ids.push(metadata.source_id);
+        }
+        for link in self.read_atom_source_links()? {
+            if link.atom_id == *atom_id && !source_ids.contains(&link.source_id) {
+                source_ids.push(link.source_id);
+            }
+        }
+        Ok(source_ids)
+    }
+
+    /// Return all registered source records attached to an atom.
+    pub fn list_atom_sources(&self, atom_id: &AtomId) -> Result<Vec<SourceRecord>, StoreError> {
+        let mut sources = Vec::new();
+        for source_id in self.list_atom_source_ids(atom_id)? {
+            let source = self.get_source(source_id)?.ok_or_else(|| {
+                StoreError::Context(format!("atom references missing source {source_id}"))
+            })?;
+            sources.push(source);
+        }
+        Ok(sources)
+    }
+
+    /// Accumulate a registered source attachment for an atom.
+    ///
+    /// Repeating the same `(atom_id, source_id)` is idempotent. Existing distinct
+    /// attachments are never replaced. The legacy metadata field retains the first
+    /// source for compatibility with old readers.
     pub fn set_atom_source(
         &mut self,
         atom_id: AtomId,
@@ -5618,9 +5764,21 @@ impl MemoryX {
             .get_meta(&atom_id)
             .cloned()
             .ok_or(StoreError::AtomNotFound(atom_id))?;
-        metadata.source_id = source_id;
-        self.meta.put_meta(atom_id, metadata);
-        self.flush()
+        if self.list_atom_source_ids(&atom_id)?.contains(&source_id) {
+            return Ok(());
+        }
+
+        self.append_atom_source_link(&AtomSourceLink {
+            atom_id,
+            source_id,
+            attached_at_unix_ns: current_unix_ns(),
+        })?;
+        if metadata.source_id == 0 {
+            metadata.source_id = source_id;
+            self.meta.put_meta(atom_id, metadata);
+            self.flush()?;
+        }
+        Ok(())
     }
 
     fn attached_source_evidence_ref(
@@ -5631,43 +5789,37 @@ impl MemoryX {
             .then(|| EvidenceRef::new(atom_id, SectionKind::META, 0, 0, metadata.trust_level))
     }
 
-    fn attached_source_evidence_link(
+    fn attached_source_evidence_links(
         &self,
         atom_id: AtomId,
         metadata: &AtomMetadata,
-    ) -> Result<Option<EvidenceLink>, StoreError> {
-        if metadata.source_id == 0 {
-            return Ok(None);
-        }
-        let Some(source) = self.get_source(metadata.source_id)? else {
-            return Err(StoreError::Context(format!(
-                "atom references missing source {}",
-                metadata.source_id
-            )));
-        };
-        let evidence_kind = match source.kind {
-            SourceKind::Measurement => EvidenceKind::MEASUREMENT,
-            SourceKind::Human => EvidenceKind::EXPERT_INFERENCE,
-            _ => EvidenceKind::CITATION,
-        };
-        let (offset, length) = source
-            .location
-            .byte_range
-            .map(|(start, end)| (start, end.saturating_sub(start)))
-            .unwrap_or((0, 0));
-        Ok(Some(
-            EvidenceLink::new(
-                atom_id,
-                evidence_kind,
-                f64::from(metadata.trust_level) / 10000.0,
-                metadata.trust_level,
-                SectionKind::META,
-                offset,
-                length,
-            )
-            .with_timestamp(source.registered_at_unix_ns)
-            .with_source(&source),
-        ))
+    ) -> Result<Vec<EvidenceLink>, StoreError> {
+        self.list_atom_sources(&atom_id)?
+            .into_iter()
+            .map(|source| {
+                let evidence_kind = match source.kind {
+                    SourceKind::Measurement => EvidenceKind::MEASUREMENT,
+                    SourceKind::Human => EvidenceKind::EXPERT_INFERENCE,
+                    _ => EvidenceKind::CITATION,
+                };
+                let (offset, length) = source
+                    .location
+                    .byte_range
+                    .map(|(start, end)| (start, end.saturating_sub(start)))
+                    .unwrap_or((0, 0));
+                Ok(EvidenceLink::new(
+                    atom_id,
+                    evidence_kind,
+                    f64::from(metadata.trust_level) / 10000.0,
+                    metadata.trust_level,
+                    SectionKind::META,
+                    offset,
+                    length,
+                )
+                .with_timestamp(source.registered_at_unix_ns)
+                .with_source(&source))
+            })
+            .collect()
     }
 
     /// Convert a legacy EvidenceRef into a proof-grade EvidenceRecord.
@@ -5675,24 +5827,43 @@ impl MemoryX {
         &self,
         evidence: &EvidenceRef,
     ) -> Result<EvidenceRecord, StoreError> {
-        let mut record = EvidenceRecord::from_ref(evidence.clone());
-        if let Some(metadata) = self.meta.get_meta(&evidence.atom_id)
-            && metadata.source_id != 0
-            && let Some(source) = self.get_source(metadata.source_id)?
-        {
-            record.extracted_span = EvidenceSpan {
-                byte_range: source
-                    .location
-                    .byte_range
-                    .or(record.extracted_span.byte_range),
-                line_range: source
-                    .location
-                    .line_range
-                    .or(record.extracted_span.line_range),
-            };
-            record = record.with_source(&source);
+        Ok(self
+            .evidence_records_for_ref(evidence)?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| EvidenceRecord::from_ref(evidence.clone())))
+    }
+
+    /// Convert one legacy EvidenceRef into every durable source-bearing record.
+    pub fn evidence_records_for_ref(
+        &self,
+        evidence: &EvidenceRef,
+    ) -> Result<Vec<EvidenceRecord>, StoreError> {
+        let sources = if self.meta.get_meta(&evidence.atom_id).is_some() {
+            self.list_atom_sources(&evidence.atom_id)?
+        } else {
+            Vec::new()
+        };
+        if sources.is_empty() {
+            return Ok(vec![EvidenceRecord::from_ref(evidence.clone())]);
         }
-        Ok(record)
+        Ok(sources
+            .into_iter()
+            .map(|source| {
+                let mut record = EvidenceRecord::from_ref(evidence.clone());
+                record.extracted_span = EvidenceSpan {
+                    byte_range: source
+                        .location
+                        .byte_range
+                        .or(record.extracted_span.byte_range),
+                    line_range: source
+                        .location
+                        .line_range
+                        .or(record.extracted_span.line_range),
+                };
+                record.with_source(&source)
+            })
+            .collect())
     }
 
     fn enrich_answer_sources(&self, pack: &mut AnswerPack) -> Result<(), StoreError> {
@@ -5719,13 +5890,12 @@ impl MemoryX {
                 {
                     pack.evidence.push(evidence.clone());
                 }
-                let record = self.evidence_record_for_ref(evidence)?;
-                if !node
-                    .direct_evidence
-                    .iter()
-                    .any(|existing| AnswerGraph::same_evidence_record_identity(existing, &record))
-                {
-                    node.direct_evidence.push(record);
+                for record in self.evidence_records_for_ref(evidence)? {
+                    if !node.direct_evidence.iter().any(|existing| {
+                        AnswerGraph::same_evidence_record_identity(existing, &record)
+                    }) {
+                        node.direct_evidence.push(record);
+                    }
                 }
             }
             // AnswerPack keeps a compatibility aggregate derived from the
@@ -5745,6 +5915,178 @@ impl MemoryX {
             self.enrich_answer_sources(alternate)?;
         }
         Ok(())
+    }
+
+    fn normalize_predicate_key(value: &str) -> String {
+        value.nfkc().collect::<String>().trim().to_lowercase()
+    }
+
+    fn normalize_predicate_contract(
+        mut contract: PredicateContract,
+    ) -> Result<PredicateContract, StoreError> {
+        contract.stable_key = Self::normalize_predicate_key(&contract.stable_key);
+        contract.canonical_name = contract.canonical_name.nfkc().collect::<String>();
+        contract.canonical_name = contract.canonical_name.trim().to_owned();
+        contract.description = contract.description.trim().to_owned();
+        contract.inverse_stable_key = contract
+            .inverse_stable_key
+            .take()
+            .map(|key| Self::normalize_predicate_key(&key))
+            .filter(|key| !key.is_empty());
+
+        if contract.stable_key.is_empty()
+            || contract.canonical_name.is_empty()
+            || contract.description.is_empty()
+        {
+            return Err(StoreError::Io(
+                "predicate stable_key, canonical_name, and description must be non-empty"
+                    .to_owned(),
+            ));
+        }
+        if contract.stable_key.len() > 256
+            || contract.canonical_name.len() > 256
+            || contract.description.len() > 4096
+        {
+            return Err(StoreError::Io(
+                "predicate contract exceeds supported field length".to_owned(),
+            ));
+        }
+        if contract
+            .stable_key
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err(StoreError::Io(
+                "predicate stable_key must not contain whitespace or control characters".to_owned(),
+            ));
+        }
+        Ok(contract)
+    }
+
+    fn predicate_identity(contract: &PredicateContract) -> Result<String, StoreError> {
+        let canonical =
+            serde_json::to_vec(contract).map_err(|error| StoreError::Io(error.to_string()))?;
+        Ok(blake3::hash(&canonical).to_hex().to_string())
+    }
+
+    fn read_predicates(&self) -> Result<Vec<PredicateRecord>, StoreError> {
+        let path = self.config.predicates_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = File::open(path).map_err(StoreError::from)?;
+        let mut predicates = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.map_err(StoreError::from)?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            predicates.push(
+                serde_json::from_str(&line).map_err(|error| StoreError::Io(error.to_string()))?,
+            );
+        }
+        Ok(predicates)
+    }
+
+    fn append_predicate(&self, predicate: &PredicateRecord) -> Result<(), StoreError> {
+        let path = self.config.predicates_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(StoreError::from)?;
+        serde_json::to_writer(&mut file, predicate)
+            .map_err(|error| StoreError::Io(error.to_string()))?;
+        file.write_all(b"\n").map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_data().map_err(StoreError::from)
+    }
+
+    /// Register a project predicate contract or return its existing managed id.
+    ///
+    /// The complete normalized contract is immutable. Re-registering it is
+    /// idempotent; reusing its stable key or canonical name with different
+    /// semantics fails closed.
+    pub fn register_predicate(
+        &mut self,
+        contract: PredicateContract,
+    ) -> Result<PredicateRecord, StoreError> {
+        let contract = Self::normalize_predicate_contract(contract)?;
+        let stable_identity = Self::predicate_identity(&contract)?;
+        let predicates = self.read_predicates()?;
+        let canonical_lookup = Self::normalize_predicate_key(&contract.canonical_name);
+
+        for existing in &predicates {
+            let same_key = existing.contract.stable_key == contract.stable_key;
+            let same_name = Self::normalize_predicate_key(&existing.contract.canonical_name)
+                == canonical_lookup;
+            if same_key || same_name {
+                if existing.contract == contract && existing.stable_identity == stable_identity {
+                    return Ok(existing.clone());
+                }
+                return Err(StoreError::Io(format!(
+                    "predicate contract conflicts with existing managed predicate {}",
+                    existing.predicate_id
+                )));
+            }
+            if existing.stable_identity == stable_identity && existing.contract != contract {
+                return Err(StoreError::Io(
+                    "predicate stable-identity collision detected".to_owned(),
+                ));
+            }
+        }
+
+        let predicate_id = predicates
+            .iter()
+            .map(|predicate| predicate.predicate_id)
+            .filter(|predicate_id| *predicate_id >= MANAGED_PREDICATE_ID_START)
+            .max()
+            .map_or(Ok(MANAGED_PREDICATE_ID_START), |predicate_id| {
+                predicate_id.checked_add(1).ok_or_else(|| {
+                    StoreError::Io("managed predicate id space is exhausted".to_owned())
+                })
+            })?;
+        let record = PredicateRecord {
+            predicate_id,
+            stable_identity,
+            contract,
+            registered_at_unix_ns: current_unix_ns(),
+        };
+        self.append_predicate(&record)?;
+        Ok(record)
+    }
+
+    /// List every managed predicate in numeric id order.
+    pub fn list_predicates(&self) -> Result<Vec<PredicateRecord>, StoreError> {
+        let mut predicates = self.read_predicates()?;
+        predicates.sort_by_key(|predicate| predicate.predicate_id);
+        Ok(predicates)
+    }
+
+    /// Inspect one managed predicate by numeric id.
+    pub fn get_predicate(
+        &self,
+        predicate_id: SymId,
+    ) -> Result<Option<PredicateRecord>, StoreError> {
+        Ok(self
+            .read_predicates()?
+            .into_iter()
+            .find(|predicate| predicate.predicate_id == predicate_id))
+    }
+
+    /// Resolve an exact stable key or canonical name to a managed predicate.
+    pub fn resolve_predicate(
+        &self,
+        name_or_key: &str,
+    ) -> Result<Option<PredicateRecord>, StoreError> {
+        let lookup = Self::normalize_predicate_key(name_or_key);
+        Ok(self.read_predicates()?.into_iter().find(|predicate| {
+            predicate.contract.stable_key == lookup
+                || Self::normalize_predicate_key(&predicate.contract.canonical_name) == lookup
+        }))
     }
 
     fn read_entities(&self) -> Result<Vec<EntityRecord>, StoreError> {
@@ -6409,10 +6751,52 @@ impl MemoryX {
         contract: QueryContract,
         ctx_policy: CtxPolicyId,
     ) -> Result<AnswerPack, StoreError> {
-        let goal = contract
+        let lexical_targets = contract
+            .targets
+            .iter()
+            .filter(|target| target.id.is_none())
+            .flat_map(|target| {
+                target
+                    .label
+                    .iter()
+                    .chain(target.aliases.iter())
+                    .map(String::as_str)
+            })
+            .filter(|target| !target.contains(':'))
+            .collect::<Vec<_>>();
+        let mut resolved_terms = Vec::new();
+        for target in &lexical_targets {
+            for term in target
+                .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+                .filter(|term| !term.is_empty())
+            {
+                if let Some(term_id) = self.term_index.resolve_term_id(term)
+                    && !resolved_terms.contains(&term_id)
+                {
+                    resolved_terms.push(term_id);
+                }
+            }
+        }
+
+        let mut goal = contract
             .to_goal_spec()
             .map_err(|e| StoreError::Query(e.to_string()))?
             .with_ctx_policy(ctx_policy);
+        if !lexical_targets.is_empty() {
+            goal.lexical_resolution_required = true;
+            goal.entities.retain(|entity| {
+                *entity != EntityRef::Term(0)
+                    || !contract.targets.iter().any(|target| {
+                        target.entity_type.as_deref() == Some("compatibility_term_seed")
+                    })
+            });
+            for term_id in resolved_terms {
+                let entity = EntityRef::Term(term_id);
+                if !goal.entities.contains(&entity) {
+                    goal.entities.push(entity);
+                }
+            }
+        }
 
         self.solve_goal(goal, ctx_policy)
     }
@@ -6791,11 +7175,11 @@ impl MemoryX {
         // Create provenance node for root atom
         let mut root_node = ProvenanceNode::new(*atom_id, node_num.unwrap_or(0), atom_type);
 
-        if let Some(metadata) = self.meta.get_meta(atom_id)
-            && let Some(evidence_link) = self.attached_source_evidence_link(*atom_id, metadata)?
-        {
-            chain.add_direct_evidence(evidence_link.clone());
-            root_node.add_evidence(evidence_link);
+        if let Some(metadata) = self.meta.get_meta(atom_id) {
+            for evidence_link in self.attached_source_evidence_links(*atom_id, metadata)? {
+                chain.add_direct_evidence(evidence_link.clone());
+                root_node.add_evidence(evidence_link);
+            }
         }
 
         // Step 5: Parse EVIDENCE section and create EvidenceLinks
@@ -6913,8 +7297,8 @@ impl MemoryX {
                 let mut source_node =
                     ProvenanceNode::new(source_atom_id, source_node_num, metadata.atom_type)
                         .with_depth(depth);
-                if let Some(source_evidence) =
-                    self.attached_source_evidence_link(source_atom_id, metadata)?
+                for source_evidence in
+                    self.attached_source_evidence_links(source_atom_id, metadata)?
                 {
                     source_node.add_evidence(source_evidence);
                 }
@@ -8955,6 +9339,10 @@ mod tests {
         assert_eq!(record.extracted_span.byte_range, Some((128, 160)));
         drop(store);
 
+        // Simulate a pre-accumulating-attachments base: only the legacy
+        // AtomMetadata.source_id remains and no atom_sources.jsonl exists.
+        std::fs::remove_file(config.atom_sources_path()).unwrap();
+
         let reopened = MemoryX::new(config).unwrap();
         let persisted = reopened.get_source(source.source_id).unwrap().unwrap();
         assert_eq!(persisted.label, "concept-spec");
@@ -10123,7 +10511,7 @@ mod tests {
             .unwrap();
 
         // 2. Query for the ingested atom
-        let answer = store.answer("find 100", 0).unwrap();
+        let answer = store.answer("find test_entity", 0).unwrap();
 
         // 3. Verify AnswerGraph is not empty
         assert!(
@@ -10300,7 +10688,7 @@ mod tests {
         }
 
         // Query and verify answer
-        let answer = store.answer("find what", 0).unwrap();
+        let answer = store.answer("find subject_10", 0).unwrap();
 
         // Should have nodes in answer graph
         assert!(

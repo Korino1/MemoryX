@@ -3595,6 +3595,10 @@ const BASE_SELECTABLE_MCP_TOOLS: &[&str] = &[
     "register_source",
     "list_sources",
     "attach_atom_source",
+    "register_predicate",
+    "list_predicates",
+    "get_predicate",
+    "resolve_predicate",
     "create_entity",
     "list_entities",
     "alias_entity",
@@ -4260,7 +4264,7 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                     },
                                     {
                                         "name": "attach_atom_source",
-                                        "description": "Attach an existing registered source id to an atom so future evidence records can trace that atom back to exact source metadata.",
+                                        "description": "Accumulate one existing registered source id on an atom. Distinct sources are preserved durably; repeating the same atom/source pair is idempotent and never replaces prior attachments.",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
@@ -4274,6 +4278,55 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                                     "source_id": 1
                                                 }
                                             ]
+                                        }
+                                    },
+                                    {
+                                        "name": "register_predicate",
+                                        "description": "Register an immutable project predicate contract and return its durable managed numeric ID. Repeating the identical contract is idempotent; reusing its stable key or canonical name with different semantics fails closed.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "stable_key": { "type": "string", "description": "Project-qualified immutable key, for example hpf:depends_on." },
+                                                "canonical_name": { "type": "string" },
+                                                "description": { "type": "string", "description": "Precise semantic contract for authors and reviewers." },
+                                                "direction": { "type": "string", "enum": ["directed", "symmetric"] },
+                                                "inverse_stable_key": { "type": "string" },
+                                                "cardinality": { "type": "string", "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] }
+                                            },
+                                            "required": ["stable_key", "canonical_name", "description"],
+                                            "examples": [{
+                                                "stable_key": "project:depends_on",
+                                                "canonical_name": "depends_on",
+                                                "description": "Subject requires object before it can be completed.",
+                                                "direction": "directed",
+                                                "inverse_stable_key": "project:required_by",
+                                                "cardinality": "many_to_many"
+                                            }]
+                                        }
+                                    },
+                                    {
+                                        "name": "list_predicates",
+                                        "description": "List every managed predicate ID and its complete immutable semantic contract in the selected base.",
+                                        "inputSchema": { "type": "object", "properties": {}, "examples": [{}] }
+                                    },
+                                    {
+                                        "name": "get_predicate",
+                                        "description": "Inspect one managed predicate contract by its durable numeric predicate ID before using add_claim or assert_relation.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": { "predicate_id": { "type": "integer" } },
+                                            "required": ["predicate_id"],
+                                            "examples": [{ "predicate_id": 2147483648u64 }]
+                                        }
+                                    },
+                                    {
+                                        "name": "resolve_predicate",
+                                        "description": "Resolve an exact stable key or canonical predicate name to its durable numeric ID and full contract; this operation never creates a predicate.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": { "name_or_key": { "type": "string" } },
+                                            "required": ["name_or_key"],
+                                            "examples": [{ "name_or_key": "project:depends_on" }]
                                         }
                                     },
                                     {
@@ -4667,6 +4720,30 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                             id,
                             arguments,
                             mcp_attach_atom_source_response,
+                        ),
+                        "register_predicate" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_register_predicate_response,
+                        ),
+                        "list_predicates" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_list_predicates_response,
+                        ),
+                        "get_predicate" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_get_predicate_response,
+                        ),
+                        "resolve_predicate" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_resolve_predicate_response,
                         ),
                         "create_entity" => mcp_with_selected_store(
                             state,
@@ -5846,6 +5923,153 @@ fn mcp_attach_atom_source_response(
             ),
         ),
         Err(e) => mcp_error(id, -32603, format!("Attach source failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_parse_predicate_direction(value: Option<&str>) -> Option<PredicateDirection> {
+    match value.unwrap_or("directed").to_ascii_lowercase().as_str() {
+        "directed" => Some(PredicateDirection::Directed),
+        "symmetric" => Some(PredicateDirection::Symmetric),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_parse_predicate_cardinality(value: Option<&str>) -> Option<PredicateCardinality> {
+    match value
+        .unwrap_or("many_to_many")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "one_to_one" => Some(PredicateCardinality::OneToOne),
+        "one_to_many" => Some(PredicateCardinality::OneToMany),
+        "many_to_one" => Some(PredicateCardinality::ManyToOne),
+        "many_to_many" => Some(PredicateCardinality::ManyToMany),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_predicate_text(predicate: &PredicateRecord) -> String {
+    serde_json::to_string_pretty(predicate)
+        .unwrap_or_else(|error| format!("predicate serialization failed: {error}"))
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_register_predicate_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(error) => return error,
+    };
+    let Some(stable_key) = args.get("stable_key").and_then(serde_json::Value::as_str) else {
+        return mcp_error(id, -32602, "Missing required string field 'stable_key'");
+    };
+    let Some(canonical_name) = args
+        .get("canonical_name")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return mcp_error(id, -32602, "Missing required string field 'canonical_name'");
+    };
+    let Some(description) = args.get("description").and_then(serde_json::Value::as_str) else {
+        return mcp_error(id, -32602, "Missing required string field 'description'");
+    };
+    let Some(direction) =
+        mcp_parse_predicate_direction(args.get("direction").and_then(serde_json::Value::as_str))
+    else {
+        return mcp_error(id, -32602, "Invalid predicate direction");
+    };
+    let Some(cardinality) = mcp_parse_predicate_cardinality(
+        args.get("cardinality").and_then(serde_json::Value::as_str),
+    ) else {
+        return mcp_error(id, -32602, "Invalid predicate cardinality");
+    };
+    let contract = PredicateContract {
+        stable_key: stable_key.to_owned(),
+        canonical_name: canonical_name.to_owned(),
+        description: description.to_owned(),
+        direction,
+        inverse_stable_key: args
+            .get("inverse_stable_key")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        cardinality,
+    };
+    match store.register_predicate(contract) {
+        Ok(predicate) => mcp_text_result(id, mcp_predicate_text(&predicate)),
+        Err(error) => mcp_error(
+            id,
+            -32602,
+            format!("Predicate registration rejected: {error}"),
+        ),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_list_predicates_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.list_predicates() {
+        Ok(predicates) => mcp_text_result(
+            id,
+            serde_json::to_string_pretty(&predicates)
+                .unwrap_or_else(|error| format!("predicate serialization failed: {error}")),
+        ),
+        Err(error) => mcp_error(id, -32603, format!("Predicate list failed: {error}")),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_get_predicate_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(error) => return error,
+    };
+    let Some(predicate_id) = args
+        .get("predicate_id")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| SymId::try_from(value).ok())
+    else {
+        return mcp_error(
+            id,
+            -32602,
+            "Missing or invalid integer field 'predicate_id'",
+        );
+    };
+    match store.get_predicate(predicate_id) {
+        Ok(Some(predicate)) => mcp_text_result(id, mcp_predicate_text(&predicate)),
+        Ok(None) => mcp_error(id, -32602, format!("Predicate {predicate_id} not found")),
+        Err(error) => mcp_error(id, -32603, format!("Predicate lookup failed: {error}")),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_resolve_predicate_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(error) => return error,
+    };
+    let Some(name_or_key) = args.get("name_or_key").and_then(serde_json::Value::as_str) else {
+        return mcp_error(id, -32602, "Missing required string field 'name_or_key'");
+    };
+    match store.resolve_predicate(name_or_key) {
+        Ok(Some(predicate)) => mcp_text_result(id, mcp_predicate_text(&predicate)),
+        Ok(None) => mcp_error(id, -32602, format!("Predicate '{name_or_key}' not found")),
+        Err(error) => mcp_error(id, -32603, format!("Predicate resolve failed: {error}")),
     }
 }
 
@@ -7277,7 +7501,7 @@ mod tests {
             );
         }
 
-        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 32);
+        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 36);
         for name in BASE_SELECTABLE_MCP_TOOLS {
             let tool = tools
                 .iter()
@@ -7320,6 +7544,10 @@ mod tests {
         assert!(names.contains(&"register_source"));
         assert!(names.contains(&"list_sources"));
         assert!(names.contains(&"attach_atom_source"));
+        assert!(names.contains(&"register_predicate"));
+        assert!(names.contains(&"list_predicates"));
+        assert!(names.contains(&"get_predicate"));
+        assert!(names.contains(&"resolve_predicate"));
         assert!(names.contains(&"create_entity"));
         assert!(names.contains(&"list_entities"));
         assert!(names.contains(&"alias_entity"));
@@ -7335,7 +7563,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 38);
+        assert_eq!(names.len(), 42);
     }
 
     #[cfg(feature = "mcp")]
