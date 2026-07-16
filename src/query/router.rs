@@ -158,6 +158,7 @@ impl CasBackend {
         goal_entities: &[crate::store::api::EntityRef],
         _trust_min: TrustLevel,
         domain_mask: DomainMask,
+        lexical_resolution_required: bool,
     ) -> Vec<Candidate> {
         let mut candidates = Vec::new();
         // 1. Resolve from goal entities that have direct AtomIds
@@ -181,6 +182,7 @@ impl CasBackend {
         if candidates.is_empty()
             && gap.kind == GapKind::NEED_DEFINITION
             && gap.pattern.subj.is_any()
+            && !lexical_resolution_required
         {
             for (&atom_id, &loc) in &self.locations {
                 if !matches_domain(loc, domain_mask) {
@@ -299,6 +301,7 @@ impl InvertedBackend {
         goal_entities: &[crate::store::api::EntityRef],
         _trust_min: TrustLevel,
         domain_mask: DomainMask,
+        lexical_resolution_required: bool,
     ) -> Vec<Candidate> {
         let mut candidates = Vec::new();
         let mut seen_nodes: HashSet<NodeNum> = HashSet::new();
@@ -344,6 +347,7 @@ impl InvertedBackend {
         if matches!(gap.pattern.subj, PatternRef::Any)
             && all_node_nums.is_empty()
             && !self.node_to_atom.is_empty()
+            && !lexical_resolution_required
         {
             // Add all registered nodes as candidates for broad queries
             for &node_num in self.node_to_atom.keys() {
@@ -982,19 +986,31 @@ impl QueryRouter {
         let mut candidates = Vec::new();
         match gap.kind {
             GapKind::NEED_DEFINITION => {
-                let mut cas_cands =
-                    self.cas
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
-                let mut inv_cands =
-                    self.inverted
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
+                let mut cas_cands = self.cas.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
+                let mut inv_cands = self.inverted.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
                 candidates.append(&mut cas_cands);
                 candidates.append(&mut inv_cands);
             }
             GapKind::NEED_FACT => {
-                let mut inv_cands =
-                    self.inverted
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
+                let mut inv_cands = self.inverted.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
                 candidates.append(&mut inv_cands);
             }
             GapKind::NEED_CAUSAL_CHAIN => {
@@ -1002,9 +1018,13 @@ impl QueryRouter {
                 candidates.extend(graph_cands);
             }
             GapKind::NEED_EVIDENCE => {
-                let mut cas_cands =
-                    self.cas
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
+                let mut cas_cands = self.cas.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
                 candidates.append(&mut cas_cands);
             }
             GapKind::NEED_COUNTEREXAMPLE => {
@@ -1012,24 +1032,40 @@ impl QueryRouter {
                 candidates.extend(graph_cands);
             }
             GapKind::NEED_CONSTRAINTS => {
-                let mut cas_cands =
-                    self.cas
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
+                let mut cas_cands = self.cas.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
                 candidates.append(&mut cas_cands);
             }
             GapKind::NEED_COMPARISON_AXIS => {
-                let mut inv_cands =
-                    self.inverted
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
+                let mut inv_cands = self.inverted.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
                 candidates.append(&mut inv_cands);
             }
             GapKind::NEED_PROCEDURE => {
-                let mut inv_cands =
-                    self.inverted
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
-                let mut cas_cands =
-                    self.cas
-                        .route(gap, &goal.entities, goal.trust_min, goal.domain_mask);
+                let mut inv_cands = self.inverted.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
+                let mut cas_cands = self.cas.route(
+                    gap,
+                    &goal.entities,
+                    goal.trust_min,
+                    goal.domain_mask,
+                    goal.lexical_resolution_required,
+                );
                 candidates.append(&mut inv_cands);
                 candidates.append(&mut cas_cands);
             }
@@ -1045,16 +1081,22 @@ impl QueryRouter {
     /// Route a gap to all backends with deduplication by AtomId.
     pub fn route(&self, gap: &Gap, goal: &crate::query::solver::GoalSpec) -> Vec<Candidate> {
         let mut candidate_map: HashMap<AtomId, Candidate> = HashMap::new();
-        for c in self
-            .cas
-            .route(gap, &goal.entities, goal.trust_min, goal.domain_mask)
-        {
+        for c in self.cas.route(
+            gap,
+            &goal.entities,
+            goal.trust_min,
+            goal.domain_mask,
+            goal.lexical_resolution_required,
+        ) {
             candidate_map.insert(c.atom_id, c);
         }
-        for c in self
-            .inverted
-            .route(gap, &goal.entities, goal.trust_min, goal.domain_mask)
-        {
+        for c in self.inverted.route(
+            gap,
+            &goal.entities,
+            goal.trust_min,
+            goal.domain_mask,
+            goal.lexical_resolution_required,
+        ) {
             candidate_map.entry(c.atom_id).or_insert(c);
         }
         if gap.needs_graph_walk() || !gap.nav.seed_nodes.is_empty() {
@@ -1273,7 +1315,7 @@ mod tests {
 
         // CAS candidates should NOT have ANN filtering flag
         let gap = Gap::new(0, GapKind::NEED_FACT, ClaimPattern::default());
-        let _candidates = cas.route(&gap, &[EntityRef::Atom(atom_id)], 0, 0xFFFF);
+        let _candidates = cas.route(&gap, &[EntityRef::Atom(atom_id)], 0, 0xFFFF, false);
 
         // Note: CAS backend won't find the atom since it wasn't registered through normal path
         // This test mainly verifies the structure

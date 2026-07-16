@@ -392,7 +392,7 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
         .expect("Codex tools/list request failed after initialized notification");
     assert_success(&tools);
     assert_eq!(tools["id"], json!("codex-tools-list"));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(38));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(42));
     assert!(
         tools["result"]["tools"]
             .as_array()
@@ -681,6 +681,253 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
     assert!(
         report.status.success(),
         "reopened MCP stderr: {}",
+        report.stderr
+    );
+}
+
+#[test]
+fn predicate_bootstrap_and_symbol_only_multi_source_query_survive_reopen() {
+    let root = TempDir::new().expect("symbol-only temp root");
+    let base_name = "symbol-only-multi-source";
+    let symbol = "val_08a_3r_gb1_next";
+    let atom_id;
+
+    {
+        let mut process = McpProcess::spawn(root.path(), base_name);
+        process
+            .request(codex_initialize_request(3000))
+            .expect("initialize authoring MCP process");
+
+        let predicate_contract = json!({
+            "stable_key": "test:depends_on",
+            "canonical_name": "depends_on",
+            "description": "Subject requires object before completion.",
+            "direction": "directed",
+            "inverse_stable_key": "test:required_by",
+            "cardinality": "many_to_many"
+        });
+        let registered = process
+            .request(tool_request(
+                3001,
+                "register_predicate",
+                predicate_contract.clone(),
+            ))
+            .expect("register managed predicate");
+        let registered: Value =
+            serde_json::from_str(response_text(&registered)).expect("predicate JSON");
+        assert_eq!(registered["predicate_id"], 0x8000_0000u64);
+        let stable_identity = registered["stable_identity"].clone();
+
+        let repeated = process
+            .request(tool_request(3002, "register_predicate", predicate_contract))
+            .expect("idempotent predicate registration");
+        let repeated: Value =
+            serde_json::from_str(response_text(&repeated)).expect("repeated predicate JSON");
+        assert_eq!(repeated["predicate_id"], registered["predicate_id"]);
+        assert_eq!(repeated["stable_identity"], stable_identity);
+
+        let conflict = process
+            .request(tool_request(
+                3003,
+                "register_predicate",
+                json!({
+                    "stable_key": "test:depends_on",
+                    "canonical_name": "depends_on",
+                    "description": "Conflicting semantics must be rejected."
+                }),
+            ))
+            .expect("conflicting predicate response");
+        assert_eq!(conflict["error"]["code"], -32602);
+
+        let ingest = process
+            .request(tool_request(
+                3004,
+                "ingest",
+                json!({
+                    "atom_type": "DECISION",
+                    "symbols": [symbol, "val_08a_3r_gb0_design_frozen"],
+                    "claims": []
+                }),
+            ))
+            .expect("ingest zero-claim decision");
+        atom_id = ingested_atom_id(&ingest);
+
+        for (id, label, path, start, end) in [
+            (
+                3005,
+                "implementation plan",
+                "HPF_IMPLEMENTATION_PLAN.md",
+                389,
+                397,
+            ),
+            (
+                3006,
+                "implementation tracker",
+                "IMPLEMENTATION_TRACKING.md",
+                333,
+                414,
+            ),
+        ] {
+            let source = process
+                .request(tool_request(
+                    id,
+                    "register_source",
+                    json!({
+                        "kind": "file",
+                        "label": label,
+                        "path": path,
+                        "line_start": start,
+                        "line_end": end,
+                        "source_version": "isolated-test"
+                    }),
+                ))
+                .expect("register source");
+            assert_success(&source);
+        }
+
+        for (id, source_id) in [(3007, 1), (3008, 2), (3009, 1)] {
+            let attached = process
+                .request(tool_request(
+                    id,
+                    "attach_atom_source",
+                    json!({"atom_id": atom_id, "source_id": source_id}),
+                ))
+                .expect("attach accumulating source");
+            assert_success(&attached);
+        }
+
+        let compiled = process
+            .request(tool_request(
+                3010,
+                "compile_query_contract",
+                json!({"query_text": format!("what follows {symbol} and why")}),
+            ))
+            .expect("compile natural symbol query");
+        assert!(response_text(&compiled).contains(symbol));
+
+        let report = process.finish();
+        assert!(
+            !report.timed_out && report.status.success(),
+            "authoring MCP process failed: {}",
+            report.stderr
+        );
+    }
+
+    let mut reopened = McpProcess::spawn(root.path(), base_name);
+    reopened
+        .request(codex_initialize_request(3020))
+        .expect("initialize reopened symbol-only MCP process");
+
+    let predicates = reopened
+        .request(tool_request(3021, "list_predicates", json!({})))
+        .expect("list persisted predicates");
+    let predicates: Value =
+        serde_json::from_str(response_text(&predicates)).expect("predicate list JSON");
+    assert_eq!(predicates.as_array().map(Vec::len), Some(1));
+    let resolved = reopened
+        .request(tool_request(
+            3022,
+            "resolve_predicate",
+            json!({"name_or_key": "DEPENDS_ON"}),
+        ))
+        .expect("resolve predicate by canonical name");
+    let resolved: Value =
+        serde_json::from_str(response_text(&resolved)).expect("resolved predicate JSON");
+    assert_eq!(resolved["predicate_id"], 0x8000_0000u64);
+    let inspected = reopened
+        .request(tool_request(
+            3023,
+            "get_predicate",
+            json!({"predicate_id": 0x8000_0000u64}),
+        ))
+        .expect("inspect predicate by id");
+    assert_eq!(
+        serde_json::from_str::<Value>(response_text(&inspected)).unwrap(),
+        resolved
+    );
+
+    let provenance = reopened
+        .request(tool_request(
+            3024,
+            "get_provenance_path",
+            json!({"atom_id": atom_id}),
+        ))
+        .expect("get multi-source provenance after reopen");
+    let provenance: Value =
+        serde_json::from_str(response_text(&provenance)).expect("multi-source provenance JSON");
+    let source_ids = provenance["direct_evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|evidence| evidence["source_id"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(source_ids, vec![1, 2]);
+    assert_eq!(
+        provenance["nodes"][0]["evidence_links"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+
+    let lexical = reopened
+        .request(search_request(3025, "active", symbol))
+        .expect("lexical search for zero-claim symbol");
+    assert_eq!(lexical_atom_count(response_text(&lexical)), 1);
+
+    let query = reopened
+        .request(tool_request(
+            3026,
+            "query",
+            json!({"query_text": format!("what follows {symbol} and why"), "ctx_id": 0}),
+        ))
+        .expect("query zero-claim decision after reopen");
+    let answer: Value = serde_json::from_str(response_text(&query)).expect("AnswerPack JSON");
+    assert_eq!(answer["status"], "InsufficientEvidence");
+    assert_eq!(answer["claims"].as_array().map(Vec::len), Some(0));
+    assert_eq!(answer["graph"]["node_count"], 1);
+    assert_eq!(answer["graph"]["evidence_record_count"], 2);
+    assert_eq!(answer["graph"]["source_link_count"], 2);
+    assert_eq!(answer["evidence_records"].as_array().map(Vec::len), Some(2));
+    assert!(
+        answer["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|limitation| {
+                limitation["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("no knowledge claims"))
+            })
+    );
+
+    let explanation = reopened
+        .request(tool_request(
+            3027,
+            "explain_answer_graph",
+            json!({"query_text": format!("what follows {symbol} and why"), "ctx_id": 0}),
+        ))
+        .expect("explain zero-claim graph");
+    let explanation: Value =
+        serde_json::from_str(response_text(&explanation)).expect("explanation JSON");
+    assert_eq!(answer["graph"], explanation["graph"]);
+
+    let no_match = reopened
+        .request(tool_request(
+            3028,
+            "query",
+            json!({"query_text": "unrelated_symbol_that_is_not_registered", "ctx_id": 0}),
+        ))
+        .expect("query unrelated symbol");
+    let no_match: Value =
+        serde_json::from_str(response_text(&no_match)).expect("NoMatch AnswerPack JSON");
+    assert_eq!(no_match["status"], "NoMatch");
+    assert_eq!(no_match["graph"]["node_count"], 0);
+    assert_eq!(no_match["claims"].as_array().map(Vec::len), Some(0));
+
+    let report = reopened.finish();
+    assert!(
+        !report.timed_out && report.status.success(),
+        "reopened symbol-only MCP process failed: {}",
         report.stderr
     );
 }
