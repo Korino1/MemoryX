@@ -260,7 +260,10 @@ impl SetCoverSolver {
                     candidate.cost_benefit_ratio(gaps, &covered_gaps, weights);
 
                 // Only consider candidates that provide positive benefit
-                if benefit > 0.0 && ratio > best_ratio {
+                let wins_tie = best_idx
+                    .map(|best| candidate.atom_id < candidates[best].atom_id)
+                    .unwrap_or(false);
+                if benefit > 0.0 && (ratio > best_ratio || (ratio == best_ratio && wins_tie)) {
                     best_ratio = ratio;
                     best_cost = cost;
                     best_idx = Some(idx);
@@ -353,7 +356,10 @@ impl SetCoverSolver {
                     continue;
                 }
 
-                if benefit > 0.0 && ratio > best_ratio {
+                let wins_tie = best_idx
+                    .map(|best| candidate.atom_id < candidates[best].atom_id)
+                    .unwrap_or(false);
+                if benefit > 0.0 && (ratio > best_ratio || (ratio == best_ratio && wins_tie)) {
                     best_ratio = ratio;
                     best_cost = cost;
                     best_idx = Some(idx);
@@ -545,6 +551,33 @@ mod tests {
         assert_eq!(result.selected_atoms[0], create_atom_id(3));
         // Should only need 1 atom since candidate 3 covers all gaps
         assert_eq!(result.atom_count(), 1);
+    }
+
+    #[test]
+    fn equal_cost_candidates_use_atom_id_tie_break_independent_of_input_order() {
+        let gaps = vec![create_gap(0, GapKind::NEED_FACT, 100)];
+        let low = AtomCandidate::new(create_atom_id(1), AtomType::FACT)
+            .with_covers_gaps(vec![0])
+            .with_trust(8000);
+        let high = AtomCandidate::new(create_atom_id(2), AtomType::FACT)
+            .with_covers_gaps(vec![0])
+            .with_trust(8000);
+        let weights = CostWeights::default();
+
+        for candidates in [
+            vec![low.clone(), high.clone()],
+            vec![high.clone(), low.clone()],
+        ] {
+            assert_eq!(
+                SetCoverSolver::solve(&gaps, &candidates, &weights).selected_atoms,
+                vec![low.atom_id]
+            );
+            assert_eq!(
+                SetCoverSolver::solve_with_budget(&gaps, &candidates, &weights, f64::MAX)
+                    .selected_atoms,
+                vec![low.atom_id]
+            );
+        }
     }
 
     #[test]

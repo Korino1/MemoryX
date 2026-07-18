@@ -184,14 +184,16 @@ impl CasBackend {
             && gap.pattern.subj.is_any()
             && !lexical_resolution_required
         {
-            for (&atom_id, &loc) in &self.locations {
-                if !matches_domain(loc, domain_mask) {
-                    continue;
-                }
-                candidates.push(self.make_candidate(atom_id, loc, gap));
-                if candidates.len() >= 256 {
-                    break;
-                }
+            let mut broadcast = self
+                .locations
+                .iter()
+                .filter(|(_, loc)| matches_domain(**loc, domain_mask))
+                .map(|(atom_id, loc)| self.make_candidate(*atom_id, *loc, gap))
+                .collect::<Vec<_>>();
+            broadcast.sort_by_key(|candidate| candidate.atom_id);
+            broadcast.truncate(256);
+            for candidate in broadcast {
+                candidates.push(candidate);
             }
         }
         candidates
@@ -306,6 +308,7 @@ impl InvertedBackend {
         let mut candidates = Vec::new();
         let mut seen_nodes: HashSet<NodeNum> = HashSet::new();
         let mut all_node_nums: Vec<NodeNum> = Vec::new();
+        let mut lexical_term_sets: Vec<Vec<NodeNum>> = Vec::new();
 
         // Handle PatternRef::Sym lookups
         if let PatternRef::Sym(s) = gap.pattern.subj {
@@ -330,7 +333,7 @@ impl InvertedBackend {
                     // Resolve term_id to actual term string from InvertedIndex lexicon
                     // This replaces surrogate forms with atom-aware content from SYMBOLS section
                     if let Some(term_str) = self.resolve_term_id(*term_id) {
-                        all_node_nums.extend(self.lookup_term(term_str));
+                        lexical_term_sets.push(self.lookup_term(term_str));
                     }
                     // If term_id cannot be resolved (no InvertedIndex or not found),
                     // skip silently - this maintains graceful degradation
@@ -340,6 +343,19 @@ impl InvertedBackend {
                 }
                 _ => {}
             }
+        }
+        if lexical_resolution_required && !lexical_term_sets.is_empty() {
+            for nodes in &mut lexical_term_sets {
+                nodes.sort_unstable();
+                nodes.dedup();
+            }
+            let mut intersection = lexical_term_sets.remove(0);
+            for nodes in lexical_term_sets {
+                intersection.retain(|node| nodes.binary_search(node).is_ok());
+            }
+            all_node_nums.extend(intersection);
+        } else {
+            all_node_nums.extend(lexical_term_sets.into_iter().flatten());
         }
 
         // Fallback: If PatternRef::Any and no nodes found via terms,
@@ -354,6 +370,8 @@ impl InvertedBackend {
                 all_node_nums.push(node_num);
             }
         }
+        all_node_nums.sort_unstable();
+        all_node_nums.dedup();
         for &node_num in &all_node_nums {
             if seen_nodes.contains(&node_num) {
                 continue;
@@ -1113,7 +1131,9 @@ impl QueryRouter {
                 candidate_map.insert(c.atom_id, c);
             }
         }
-        candidate_map.into_values().collect()
+        let mut candidates: Vec<_> = candidate_map.into_values().collect();
+        candidates.sort_by_key(|candidate| candidate.atom_id);
+        candidates
     }
 
     /// Route a gap through all current channels and expose the common CandidateV2 contract.
@@ -1144,7 +1164,9 @@ pub fn dedup_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
             })
             .or_insert(c);
     }
-    seen.into_values().collect()
+    let mut candidates: Vec<_> = seen.into_values().collect();
+    candidates.sort_by_key(|candidate| candidate.atom_id);
+    candidates
 }
 
 #[inline]
@@ -1264,6 +1286,30 @@ mod tests {
                 candidate.node_num
             );
         }
+    }
+
+    #[test]
+    fn cas_broadcast_cap_sorts_before_taking_first_256() {
+        let mut backend = CasBackend::new();
+        let mut expected = Vec::new();
+        for value in (0u16..300).rev() {
+            let mut atom_id = [0u8; 32];
+            atom_id[..2].copy_from_slice(&value.to_be_bytes());
+            backend.register(
+                atom_id,
+                Location::new(0, u64::from(value), 1, u64::from(value), 0xFFFF),
+            );
+            expected.push(atom_id);
+        }
+        expected.sort_unstable();
+        expected.truncate(256);
+        let gap = Gap::new(0, GapKind::NEED_DEFINITION, ClaimPattern::default());
+        let actual = backend
+            .route(&gap, &[], 0, 0, false)
+            .into_iter()
+            .map(|candidate| candidate.atom_id)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 
     #[test]

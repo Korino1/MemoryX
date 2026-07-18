@@ -455,9 +455,17 @@ pub fn extract_canonical_form(
         let claims = ClaimsSection::from_bytes(claims_data)?;
         for i in 0..claims.len() {
             if let Some(cr) = claims.get(i) {
+                let subject = u32::try_from(cr.subject_local).map_err(|_| {
+                    CasError::CanonicalExtractionFailed {
+                        reason: format!(
+                            "claim subject {} exceeds canonical u32 identity",
+                            cr.subject_local
+                        ),
+                    }
+                })?;
                 form.claims.push(CanonicalClaim::new(
-                    cr.subject_local as u32,
-                    cr.predicate_local as u32,
+                    subject,
+                    cr.predicate_local,
                     cr.object_tag.to_u8(),
                     cr.object_value.clone(),
                     0u32,
@@ -933,6 +941,34 @@ mod tests {
         assert_eq!(form.atom_type, AtomType::FACT as u32);
         assert_eq!(form.claims.len(), 2);
         assert!(form.claims[0] <= form.claims[1]);
+    }
+
+    #[test]
+    fn legacy_claims_keep_the_v1_canonical_subject_width() {
+        let bh = AtomBodyHeader::new(AtomType::FACT, 0, 0, 0, 0);
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.extend_from_slice(&7u16.to_le_bytes());
+        v1.extend_from_slice(&9u16.to_le_bytes());
+        v1.push(ObjTag::U64.to_u8());
+        v1.extend_from_slice(&42u64.to_le_bytes());
+
+        let legacy = extract_canonical_form(&bh, &[], &v1, &[], &[], &[]).unwrap();
+        let mut expected = CanonicalForm::new(AtomType::FACT as u32);
+        expected.claims.push(CanonicalClaim::new(
+            7,
+            9,
+            ObjTag::U64.to_u8(),
+            42u64.to_le_bytes().to_vec(),
+            0,
+        ));
+        expected.normalize();
+        assert_eq!(legacy.to_bytes(), expected.to_bytes());
+
+        assert_eq!(
+            compute_atom_id_from_form(&legacy),
+            compute_atom_id_from_form(&expected)
+        );
     }
 
     #[test]

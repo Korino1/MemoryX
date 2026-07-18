@@ -15,21 +15,35 @@ use crate::store::{DomainMask, Intent};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryContract {
     pub intent: ContractIntent,
+    #[serde(default)]
     pub targets: Vec<EntityPattern>,
     #[serde(default)]
     pub semantic_vectors: Vec<Vec<f32>>,
+    #[serde(default)]
     pub relations: Vec<RelationRequirement>,
+    #[serde(default)]
     pub constraints: Vec<Constraint>,
+    #[serde(default)]
     pub quantifiers: Vec<QuantifiedCondition>,
+    #[serde(default)]
     pub temporal_scope: TemporalScope,
+    #[serde(default)]
     pub context_scope: ContextScope,
+    #[serde(default)]
     pub source_policy: SourcePolicy,
+    #[serde(default)]
     pub evidence_policy: EvidencePolicy,
+    #[serde(default)]
     pub freshness_policy: FreshnessPolicy,
+    #[serde(default)]
     pub ambiguity_policy: AmbiguityPolicy,
+    #[serde(default)]
     pub conflict_policy: ConflictPolicy,
+    #[serde(default)]
     pub completeness_policy: CompletenessPolicy,
+    #[serde(default)]
     pub output_contract: OutputContract,
+    #[serde(default)]
     pub budgets: QueryBudgets,
 }
 
@@ -101,6 +115,8 @@ impl QueryContract {
     }
 
     pub fn validate(&self) -> Result<(), QueryContractError> {
+        const MAX_TARGETS: usize = 256;
+        const MAX_CONSTRAINTS: usize = 1024;
         if self.targets.is_empty()
             && self.semantic_vectors.is_empty()
             && self.relations.is_empty()
@@ -141,12 +157,42 @@ impl QueryContract {
             }
         }
 
-        if self.budgets.max_atoms == 0 {
+        if self.targets.len() > MAX_TARGETS || self.constraints.len() > MAX_CONSTRAINTS {
+            return Err(QueryContractError::InvalidBudget(
+                "contract collection size",
+            ));
+        }
+
+        if self.budgets.max_atoms == 0 || self.budgets.max_atoms > 65_536 {
             return Err(QueryContractError::InvalidBudget("max_atoms"));
         }
 
-        if self.budgets.max_iterations == 0 {
+        if self.budgets.max_iterations == 0 || self.budgets.max_iterations > 1_000 {
             return Err(QueryContractError::InvalidBudget("max_iterations"));
+        }
+        if self.budgets.max_edges > 262_144 {
+            return Err(QueryContractError::InvalidBudget("max_edges"));
+        }
+        if self.budgets.max_io_bytes > 1024 * 1024 * 1024 {
+            return Err(QueryContractError::InvalidBudget("max_io_bytes"));
+        }
+        if self.budgets.max_time_ms > 300_000 {
+            return Err(QueryContractError::InvalidBudget("max_time_ms"));
+        }
+        if self.budgets.max_federated_calls > 128 {
+            return Err(QueryContractError::InvalidBudget("max_federated_calls"));
+        }
+        if self.output_contract.max_items == 0 || self.output_contract.max_items > 4096 {
+            return Err(QueryContractError::InvalidBudget(
+                "output_contract.max_items",
+            ));
+        }
+        if self.output_contract.max_bytes < 2_048
+            || self.output_contract.max_bytes > 8 * 1024 * 1024
+        {
+            return Err(QueryContractError::InvalidBudget(
+                "output_contract.max_bytes",
+            ));
         }
 
         Ok(())
@@ -227,7 +273,8 @@ impl From<ContractIntent> for Intent {
 }
 
 /// Entity selector that can name a concrete atom/node or a symbolic target.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EntityPattern {
     pub id: Option<String>,
     pub label: Option<String>,
@@ -741,6 +788,7 @@ impl Default for CompletenessPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OutputContract {
     pub format: OutputFormat,
     pub include_answer_graph: bool,
@@ -748,6 +796,8 @@ pub struct OutputContract {
     pub include_provenance: bool,
     pub include_execution_trace: bool,
     pub max_items: u32,
+    /// Maximum serialized AnswerPack payload size.
+    pub max_bytes: u32,
 }
 
 impl Default for OutputContract {
@@ -759,6 +809,7 @@ impl Default for OutputContract {
             include_provenance: true,
             include_execution_trace: false,
             max_items: 64,
+            max_bytes: 1024 * 1024,
         }
     }
 }
@@ -784,6 +835,7 @@ impl From<OutputFormat> for OutputSchema {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct QueryBudgets {
     pub max_iterations: u32,
     pub max_atoms: u32,

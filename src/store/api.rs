@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
@@ -67,17 +68,114 @@ fn current_unix_ns() -> u64 {
         .unwrap_or(0)
 }
 
-fn build_authoring_payload(atom_type: AtomType, claims: &[ClaimData]) -> Vec<u8> {
+const MAX_NEW_JOURNAL_RECORD_BYTES: usize = 1024 * 1024;
+const MAX_SOURCES_PER_ATOM: usize = 256;
+
+fn read_recovering_jsonl<T: DeserializeOwned>(
+    path: &std::path::Path,
+    label: &str,
+) -> Result<Vec<T>, StoreError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(path).map_err(StoreError::from)?;
+    let mut reader = BufReader::new(file);
+    let mut records = Vec::new();
+    let mut valid_bytes = 0u64;
+    loop {
+        let mut line = Vec::new();
+        let read = reader
+            .read_until(b'\n', &mut line)
+            .map_err(StoreError::from)?;
+        if read == 0 {
+            break;
+        }
+        let complete = line.last() == Some(&b'\n');
+        let content = line
+            .strip_suffix(b"\n")
+            .unwrap_or(&line)
+            .strip_suffix(b"\r")
+            .unwrap_or_else(|| line.strip_suffix(b"\n").unwrap_or(&line));
+        if content.iter().all(u8::is_ascii_whitespace) {
+            valid_bytes = valid_bytes.saturating_add(read as u64);
+            continue;
+        }
+        match serde_json::from_slice(content) {
+            Ok(record) => records.push(record),
+            Err(_) if !complete => {
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .map_err(StoreError::from)?;
+                file.set_len(valid_bytes).map_err(StoreError::from)?;
+                file.sync_data().map_err(StoreError::from)?;
+                break;
+            }
+            Err(error) => {
+                return Err(StoreError::Io(format!(
+                    "invalid {label} journal record: {error}"
+                )));
+            }
+        }
+        valid_bytes = valid_bytes.saturating_add(read as u64);
+        if !complete {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(StoreError::from)?;
+            file.write_all(b"\n").map_err(StoreError::from)?;
+            file.sync_data().map_err(StoreError::from)?;
+        }
+    }
+    Ok(records)
+}
+
+fn append_bounded_jsonl<T: Serialize>(
+    path: &std::path::Path,
+    label: &str,
+    record: &T,
+) -> Result<(), StoreError> {
+    let encoded = serde_json::to_vec(record).map_err(|error| StoreError::Io(error.to_string()))?;
+    if encoded.len() > MAX_NEW_JOURNAL_RECORD_BYTES {
+        return Err(StoreError::Io(format!(
+            "new {label} journal record exceeds {MAX_NEW_JOURNAL_RECORD_BYTES} bytes"
+        )));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(StoreError::from)?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(StoreError::from)?;
+    file.write_all(&encoded).map_err(StoreError::from)?;
+    file.write_all(b"\n").map_err(StoreError::from)?;
+    file.flush().map_err(StoreError::from)?;
+    file.sync_data().map_err(StoreError::from)
+}
+
+fn claim_record_from_data(
+    claim: &ClaimData,
+) -> Result<crate::cas::claims::ClaimRecord, StoreError> {
+    let predicate = SymId::try_from(claim.pred)
+        .map_err(|_| StoreError::Io(format!("predicate {} exceeds SymId", claim.pred)))?;
+    let tag = ObjTag::from_u8(claim.obj_tag)
+        .ok_or_else(|| StoreError::Io(format!("invalid object tag {}", claim.obj_tag)))?;
+    crate::cas::claims::ClaimRecord::from_scalar(claim.subj, predicate, tag, claim.obj_val)
+        .map_err(StoreError::from)
+}
+
+fn build_authoring_payload(
+    atom_type: AtomType,
+    claims: &[ClaimData],
+) -> Result<Vec<u8>, StoreError> {
     let symbols_bytes = SymbolsSection::new().to_bytes();
     let refs_bytes = Vec::new();
 
     let mut claims_section = ClaimsSection::new();
     for claim in claims {
-        claims_section.add_claim(crate::cas::claims::ClaimRecord::new_u64(
-            claim.subj.min(u64::from(u16::MAX)) as u16,
-            claim.pred.min(u64::from(u16::MAX)) as u16,
-            claim.obj_val,
-        ));
+        claims_section.add_claim(claim_record_from_data(claim)?);
     }
     let claims_bytes = claims_section.to_bytes();
     let invariants_bytes = crate::cas::invariants::InvariantsSection::new().to_bytes();
@@ -151,7 +249,7 @@ fn build_authoring_payload(atom_type: AtomType, claims: &[ClaimData]) -> Vec<u8>
     payload.extend_from_slice(&edges_bytes);
     payload.extend_from_slice(&evidence_bytes);
     payload.extend_from_slice(&meta_bytes);
-    payload
+    Ok(payload)
 }
 
 /// Extract terms from atom payload for lexical indexing.
@@ -268,7 +366,7 @@ fn extract_terms_from_payload(payload: &[u8]) -> Vec<String> {
                             terms.push(normalized);
                         }
                     }
-                    if let Some(pred_str) = syms.get(claim.predicate_local as u32) {
+                    if let Some(pred_str) = syms.get(claim.predicate_local) {
                         let normalized: String =
                             unicode_normalization::UnicodeNormalization::nfc(pred_str).collect();
                         if !normalized.is_empty() && !terms.contains(&normalized) {
@@ -3503,6 +3601,35 @@ pub struct AnswerPack {
     pub proposed_text: Vec<crate::query::llm_boundary::Proposal<String>>,
     /// Snapshot identity of the knowledge state used for this answer.
     pub snapshot: KnowledgeSnapshotId,
+    /// Explicit accounting for output-contract truncation.
+    pub response_limits: ResponseLimitReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseLimitReport {
+    pub max_items: u32,
+    pub max_bytes: u32,
+    pub items_truncated: bool,
+    pub bytes_truncated: bool,
+    pub original_items: usize,
+    pub retained_items: usize,
+    pub original_bytes: Option<usize>,
+    pub emitted_bytes: Option<usize>,
+}
+
+impl Default for ResponseLimitReport {
+    fn default() -> Self {
+        Self {
+            max_items: u32::MAX,
+            max_bytes: u32::MAX,
+            items_truncated: false,
+            bytes_truncated: false,
+            original_items: 0,
+            retained_items: 0,
+            original_bytes: None,
+            emitted_bytes: None,
+        }
+    }
 }
 
 impl AnswerPack {
@@ -3534,6 +3661,7 @@ impl AnswerPack {
                 context_id: ctx_id,
                 solver_version: env!("CARGO_PKG_VERSION").to_owned(),
             },
+            response_limits: ResponseLimitReport::default(),
         }
     }
 
@@ -4584,76 +4712,25 @@ impl CasStore {
 ///   - u8: object_tag
 ///   - variable: object_value (based on tag)
 fn parse_claims_from_section(data: &[u8]) -> Vec<ClaimData> {
-    if data.len() < 4 {
+    let Ok(section) = ClaimsSection::from_bytes(data) else {
         return Vec::new();
-    }
-
-    let claim_count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    let mut claims = Vec::with_capacity(claim_count);
-    let mut offset = 4;
-
-    for _ in 0..claim_count {
-        if offset + 5 > data.len() {
-            break;
-        }
-
-        let subject_local = u16::from_le_bytes([data[offset], data[offset + 1]]);
-        let predicate_local = u16::from_le_bytes([data[offset + 2], data[offset + 3]]);
-        let object_tag = data[offset + 4];
-        offset += 5;
-
-        // Object value size depends on tag
-        let obj_val_size = match object_tag {
-            0 => 0, // NULL
-            1 => 1, // BOOL
-            2 => 8, // I64
-            3 => 8, // U64
-            4 => 8, // F64
-            5 => {
-                // BYTES: u32 length prefix
-                if offset + 4 > data.len() {
-                    break;
-                }
-                let len = u32::from_le_bytes([
-                    data[offset],
-                    data[offset + 1],
-                    data[offset + 2],
-                    data[offset + 3],
-                ]) as usize;
-                offset += 4;
-                if offset + len > data.len() {
-                    break;
-                }
-                offset += len;
-                0 // Already consumed
+    };
+    section
+        .claims
+        .into_iter()
+        .map(|claim| {
+            let mut scalar = [0u8; 8];
+            let copy_len = claim.object_value.len().min(scalar.len());
+            scalar[..copy_len].copy_from_slice(&claim.object_value[..copy_len]);
+            ClaimData {
+                subj: claim.subject_local,
+                pred: u64::from(claim.predicate_local),
+                obj_tag: claim.object_tag.to_u8(),
+                obj_val: u64::from_le_bytes(scalar),
+                qualifiers_mask: 0,
             }
-            6 => 4, // SYM
-            7 => 4, // REF
-            8 => 8, // NODENUM
-            _ => 0,
-        };
-
-        // Read object value as u64
-        let obj_val = if obj_val_size > 0 && offset + obj_val_size <= data.len() {
-            let mut buf = [0u8; 8];
-            let copy_len = obj_val_size.min(8);
-            buf[..copy_len].copy_from_slice(&data[offset..offset + copy_len]);
-            offset += obj_val_size;
-            u64::from_le_bytes(buf)
-        } else {
-            0
-        };
-
-        claims.push(ClaimData {
-            subj: subject_local as u64,
-            pred: predicate_local as u64,
-            obj_tag: object_tag,
-            obj_val,
-            qualifiers_mask: 0,
-        });
-    }
-
-    claims
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -4765,6 +4842,13 @@ impl LocationIndex {
                 }
             })
             .collect();
+        atom_ids.sort_unstable();
+        atom_ids
+    }
+
+    /// List every durable atom identity, including tombstoned audit records.
+    fn all_atom_ids(&self) -> Vec<AtomId> {
+        let mut atom_ids = self.atom_to_location.keys().copied().collect::<Vec<_>>();
         atom_ids.sort_unstable();
         atom_ids
     }
@@ -5247,6 +5331,8 @@ pub struct MemoryX {
     term_index: TermIndex,
     graph: GraphStore,
     pub(crate) meta: MetaStore,
+    sources: HashMap<SourceId, SourceRecord>,
+    source_links: HashMap<AtomId, Vec<AtomSourceLink>>,
     ctx_manager: Arc<Mutex<CtxManager>>,
     /// Embedding index for semantic search (SKF-1.1 Section 6.1, 10.2)
     /// Maps NodeNum -> embedding vector for ANN-based semantic retrieval
@@ -5337,6 +5423,89 @@ impl From<crate::index::IndexError> for StoreError {
 }
 
 impl MemoryX {
+    fn validate_source_records(sources: &[SourceRecord]) -> Result<(), StoreError> {
+        let mut ids = HashSet::new();
+        for source in sources {
+            if source.source_id == 0
+                || source.registered_at_unix_ns == 0
+                || source.label.trim().is_empty()
+            {
+                return Err(StoreError::Io("invalid source journal record".to_owned()));
+            }
+            if !ids.insert(source.source_id) {
+                return Err(StoreError::Io(format!(
+                    "duplicate source id {}",
+                    source.source_id
+                )));
+            }
+            if source
+                .location
+                .byte_range
+                .is_some_and(|(start, end)| start > end)
+                || source
+                    .location
+                    .line_range
+                    .is_some_and(|(start, end)| start > end)
+            {
+                return Err(StoreError::Io(format!(
+                    "invalid source range for source {}",
+                    source.source_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn load_source_link_index(
+        config: &StoreConfig,
+        meta: &MetaStore,
+        sources: &[SourceRecord],
+    ) -> Result<HashMap<AtomId, Vec<AtomSourceLink>>, StoreError> {
+        let source_ids: HashSet<_> = sources.iter().map(|source| source.source_id).collect();
+        let mut index: HashMap<AtomId, Vec<AtomSourceLink>> = HashMap::new();
+        for link in
+            read_recovering_jsonl::<AtomSourceLink>(&config.atom_sources_path(), "atom-source")?
+        {
+            if link.source_id == 0 || link.attached_at_unix_ns == 0 {
+                return Err(StoreError::Io(
+                    "invalid atom-source journal record fields".to_owned(),
+                ));
+            }
+            if meta.get_meta(&link.atom_id).is_none() {
+                return Err(StoreError::Io(format!(
+                    "atom-source journal references missing atom {}",
+                    crate::cas::hex_encode(&link.atom_id)
+                )));
+            }
+            if !source_ids.contains(&link.source_id) {
+                return Err(StoreError::Io(format!(
+                    "atom-source journal references missing source {}",
+                    link.source_id
+                )));
+            }
+            let links = index.entry(link.atom_id).or_default();
+            if links
+                .iter()
+                .any(|existing| existing.source_id == link.source_id)
+            {
+                return Err(StoreError::Io(format!(
+                    "duplicate atom-source attachment for source {}",
+                    link.source_id
+                )));
+            }
+            if links.len() >= MAX_SOURCES_PER_ATOM {
+                return Err(StoreError::Io(format!(
+                    "atom exceeds {MAX_SOURCES_PER_ATOM} source attachments"
+                )));
+            }
+            links.push(link);
+        }
+        for links in index.values_mut() {
+            links.sort_by_key(|link| (link.attached_at_unix_ns, link.source_id));
+        }
+        Ok(index)
+    }
+
     fn contexts_backup_path(path: &std::path::Path) -> PathBuf {
         path.with_extension("json.bak")
     }
@@ -5501,7 +5670,31 @@ impl MemoryX {
         let term_index = TermIndex::new(&config)?;
         let graph = GraphStore::open_or_create(config.graph_dir(), 0)
             .map_err(|e| StoreError::Io(e.to_string()))?;
-        let meta = MetaStore::new(&config)?;
+        let mut meta = MetaStore::new(&config)?;
+        let sources = read_recovering_jsonl::<SourceRecord>(&config.sources_path(), "source")?;
+        Self::validate_source_records(&sources)?;
+        let source_index = sources
+            .iter()
+            .cloned()
+            .map(|source| (source.source_id, source))
+            .collect();
+        let predicates =
+            read_recovering_jsonl::<PredicateRecord>(&config.predicates_path(), "predicate")?;
+        Self::validate_predicate_records(&predicates)?;
+        let source_links = Self::load_source_link_index(&config, &meta, &sources)?;
+        let mut reconciled_meta = false;
+        for (atom_id, links) in &source_links {
+            if let Some(metadata) = meta.meta.get_mut(atom_id)
+                && metadata.source_id == 0
+                && let Some(first) = links.first()
+            {
+                metadata.source_id = first.source_id;
+                reconciled_meta = true;
+            }
+        }
+        if reconciled_meta {
+            meta.save()?;
+        }
         let ctx_manager = Arc::new(Mutex::new(Self::read_context_manager(
             &config.contexts_path(),
         )?));
@@ -5519,6 +5712,8 @@ impl MemoryX {
             term_index,
             graph,
             meta,
+            sources: source_index,
+            source_links,
             ctx_manager,
             embedding_index,
             base_lease,
@@ -5607,25 +5802,8 @@ impl MemoryX {
     }
 
     fn read_sources(&self) -> Result<Vec<SourceRecord>, StoreError> {
-        let sources_path = self.config.sources_path();
-        if !sources_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(sources_path).map_err(StoreError::from)?;
-        let reader = BufReader::new(file);
-        let mut sources = Vec::new();
-
-        for line in reader.lines() {
-            let line = line.map_err(StoreError::from)?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let source: SourceRecord =
-                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
-            sources.push(source);
-        }
-
+        let mut sources = self.sources.values().cloned().collect::<Vec<_>>();
+        sources.sort_by_key(|source| source.source_id);
         Ok(sources)
     }
 
@@ -5636,80 +5814,46 @@ impl MemoryX {
         label: impl Into<String>,
         location: SourceLocation,
     ) -> Result<SourceRecord, StoreError> {
+        let label = label.into();
+        if label.trim().is_empty()
+            || location.byte_range.is_some_and(|(start, end)| start > end)
+            || location.line_range.is_some_and(|(start, end)| start > end)
+        {
+            return Err(StoreError::Io("invalid source registration".to_owned()));
+        }
         let next_id = self
             .read_sources()?
             .iter()
             .map(|source| source.source_id)
             .max()
             .unwrap_or(0)
-            .saturating_add(1);
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Io("source id space exhausted".to_owned()))?;
         let source = SourceRecord::new(next_id, kind, label, location);
 
-        let sources_path = self.config.sources_path();
-        if let Some(parent) = sources_path.parent() {
-            fs::create_dir_all(parent).map_err(StoreError::from)?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&sources_path)
-            .map_err(StoreError::from)?;
-        serde_json::to_writer(&mut file, &source).map_err(|err| StoreError::Io(err.to_string()))?;
-        file.write_all(b"\n").map_err(StoreError::from)?;
-        file.flush().map_err(StoreError::from)?;
-        file.sync_data().map_err(StoreError::from)?;
-
+        append_bounded_jsonl(&self.config.sources_path(), "source", &source)?;
+        self.sources.insert(source.source_id, source.clone());
         Ok(source)
     }
 
     /// Get a registered source by id.
     pub fn get_source(&self, source_id: SourceId) -> Result<Option<SourceRecord>, StoreError> {
-        Ok(self
-            .read_sources()?
-            .into_iter()
-            .rev()
-            .find(|source| source.source_id == source_id))
+        Ok(self.sources.get(&source_id).cloned())
     }
 
     /// List all registered sources in registration order.
     pub fn list_sources(&self) -> Result<Vec<SourceRecord>, StoreError> {
-        self.read_sources()
+        let mut sources = self.sources.values().cloned().collect::<Vec<_>>();
+        sources.sort_by_key(|source| source.source_id);
+        Ok(sources)
     }
 
     fn read_atom_source_links(&self) -> Result<Vec<AtomSourceLink>, StoreError> {
-        let path = self.config.atom_sources_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let file = File::open(path).map_err(StoreError::from)?;
-        let mut links = Vec::new();
-        for line in BufReader::new(file).lines() {
-            let line = line.map_err(StoreError::from)?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            links.push(
-                serde_json::from_str(&line).map_err(|error| StoreError::Io(error.to_string()))?,
-            );
-        }
-        Ok(links)
+        Ok(self.source_links.values().flatten().cloned().collect())
     }
 
     fn append_atom_source_link(&self, link: &AtomSourceLink) -> Result<(), StoreError> {
-        let path = self.config.atom_sources_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(StoreError::from)?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(StoreError::from)?;
-        serde_json::to_writer(&mut file, link)
-            .map_err(|error| StoreError::Io(error.to_string()))?;
-        file.write_all(b"\n").map_err(StoreError::from)?;
-        file.flush().map_err(StoreError::from)?;
-        file.sync_data().map_err(StoreError::from)
+        append_bounded_jsonl(&self.config.atom_sources_path(), "atom-source", link)
     }
 
     /// Return all durable source ids attached to an atom.
@@ -5721,12 +5865,18 @@ impl MemoryX {
             .meta
             .get_meta(atom_id)
             .ok_or(StoreError::AtomNotFound(*atom_id))?;
-        let mut source_ids = Vec::new();
+        let mut source_ids = Vec::with_capacity(
+            self.source_links
+                .get(atom_id)
+                .map_or(1, |links| links.len().saturating_add(1)),
+        );
+        let mut seen = HashSet::new();
         if metadata.source_id != 0 {
             source_ids.push(metadata.source_id);
+            seen.insert(metadata.source_id);
         }
-        for link in self.read_atom_source_links()? {
-            if link.atom_id == *atom_id && !source_ids.contains(&link.source_id) {
+        for link in self.source_links.get(atom_id).into_iter().flatten() {
+            if seen.insert(link.source_id) {
                 source_ids.push(link.source_id);
             }
         }
@@ -5764,20 +5914,34 @@ impl MemoryX {
             .get_meta(&atom_id)
             .cloned()
             .ok_or(StoreError::AtomNotFound(atom_id))?;
-        if self.list_atom_source_ids(&atom_id)?.contains(&source_id) {
+        let current_sources = self.list_atom_source_ids(&atom_id)?;
+        if current_sources.contains(&source_id) {
+            if metadata.source_id == 0 {
+                metadata.source_id = source_id;
+                self.meta.put_meta(atom_id, metadata);
+                self.flush()?;
+            }
             return Ok(());
         }
-
-        self.append_atom_source_link(&AtomSourceLink {
-            atom_id,
-            source_id,
-            attached_at_unix_ns: current_unix_ns(),
-        })?;
+        if current_sources.len() >= MAX_SOURCES_PER_ATOM {
+            return Err(StoreError::Io(format!(
+                "atom source attachment limit {MAX_SOURCES_PER_ATOM} reached"
+            )));
+        }
         if metadata.source_id == 0 {
             metadata.source_id = source_id;
             self.meta.put_meta(atom_id, metadata);
             self.flush()?;
+            return Ok(());
         }
+
+        let link = AtomSourceLink {
+            atom_id,
+            source_id,
+            attached_at_unix_ns: current_unix_ns(),
+        };
+        self.append_atom_source_link(&link)?;
+        self.source_links.entry(atom_id).or_default().push(link);
         Ok(())
     }
 
@@ -5917,6 +6081,104 @@ impl MemoryX {
         Ok(())
     }
 
+    fn apply_output_limit(pack: &mut AnswerPack, output: &crate::query::OutputContract) {
+        let max_items = output.max_items as usize;
+        for alternate in &mut pack.alternates {
+            Self::apply_output_limit(alternate, output);
+        }
+        let original_items = Self::answer_collection_items(pack);
+        let original_nodes = pack.graph.nodes.len();
+        let original_claims = pack.claims.len();
+        if original_nodes > max_items {
+            pack.graph.nodes.truncate(max_items);
+            pack.graph
+                .edges
+                .retain(|edge| edge.src_idx < max_items && edge.dst_idx < max_items);
+            pack.graph.proof_steps.retain(|step| {
+                step.conclusion < max_items && step.premises.iter().all(|index| *index < max_items)
+            });
+        }
+        pack.graph.edges.truncate(max_items);
+        pack.graph.proof_steps.truncate(max_items);
+        pack.claims.truncate(max_items);
+        pack.claims_v2.truncate(max_items);
+        pack.rejected_candidates.truncate(max_items);
+        pack.alternates.truncate(max_items);
+        pack.conflicts.truncate(max_items);
+        pack.conflict_sets.truncate(max_items);
+        for set in &mut pack.conflict_sets {
+            set.branches.truncate(max_items);
+            set.conflicts.truncate(max_items);
+        }
+        pack.query_trace.retrieval_actions.truncate(max_items);
+        pack.proposed_text.truncate(max_items);
+        pack.evidence.clear();
+        pack.evidence_records.clear();
+        for node in &pack.graph.nodes {
+            for evidence in &node.evidence_refs {
+                if !pack
+                    .evidence
+                    .iter()
+                    .any(|existing| AnswerGraph::same_evidence_ref_identity(existing, evidence))
+                {
+                    pack.evidence.push(evidence.clone());
+                }
+            }
+            for record in &node.direct_evidence {
+                if !pack
+                    .evidence_records
+                    .iter()
+                    .any(|existing| AnswerGraph::same_evidence_record_identity(existing, record))
+                {
+                    pack.evidence_records.push(record.clone());
+                }
+            }
+        }
+        pack.evidence.truncate(max_items);
+        pack.evidence_records.truncate(max_items);
+        pack.limitations.truncate(max_items);
+        let retained_items = Self::answer_collection_items(pack);
+        let truncated = retained_items < original_items;
+        pack.response_limits = ResponseLimitReport {
+            max_items: output.max_items,
+            max_bytes: output.max_bytes,
+            items_truncated: truncated,
+            bytes_truncated: false,
+            original_items,
+            retained_items,
+            original_bytes: None,
+            emitted_bytes: None,
+        };
+        if truncated {
+            pack.status = AnswerStatus::Partial;
+            pack.limitations.truncate(max_items.saturating_sub(1));
+            pack.limitations.push(Limitation::warning(
+                LimitationCode::BudgetExhausted,
+                format!(
+                    "response collections truncated by output_contract.max_items={max_items}; full durable data remains in the base (nodes {original_nodes}, claims {original_claims}, total items {original_items}, retained {retained_items})"
+                ),
+            ));
+        }
+        pack.refresh_coverage_counts();
+    }
+
+    fn answer_collection_items(pack: &AnswerPack) -> usize {
+        pack.graph.nodes.len()
+            + pack.graph.edges.len()
+            + pack.graph.proof_steps.len()
+            + pack.claims.len()
+            + pack.claims_v2.len()
+            + pack.evidence.len()
+            + pack.evidence_records.len()
+            + pack.rejected_candidates.len()
+            + pack.limitations.len()
+            + pack.alternates.len()
+            + pack.conflicts.len()
+            + pack.conflict_sets.len()
+            + pack.query_trace.retrieval_actions.len()
+            + pack.proposed_text.len()
+    }
+
     fn normalize_predicate_key(value: &str) -> String {
         value.nfkc().collect::<String>().trim().to_lowercase()
     }
@@ -5969,40 +6231,142 @@ impl MemoryX {
         Ok(blake3::hash(&canonical).to_hex().to_string())
     }
 
-    fn read_predicates(&self) -> Result<Vec<PredicateRecord>, StoreError> {
-        let path = self.config.predicates_path();
-        if !path.exists() {
-            return Ok(Vec::new());
+    fn deterministic_predicate_id(stable_identity: &str) -> Result<SymId, StoreError> {
+        let bytes = hex::decode(stable_identity)
+            .map_err(|error| StoreError::Io(format!("invalid predicate identity: {error}")))?;
+        if bytes.len() != 32 {
+            return Err(StoreError::Io(
+                "predicate identity must be a BLAKE3-256 hex digest".to_owned(),
+            ));
         }
-        let file = File::open(path).map_err(StoreError::from)?;
-        let mut predicates = Vec::new();
-        for line in BufReader::new(file).lines() {
-            let line = line.map_err(StoreError::from)?;
-            if line.trim().is_empty() {
+        Ok(u32::from_le_bytes(bytes[0..4].try_into().unwrap()) | MANAGED_PREDICATE_ID_START)
+    }
+
+    fn inverse_cardinality(cardinality: PredicateCardinality) -> PredicateCardinality {
+        match cardinality {
+            PredicateCardinality::OneToOne => PredicateCardinality::OneToOne,
+            PredicateCardinality::OneToMany => PredicateCardinality::ManyToOne,
+            PredicateCardinality::ManyToOne => PredicateCardinality::OneToMany,
+            PredicateCardinality::ManyToMany => PredicateCardinality::ManyToMany,
+        }
+    }
+
+    fn validate_predicate_records(records: &[PredicateRecord]) -> Result<(), StoreError> {
+        let mut ids = HashSet::new();
+        let mut identities = HashSet::new();
+        let mut keys = HashSet::new();
+        let mut names = HashSet::new();
+        for record in records {
+            let normalized = Self::normalize_predicate_contract(record.contract.clone())?;
+            let identity = Self::predicate_identity(&normalized)?;
+            let expected_id = Self::deterministic_predicate_id(&identity)?;
+            if normalized != record.contract
+                || identity != record.stable_identity
+                || expected_id != record.predicate_id
+                || record.registered_at_unix_ns == 0
+            {
+                return Err(StoreError::Io(format!(
+                    "invalid persisted predicate record {}",
+                    record.predicate_id
+                )));
+            }
+            let name = Self::normalize_predicate_key(&record.contract.canonical_name);
+            if !ids.insert(record.predicate_id)
+                || !identities.insert(record.stable_identity.clone())
+                || !keys.insert(record.contract.stable_key.clone())
+                || !names.insert(name)
+            {
+                return Err(StoreError::Io(
+                    "duplicate predicate id, identity, key, or canonical name".to_owned(),
+                ));
+            }
+            let inverse = record.contract.inverse_stable_key.as_deref();
+            if record.contract.direction == PredicateDirection::Symmetric
+                && inverse.is_some_and(|key| key != record.contract.stable_key)
+            {
+                return Err(StoreError::Io(
+                    "symmetric predicate inverse must be itself or omitted".to_owned(),
+                ));
+            }
+            if record.contract.direction == PredicateDirection::Symmetric
+                && matches!(
+                    record.contract.cardinality,
+                    PredicateCardinality::OneToMany | PredicateCardinality::ManyToOne
+                )
+            {
+                return Err(StoreError::Io(
+                    "symmetric predicate cardinality must be one_to_one or many_to_many".to_owned(),
+                ));
+            }
+            if record.contract.direction == PredicateDirection::Directed
+                && inverse == Some(record.contract.stable_key.as_str())
+            {
+                return Err(StoreError::Io(
+                    "directed predicate cannot be its own inverse".to_owned(),
+                ));
+            }
+        }
+
+        for record in records {
+            let Some(inverse_key) = record.contract.inverse_stable_key.as_deref() else {
+                continue;
+            };
+            if inverse_key == record.contract.stable_key {
                 continue;
             }
-            predicates.push(
-                serde_json::from_str(&line).map_err(|error| StoreError::Io(error.to_string()))?,
-            );
+            if let Some(inverse) = records
+                .iter()
+                .find(|candidate| candidate.contract.stable_key == inverse_key)
+                && (inverse.contract.direction != PredicateDirection::Directed
+                    || inverse.contract.inverse_stable_key.as_deref()
+                        != Some(record.contract.stable_key.as_str())
+                    || inverse.contract.cardinality
+                        != Self::inverse_cardinality(record.contract.cardinality))
+            {
+                return Err(StoreError::Io(format!(
+                    "incoherent reciprocal predicate declaration for {}",
+                    record.contract.stable_key
+                )));
+            }
         }
+        Ok(())
+    }
+
+    fn read_predicates(&self) -> Result<Vec<PredicateRecord>, StoreError> {
+        let predicates = read_recovering_jsonl(&self.config.predicates_path(), "predicate")?;
+        Self::validate_predicate_records(&predicates)?;
         Ok(predicates)
     }
 
     fn append_predicate(&self, predicate: &PredicateRecord) -> Result<(), StoreError> {
-        let path = self.config.predicates_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(StoreError::from)?;
+        append_bounded_jsonl(&self.config.predicates_path(), "predicate", predicate)
+    }
+
+    fn ensure_predicate_id_unused(&self, predicate_id: SymId) -> Result<(), StoreError> {
+        if self
+            .read_relations()?
+            .iter()
+            .any(|relation| relation.predicate == predicate_id)
+        {
+            return Err(StoreError::Io(format!(
+                "predicate id {predicate_id} is already used by a durable relation"
+            )));
         }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(StoreError::from)?;
-        serde_json::to_writer(&mut file, predicate)
-            .map_err(|error| StoreError::Io(error.to_string()))?;
-        file.write_all(b"\n").map_err(StoreError::from)?;
-        file.flush().map_err(StoreError::from)?;
-        file.sync_data().map_err(StoreError::from)
+        for atom_id in self.loc_index.all_atom_ids() {
+            if self
+                .cas
+                .get_atom_view(&atom_id)?
+                .claims
+                .iter()
+                .any(|claim| claim.pred == u64::from(predicate_id))
+            {
+                return Err(StoreError::Io(format!(
+                    "predicate id {predicate_id} is already used by CAS claim {}",
+                    crate::cas::hex_encode(&atom_id)
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Register a project predicate contract or return its existing managed id.
@@ -6039,22 +6403,26 @@ impl MemoryX {
             }
         }
 
-        let predicate_id = predicates
+        let predicate_id = Self::deterministic_predicate_id(&stable_identity)?;
+        if let Some(existing) = predicates
             .iter()
-            .map(|predicate| predicate.predicate_id)
-            .filter(|predicate_id| *predicate_id >= MANAGED_PREDICATE_ID_START)
-            .max()
-            .map_or(Ok(MANAGED_PREDICATE_ID_START), |predicate_id| {
-                predicate_id.checked_add(1).ok_or_else(|| {
-                    StoreError::Io("managed predicate id space is exhausted".to_owned())
-                })
-            })?;
+            .find(|predicate| predicate.predicate_id == predicate_id)
+        {
+            return Err(StoreError::Io(format!(
+                "deterministic predicate id collision with {}",
+                existing.contract.stable_key
+            )));
+        }
+        self.ensure_predicate_id_unused(predicate_id)?;
         let record = PredicateRecord {
             predicate_id,
             stable_identity,
             contract,
             registered_at_unix_ns: current_unix_ns(),
         };
+        let mut validated = predicates;
+        validated.push(record.clone());
+        Self::validate_predicate_records(&validated)?;
         self.append_predicate(&record)?;
         Ok(record)
     }
@@ -6087,6 +6455,71 @@ impl MemoryX {
             predicate.contract.stable_key == lookup
                 || Self::normalize_predicate_key(&predicate.contract.canonical_name) == lookup
         }))
+    }
+
+    fn require_managed_predicate(
+        &self,
+        predicate: SymId,
+    ) -> Result<Option<PredicateRecord>, StoreError> {
+        if predicate < MANAGED_PREDICATE_ID_START {
+            return Ok(None);
+        }
+        self.get_predicate(predicate)?.map(Some).ok_or_else(|| {
+            StoreError::Io(format!(
+                "managed predicate {predicate} is not registered in this base"
+            ))
+        })
+    }
+
+    fn validate_relation_contract(
+        &self,
+        subject: EntityId,
+        predicate: SymId,
+        object: EntityId,
+        ignored_relation: Option<u64>,
+    ) -> Result<(), StoreError> {
+        let Some(record) = self.require_managed_predicate(predicate)? else {
+            return Ok(());
+        };
+        let relations = self.read_relations()?;
+        let superseded: HashSet<_> = relations
+            .iter()
+            .filter_map(|item| item.supersedes)
+            .collect();
+        let active = relations.iter().filter(|item| {
+            !item.deprecated
+                && !superseded.contains(&item.relation_id)
+                && Some(item.relation_id) != ignored_relation
+                && item.predicate == predicate
+        });
+        for existing in active {
+            if existing.subject == subject && existing.object == object {
+                return Err(StoreError::Io("duplicate managed relation".to_owned()));
+            }
+            if record.contract.direction == PredicateDirection::Symmetric
+                && existing.subject == object
+                && existing.object == subject
+            {
+                return Err(StoreError::Io(
+                    "duplicate reciprocal symmetric relation".to_owned(),
+                ));
+            }
+            let violates = match record.contract.cardinality {
+                PredicateCardinality::OneToOne => {
+                    existing.subject == subject || existing.object == object
+                }
+                PredicateCardinality::OneToMany => existing.object == object,
+                PredicateCardinality::ManyToOne => existing.subject == subject,
+                PredicateCardinality::ManyToMany => false,
+            };
+            if violates {
+                return Err(StoreError::Io(format!(
+                    "relation violates {:?} cardinality",
+                    record.contract.cardinality
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn read_entities(&self) -> Result<Vec<EntityRecord>, StoreError> {
@@ -6128,42 +6561,24 @@ impl MemoryX {
     }
 
     fn read_relations(&self) -> Result<Vec<RelationRecord>, StoreError> {
-        let path = self.config.relations_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(path).map_err(StoreError::from)?;
-        let reader = BufReader::new(file);
-        let mut relations = Vec::new();
-        for line in reader.lines() {
-            let line = line.map_err(StoreError::from)?;
-            if line.trim().is_empty() {
-                continue;
+        let relations: Vec<RelationRecord> =
+            read_recovering_jsonl(&self.config.relations_path(), "relation")?;
+        let mut ids = HashSet::new();
+        for relation in &relations {
+            if relation.relation_id == 0
+                || relation.updated_at_unix_ns == 0
+                || !ids.insert(relation.relation_id)
+            {
+                return Err(StoreError::Io(
+                    "invalid or duplicate relation journal record".to_owned(),
+                ));
             }
-            let relation: RelationRecord =
-                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
-            relations.push(relation);
         }
         Ok(relations)
     }
 
     fn append_relation(&self, relation: &RelationRecord) -> Result<(), StoreError> {
-        let path = self.config.relations_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(StoreError::from)?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(StoreError::from)?;
-        serde_json::to_writer(&mut file, relation)
-            .map_err(|err| StoreError::Io(err.to_string()))?;
-        file.write_all(b"\n").map_err(StoreError::from)?;
-        file.flush().map_err(StoreError::from)?;
-        file.sync_data().map_err(StoreError::from)?;
-        Ok(())
+        append_bounded_jsonl(&self.config.relations_path(), "relation", relation)
     }
 
     /// Create a high-level entity record.
@@ -6294,6 +6709,7 @@ impl MemoryX {
         if self.get_entity(entity_id)?.is_none() {
             return Err(StoreError::Io(format!("entity {} not found", entity_id)));
         }
+        self.require_managed_predicate(predicate)?;
 
         let claim = ClaimData {
             subj: entity_id,
@@ -6302,7 +6718,7 @@ impl MemoryX {
             obj_val: object_value,
             qualifiers_mask: 0,
         };
-        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim));
+        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
         let atom_id = self.ingest(
             &payload,
             AtomType::FACT,
@@ -6340,15 +6756,16 @@ impl MemoryX {
         if self.get_entity(object)?.is_none() {
             return Err(StoreError::Io(format!("entity {} not found", object)));
         }
+        self.validate_relation_contract(subject, predicate, object, None)?;
 
         let claim = ClaimData {
             subj: subject,
             pred: u64::from(predicate),
-            obj_tag: ObjTag::REF.to_u8(),
+            obj_tag: ObjTag::NODENUM.to_u8(),
             obj_val: object,
             qualifiers_mask: 0,
         };
-        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim));
+        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
         let atom_id = self.ingest(
             &payload,
             AtomType::FACT,
@@ -6401,15 +6818,16 @@ impl MemoryX {
             .rev()
             .find(|relation| relation.relation_id == old_relation_id)
             .ok_or_else(|| StoreError::Io(format!("relation {} not found", old_relation_id)))?;
+        self.validate_relation_contract(subject, predicate, object, Some(old_relation_id))?;
 
         let claim = ClaimData {
             subj: subject,
             pred: u64::from(predicate),
-            obj_tag: ObjTag::REF.to_u8(),
+            obj_tag: ObjTag::NODENUM.to_u8(),
             obj_val: object,
             qualifiers_mask: 0,
         };
-        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim));
+        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
         let update = self.update_atom(
             old_relation.atom_id,
             payload,
@@ -6751,6 +7169,18 @@ impl MemoryX {
         contract: QueryContract,
         ctx_policy: CtxPolicyId,
     ) -> Result<AnswerPack, StoreError> {
+        const QUERY_STOP_WORDS: &[&str] = &[
+            "about", "after", "and", "before", "does", "find", "follows", "from", "how", "into",
+            "is", "of", "or", "please", "the", "what", "when", "where", "which", "who", "why",
+            "with",
+        ];
+        let explicit_selector = contract.targets.iter().any(|target| {
+            target.id.is_some()
+                || target
+                    .label
+                    .as_deref()
+                    .is_some_and(|label| label.contains(':'))
+        });
         let lexical_targets = contract
             .targets
             .iter()
@@ -6768,9 +7198,14 @@ impl MemoryX {
         for target in &lexical_targets {
             for term in target
                 .split(|character: char| !(character.is_alphanumeric() || character == '_'))
-                .filter(|term| !term.is_empty())
+                .map(str::to_lowercase)
+                .filter(|term| {
+                    !term.is_empty()
+                        && (term.contains('_') || term.len() >= 3)
+                        && !QUERY_STOP_WORDS.contains(&term.as_str())
+                })
             {
-                if let Some(term_id) = self.term_index.resolve_term_id(term)
+                if let Some(term_id) = self.term_index.resolve_term_id(&term)
                     && !resolved_terms.contains(&term_id)
                 {
                     resolved_terms.push(term_id);
@@ -6778,11 +7213,12 @@ impl MemoryX {
             }
         }
 
+        let budgets = contract.budgets.clone();
         let mut goal = contract
             .to_goal_spec()
             .map_err(|e| StoreError::Query(e.to_string()))?
             .with_ctx_policy(ctx_policy);
-        if !lexical_targets.is_empty() {
+        if !lexical_targets.is_empty() || explicit_selector {
             goal.lexical_resolution_required = true;
             goal.entities.retain(|entity| {
                 *entity != EntityRef::Term(0)
@@ -6798,13 +7234,16 @@ impl MemoryX {
             }
         }
 
-        self.solve_goal(goal, ctx_policy)
+        let mut pack = self.solve_goal(goal, ctx_policy, &budgets)?;
+        Self::apply_output_limit(&mut pack, &contract.output_contract);
+        Ok(pack)
     }
 
     fn solve_goal(
         &self,
         goal: GoalSpec,
         ctx_policy: CtxPolicyId,
+        budgets: &crate::query::QueryBudgets,
     ) -> Result<AnswerPack, StoreError> {
         // Create router populated with current store data
         let router = self.create_router();
@@ -6817,11 +7256,17 @@ impl MemoryX {
 
         // Create solver with router connected to this store
         // CRITICAL FIX: Pass ctx_manager.clone() to use real context with active claims/conflicts
-        let solver = FixedPointSolver::new()
+        let mut solver = FixedPointSolver::new()
             .with_router(router)
             .with_ctx_manager(Arc::clone(&self.ctx_manager))
             .with_timestamp(now_ns)
             .with_cas(Arc::clone(&self.cas.io_store));
+        solver.config.max_iterations = budgets.max_iterations;
+        solver.config.fetch_budget = budgets.max_atoms;
+        solver.config.io_budget = budgets.max_io_bytes as u32;
+        solver.config.max_edges = budgets.max_edges;
+        solver.config.max_time_ms = budgets.max_time_ms;
+        solver.config.max_federated_calls = budgets.max_federated_calls;
 
         let contexts_before_solve = self.ctx_manager.lock().clone();
         let mut pack = match solver.solve(goal, ctx_policy) {
@@ -8417,11 +8862,15 @@ mod tests {
         // subject_local and predicate_local are indices into symbols_section
         let mut claims_section = crate::cas::claims::ClaimsSection::new();
         if let Some(c) = claim {
-            claims_section.add_claim(crate::cas::claims::ClaimRecord::new_u64(
-                subj_sym as u16, // Use actual symbol index from symbols_section
-                pred_sym as u16, // Use actual symbol index from symbols_section
-                c.obj_val,
-            ));
+            claims_section.add_claim(
+                crate::cas::claims::ClaimRecord::from_scalar(
+                    u64::from(subj_sym),
+                    pred_sym,
+                    ObjTag::from_u8(c.obj_tag).unwrap_or(ObjTag::U64),
+                    c.obj_val,
+                )
+                .unwrap(),
+            );
         }
         let claims_bytes = claims_section.to_bytes();
 
@@ -9341,7 +9790,9 @@ mod tests {
 
         // Simulate a pre-accumulating-attachments base: only the legacy
         // AtomMetadata.source_id remains and no atom_sources.jsonl exists.
-        std::fs::remove_file(config.atom_sources_path()).unwrap();
+        if config.atom_sources_path().exists() {
+            std::fs::remove_file(config.atom_sources_path()).unwrap();
+        }
 
         let reopened = MemoryX::new(config).unwrap();
         let persisted = reopened.get_source(source.source_id).unwrap().unwrap();
@@ -11252,5 +11703,501 @@ mod tests {
         assert!(root.join("index").join("idloc.mmap").exists());
         assert!(root.join("meta").join("meta_state.bin").exists());
         assert!(root.join("index").join("embeddings.bin").exists());
+    }
+
+    fn managed_contract(key: &str, cardinality: PredicateCardinality) -> PredicateContract {
+        PredicateContract {
+            stable_key: key.to_owned(),
+            canonical_name: key.replace(':', "_"),
+            description: format!("Immutable test contract for {key}."),
+            direction: PredicateDirection::Directed,
+            inverse_stable_key: None,
+            cardinality,
+        }
+    }
+
+    #[test]
+    fn managed_predicate_and_typed_claim_survive_reopen_and_query() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("managed-claim"));
+        let atom_id;
+        let predicate_id;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let entity = store.create_entity("temperature", "measurement").unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "test:temperature_celsius",
+                    PredicateCardinality::ManyToMany,
+                ))
+                .unwrap();
+            predicate_id = predicate.predicate_id;
+            let bits = 21.5f64.to_bits();
+            atom_id = store
+                .add_entity_claim(
+                    entity.entity_id,
+                    predicate_id,
+                    ObjTag::F64,
+                    bits,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap()
+                .atom_id;
+            let atom = store.get_atom(&atom_id).unwrap();
+            assert_eq!(atom.claims[0].pred, u64::from(predicate_id));
+            assert_eq!(atom.claims[0].obj_tag, ObjTag::F64.to_u8());
+            assert_eq!(atom.claims[0].obj_val, bits);
+        }
+
+        let reopened = MemoryX::new(config).unwrap();
+        let atom = reopened.get_atom(&atom_id).unwrap();
+        assert_eq!(atom.claims[0].pred, u64::from(predicate_id));
+        assert_eq!(atom.claims[0].obj_tag, ObjTag::F64.to_u8());
+        assert_eq!(atom.claims[0].obj_val, 21.5f64.to_bits());
+        let answer = reopened
+            .answer_contract(
+                QueryContract::new(crate::query::ContractIntent::Lookup).with_target(
+                    crate::query::EntityPattern::label(format!(
+                        "atom:{}",
+                        crate::cas::hex_encode(&atom_id)
+                    )),
+                ),
+                0,
+            )
+            .unwrap();
+        assert!(answer.claims.iter().any(|claim| claim.pred == predicate_id
+            && claim.obj_tag == ObjTag::F64
+            && claim.obj_value == ConstValue::F64(21.5)));
+    }
+
+    #[test]
+    fn predicate_ids_are_order_independent_and_reject_existing_cas_collision() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let contract_a = managed_contract("test:alpha", PredicateCardinality::ManyToMany);
+        let contract_b = managed_contract("test:beta", PredicateCardinality::ManyToMany);
+        let ids_first = {
+            let mut store = MemoryX::new(StoreConfig::new(temp.path().join("first"))).unwrap();
+            (
+                store
+                    .register_predicate(contract_a.clone())
+                    .unwrap()
+                    .predicate_id,
+                store
+                    .register_predicate(contract_b.clone())
+                    .unwrap()
+                    .predicate_id,
+            )
+        };
+        let ids_second = {
+            let mut store = MemoryX::new(StoreConfig::new(temp.path().join("second"))).unwrap();
+            let beta = store.register_predicate(contract_b).unwrap().predicate_id;
+            let alpha = store
+                .register_predicate(contract_a.clone())
+                .unwrap()
+                .predicate_id;
+            (alpha, beta)
+        };
+        assert_eq!(ids_first, ids_second);
+
+        let mut store = MemoryX::new(StoreConfig::new(temp.path().join("collision"))).unwrap();
+        let normalized = MemoryX::normalize_predicate_contract(contract_a.clone()).unwrap();
+        let identity = MemoryX::predicate_identity(&normalized).unwrap();
+        let occupied_id = MemoryX::deterministic_predicate_id(&identity).unwrap();
+        let claim = ClaimData {
+            subj: 7,
+            pred: u64::from(occupied_id),
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 9,
+            qualifiers_mask: 0,
+        };
+        let payload =
+            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim)).unwrap();
+        store
+            .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+            .unwrap();
+        assert!(store.register_predicate(contract_a.clone()).is_err());
+
+        let mut tombstoned =
+            MemoryX::new(StoreConfig::new(temp.path().join("tombstoned-collision"))).unwrap();
+        let tombstone_atom = tombstoned
+            .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+            .unwrap();
+        tombstoned
+            .delete_atom(tombstone_atom, DeleteReason::Retraction)
+            .unwrap();
+        assert!(tombstoned.register_predicate(contract_a).is_err());
+    }
+
+    #[test]
+    fn predicate_inverse_and_cardinality_contracts_fail_closed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryX::new(StoreConfig::new(temp.path().join("semantics"))).unwrap();
+        let mut forward = managed_contract("test:parent_of", PredicateCardinality::OneToMany);
+        forward.inverse_stable_key = Some("test:child_of".to_owned());
+        store.register_predicate(forward).unwrap();
+        let mut wrong_inverse = managed_contract("test:child_of", PredicateCardinality::OneToMany);
+        wrong_inverse.inverse_stable_key = Some("test:unrelated".to_owned());
+        assert!(store.register_predicate(wrong_inverse).is_err());
+        let mut asymmetric_cardinality =
+            managed_contract("test:peer_of", PredicateCardinality::OneToMany);
+        asymmetric_cardinality.direction = PredicateDirection::Symmetric;
+        assert!(store.register_predicate(asymmetric_cardinality).is_err());
+
+        let predicate = store
+            .register_predicate(managed_contract(
+                "test:unique_pair",
+                PredicateCardinality::OneToOne,
+            ))
+            .unwrap();
+        for name in ["a", "b", "c"] {
+            store.create_entity(name, "node").unwrap();
+        }
+        store
+            .assert_relation(1, predicate.predicate_id, 2, 0, Vec::new())
+            .unwrap();
+        assert!(
+            store
+                .assert_relation(1, predicate.predicate_id, 3, 0, Vec::new())
+                .is_err()
+        );
+        assert!(
+            store
+                .assert_relation(3, predicate.predicate_id, 2, 0, Vec::new())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn lexical_common_tokens_and_missing_explicit_selectors_do_not_broadcast() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryX::new(StoreConfig::new(temp.path().join("selectors"))).unwrap();
+        let claim = ClaimData {
+            subj: 1,
+            pred: 2,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 3,
+            qualifiers_mask: 0,
+        };
+        let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+        store
+            .ingest(&payload, AtomType::FACT, &[claim], &[])
+            .unwrap();
+
+        assert_eq!(
+            store
+                .answer("what is completely_unrelated", 0)
+                .unwrap()
+                .status,
+            AnswerStatus::NoMatch
+        );
+        for selector in [
+            "term:4294967295".to_owned(),
+            "sym:4294967295".to_owned(),
+            format!("atom:{}", "00".repeat(32)),
+        ] {
+            let answer = store
+                .answer_contract(
+                    QueryContract::new(crate::query::ContractIntent::Lookup)
+                        .with_target(crate::query::EntityPattern::label(selector)),
+                    0,
+                )
+                .unwrap();
+            assert_eq!(answer.status, AnswerStatus::NoMatch);
+            assert!(answer.graph.nodes.is_empty());
+        }
+    }
+
+    #[test]
+    fn managed_journals_recover_torn_tail_and_reject_internal_corruption() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("journals"));
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            store
+                .register_predicate(managed_contract(
+                    "test:journal",
+                    PredicateCardinality::ManyToMany,
+                ))
+                .unwrap();
+        }
+        {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(config.predicates_path())
+                .unwrap();
+            file.write_all(b"{\"torn\":").unwrap();
+            file.sync_all().unwrap();
+        }
+        let reopened = MemoryX::new(config.clone()).unwrap();
+        assert_eq!(reopened.list_predicates().unwrap().len(), 1);
+        drop(reopened);
+
+        let valid = fs::read_to_string(config.predicates_path()).unwrap();
+        fs::write(config.predicates_path(), format!("{valid}{valid}")).unwrap();
+        assert!(MemoryX::new(config.clone()).is_err());
+        fs::write(config.predicates_path(), &valid).unwrap();
+        let mut record: serde_json::Value =
+            serde_json::from_str(valid.lines().next().unwrap()).unwrap();
+        record["stable_identity"] = serde_json::Value::String("00".repeat(32));
+        fs::write(
+            config.predicates_path(),
+            format!("{}\n", serde_json::to_string(&record).unwrap()),
+        )
+        .unwrap();
+        assert!(MemoryX::new(config.clone()).is_err());
+        fs::write(config.predicates_path(), format!("{valid}{{broken}}\n")).unwrap();
+        assert!(MemoryX::new(config).is_err());
+    }
+
+    #[test]
+    fn source_journal_rejects_duplicate_ids_and_invalid_ranges() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("source-journal-validation"));
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            store
+                .register_source(
+                    SourceKind::File,
+                    "validated source",
+                    SourceLocation {
+                        line_range: Some((1, 2)),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+        }
+        let valid = fs::read_to_string(config.sources_path()).unwrap();
+        fs::write(config.sources_path(), format!("{valid}{valid}")).unwrap();
+        assert!(MemoryX::new(config.clone()).is_err());
+
+        let mut record: serde_json::Value =
+            serde_json::from_str(valid.lines().next().unwrap()).unwrap();
+        record["location"]["line_range"] = serde_json::json!([9, 1]);
+        fs::write(
+            config.sources_path(),
+            format!("{}\n", serde_json::to_string(&record).unwrap()),
+        )
+        .unwrap();
+        assert!(MemoryX::new(config).is_err());
+    }
+
+    #[test]
+    fn legacy_large_source_journal_opens_and_new_oversize_record_is_preflighted() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("legacy-large-source"));
+        drop(MemoryX::new(config.clone()).unwrap());
+        let legacy = SourceRecord {
+            source_id: 1,
+            kind: SourceKind::File,
+            label: "x".repeat(MAX_NEW_JOURNAL_RECORD_BYTES + 128),
+            location: SourceLocation::default(),
+            registered_at_unix_ns: 1,
+        };
+        fs::write(
+            config.sources_path(),
+            format!("{}\n", serde_json::to_string(&legacy).unwrap()),
+        )
+        .unwrap();
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        assert_eq!(reopened.list_sources().unwrap().len(), 1);
+        let before = fs::metadata(config.sources_path()).unwrap().len();
+        assert!(
+            reopened
+                .register_source(
+                    SourceKind::File,
+                    "y".repeat(MAX_NEW_JOURNAL_RECORD_BYTES + 128),
+                    SourceLocation::default(),
+                )
+                .is_err()
+        );
+        assert_eq!(fs::metadata(config.sources_path()).unwrap().len(), before);
+        drop(reopened);
+        assert_eq!(
+            MemoryX::new(config).unwrap().list_sources().unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn open_store_uses_source_index_without_rereading_journal() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("source-cache"));
+        let mut store = MemoryX::new(config.clone()).unwrap();
+        let source = store
+            .register_source(SourceKind::File, "cached", SourceLocation::default())
+            .unwrap();
+        fs::write(config.sources_path(), b"{corrupt}\n").unwrap();
+        assert_eq!(store.get_source(source.source_id).unwrap(), Some(source));
+        assert_eq!(store.list_sources().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn output_limit_is_explicit_and_keeps_graph_indices_valid() {
+        let mut pack = AnswerPack::new(0);
+        for seed in 1..=3u8 {
+            pack.graph.nodes.push(AgNode::new(
+                AtomRef::new([seed; 32], u64::from(seed), 0, 0),
+                AtomType::FACT,
+            ));
+        }
+        pack.graph
+            .edges
+            .push(AgEdge::new(0, 2, AgEdgeType::Supports, 8000));
+        for seed in 1..=3u8 {
+            let claim = ClaimView::new(
+                EntityRef::Node(u64::from(seed)),
+                u32::from(seed),
+                ObjTag::U64,
+                ConstValue::u64(u64::from(seed)),
+                0,
+                8000,
+                [seed; 32],
+            );
+            pack.claims_v2.push(claim.clone().into());
+            pack.claims.push(claim);
+        }
+        let mut alternate = AnswerPack::new(0);
+        alternate.claims = pack.claims.clone();
+        alternate.claims_v2 = pack.claims_v2.clone();
+        pack.alternates = vec![alternate.clone(), alternate.clone(), alternate];
+
+        MemoryX::apply_output_limit(
+            &mut pack,
+            &crate::query::OutputContract {
+                max_items: 2,
+                ..crate::query::OutputContract::default()
+            },
+        );
+        assert_eq!(pack.graph.nodes.len(), 2);
+        assert_eq!(pack.claims.len(), 2);
+        assert_eq!(pack.claims_v2.len(), 2);
+        assert_eq!(pack.alternates.len(), 2);
+        assert!(
+            pack.alternates
+                .iter()
+                .all(|alternate| alternate.claims.len() <= 2 && alternate.claims_v2.len() <= 2)
+        );
+        assert!(pack.graph.edges.is_empty());
+        assert!(pack.response_limits.items_truncated);
+        assert_eq!(pack.status, AnswerStatus::Partial);
+        assert!(pack.limitations.iter().any(|limitation| {
+            limitation.code == LimitationCode::BudgetExhausted
+                && limitation.description.contains("full durable data remains")
+        }));
+    }
+
+    #[test]
+    fn query_execution_enforces_all_local_budget_dimensions() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryX::new(StoreConfig::new(temp.path().join("query-budgets"))).unwrap();
+        for seed in 1..=3u64 {
+            let claim = ClaimData {
+                subj: seed,
+                pred: 77,
+                obj_tag: ObjTag::U64.to_u8(),
+                obj_val: seed,
+                qualifiers_mask: 0,
+            };
+            let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+            let atom = store
+                .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+                .unwrap();
+            let node = store.get_node_num(&atom).unwrap();
+            assert!(store.add_embedding(node, &[1.0, seed as f32 / 100.0]));
+        }
+
+        let mut bounded = QueryContract::new(crate::query::ContractIntent::Lookup)
+            .with_semantic_vector(vec![1.0, 0.0]);
+        bounded.budgets = crate::query::QueryBudgets {
+            max_iterations: 1,
+            max_atoms: 1,
+            max_edges: 0,
+            max_io_bytes: 1024 * 1024,
+            max_time_ms: 30_000,
+            max_federated_calls: 0,
+        };
+        let answer = store.answer_contract(bounded.clone(), 0).unwrap();
+        assert!(answer.graph.nodes.len() <= 1);
+        assert!(answer.graph.edges.is_empty());
+
+        bounded.budgets.max_io_bytes = 0;
+        let no_io = store.answer_contract(bounded.clone(), 0).unwrap();
+        assert!(no_io.graph.nodes.is_empty());
+        assert_eq!(no_io.status, AnswerStatus::BudgetExhausted);
+
+        bounded.budgets.max_io_bytes = 1024 * 1024;
+        bounded.budgets.max_time_ms = 0;
+        let no_time = store.answer_contract(bounded, 0).unwrap();
+        assert!(no_time.graph.nodes.is_empty());
+        assert_eq!(no_time.status, AnswerStatus::BudgetExhausted);
+    }
+
+    #[test]
+    fn source_attachment_reconciles_and_enforces_bound() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("source-bound"));
+        let atom_id;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let payload = build_full_test_payload(AtomType::FACT);
+            atom_id = store.ingest(&payload, AtomType::FACT, &[], &[]).unwrap();
+            let source = store
+                .register_source(SourceKind::File, "first", SourceLocation::default())
+                .unwrap();
+            store
+                .append_atom_source_link(&AtomSourceLink {
+                    atom_id,
+                    source_id: source.source_id,
+                    attached_at_unix_ns: current_unix_ns(),
+                })
+                .unwrap();
+        }
+        let reopened = MemoryX::new(config.clone()).unwrap();
+        assert_ne!(reopened.meta.get_meta(&atom_id).unwrap().source_id, 0);
+        drop(reopened);
+        {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(config.atom_sources_path())
+                .unwrap();
+            file.write_all(b"{\"atom_id\":").unwrap();
+            file.sync_all().unwrap();
+        }
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        assert_eq!(reopened.list_atom_source_ids(&atom_id).unwrap().len(), 1);
+        for index in 1..MAX_SOURCES_PER_ATOM {
+            let source = reopened
+                .register_source(
+                    SourceKind::File,
+                    format!("source-{index}"),
+                    SourceLocation::default(),
+                )
+                .unwrap();
+            reopened.set_atom_source(atom_id, source.source_id).unwrap();
+        }
+        let overflow = reopened
+            .register_source(SourceKind::File, "overflow", SourceLocation::default())
+            .unwrap();
+        assert!(
+            reopened
+                .set_atom_source(atom_id, overflow.source_id)
+                .is_err()
+        );
+        assert_eq!(
+            reopened.list_atom_source_ids(&atom_id).unwrap().len(),
+            MAX_SOURCES_PER_ATOM
+        );
+        drop(reopened);
+        let journal = fs::read_to_string(config.atom_sources_path()).unwrap();
+        let duplicate = journal.lines().next().unwrap();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(config.atom_sources_path())
+            .unwrap();
+        writeln!(file, "{duplicate}").unwrap();
+        file.sync_all().unwrap();
+        assert!(MemoryX::new(config).is_err());
     }
 }

@@ -1413,7 +1413,7 @@ fn atom_export_from_store(store: &MemoryX, atom_id: &AtomId) -> CliResult<AtomEx
         };
 
         Ok(ClaimExport {
-            subject: record.subject_local as u64,
+            subject: record.subject_local,
             predicate: record.predicate_local as u64,
             object_tag: record.object_tag.to_u8(),
             object_value,
@@ -2414,11 +2414,15 @@ fn create_minimal_atom_body(atom_type: AtomType, claims: &[ClaimData]) -> Vec<u8
     for claim in claims {
         let subj_sym = symbols_section.intern(format!("subject_{}", claim.subj));
         let pred_sym = symbols_section.intern(format!("predicate_{}", claim.pred));
-        claims_section.add_claim(ClaimRecord::new_u64(
-            subj_sym as u16,
-            pred_sym as u16,
-            claim.obj_val,
-        ));
+        claims_section.add_claim(
+            ClaimRecord::from_scalar(
+                u64::from(subj_sym),
+                pred_sym,
+                ObjTag::from_u8(claim.obj_tag).unwrap_or(ObjTag::U64),
+                claim.obj_val,
+            )
+            .expect("test claim must be scalar"),
+        );
     }
 
     let symbols_bytes = symbols_section.to_bytes();
@@ -2694,6 +2698,42 @@ fn answer_graph_json(graph: &memoryx::store::api::AnswerGraph) -> serde_json::Va
 }
 
 fn answer_pack_json(answer: &memoryx::store::api::AnswerPack) -> serde_json::Value {
+    let full = answer_pack_json_unbounded(answer);
+    let original_bytes = full.to_string().len();
+    if original_bytes <= answer.response_limits.max_bytes as usize {
+        return full;
+    }
+
+    let mut limits = answer.response_limits.clone();
+    limits.bytes_truncated = true;
+    limits.original_bytes = Some(original_bytes);
+    let mut bounded = serde_json::json!({
+        "status": "Partial",
+        "selected_ctx": answer.selected_ctx,
+        "snapshot": answer.snapshot,
+        "coverage_report": answer.coverage_report,
+        "limitations": [{
+            "code": "BudgetExhausted",
+            "description": format!(
+                "serialized response exceeded output_contract.max_bytes={}; collections were omitted from this response only and remain durable in the base",
+                limits.max_bytes
+            ),
+            "severity": "Warning"
+        }],
+        "response_limits": limits,
+    });
+    for _ in 0..4 {
+        let emitted = bounded.to_string().len();
+        if bounded["response_limits"]["emitted_bytes"].as_u64() == Some(emitted as u64) {
+            break;
+        }
+        bounded["response_limits"]["emitted_bytes"] = serde_json::json!(emitted);
+    }
+    debug_assert!(bounded.to_string().len() <= answer.response_limits.max_bytes as usize);
+    bounded
+}
+
+fn answer_pack_json_unbounded(answer: &memoryx::store::api::AnswerPack) -> serde_json::Value {
     serde_json::json!({
         "status": format!("{:?}", answer.status),
         "selected_ctx": answer.selected_ctx,
@@ -2713,11 +2753,12 @@ fn answer_pack_json(answer: &memoryx::store::api::AnswerPack) -> serde_json::Val
                 "severity": format!("{:?}", l.severity),
             })
         }).collect::<Vec<_>>(),
-        "alternates": answer.alternates.iter().map(answer_pack_json).collect::<Vec<_>>(),
+        "alternates": answer.alternates.iter().map(answer_pack_json_unbounded).collect::<Vec<_>>(),
         "conflicts": answer.conflicts,
         "conflict_sets": answer.conflict_sets,
         "query_trace": answer.query_trace,
         "proposed_text": answer.proposed_text,
+        "response_limits": answer.response_limits,
     })
 }
 
@@ -3460,9 +3501,65 @@ fn cmd_snapshot(base: &Path, ctx: u32, format: OutputFormat) -> CliResult<()> {
 
 /// Start MCP stdio transport or HTTP federation server.
 #[cfg(feature = "mcp")]
+const MAX_MCP_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+#[cfg(feature = "mcp")]
+enum McpInputLine {
+    Eof,
+    Line(Vec<u8>),
+    TooLarge,
+}
+
+#[cfg(feature = "mcp")]
+async fn read_bounded_mcp_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<McpInputLine> {
+    use tokio::io::AsyncBufReadExt;
+
+    let mut line = Vec::new();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(if line.is_empty() {
+                McpInputLine::Eof
+            } else {
+                McpInputLine::Line(line)
+            });
+        }
+        if let Some(newline) = available.iter().position(|byte| *byte == b'\n') {
+            if line.len().saturating_add(newline) > MAX_MCP_REQUEST_LINE_BYTES {
+                reader.consume(newline + 1);
+                return Ok(McpInputLine::TooLarge);
+            }
+            line.extend_from_slice(&available[..newline]);
+            reader.consume(newline + 1);
+            return Ok(McpInputLine::Line(line));
+        }
+        let available_len = available.len();
+        if line.len().saturating_add(available_len) > MAX_MCP_REQUEST_LINE_BYTES {
+            reader.consume(available_len);
+            loop {
+                let remaining = reader.fill_buf().await?;
+                if remaining.is_empty() {
+                    return Ok(McpInputLine::TooLarge);
+                }
+                let remaining_len = remaining.len();
+                if let Some(newline) = remaining.iter().position(|byte| *byte == b'\n') {
+                    reader.consume(newline + 1);
+                    return Ok(McpInputLine::TooLarge);
+                }
+                reader.consume(remaining_len);
+            }
+        }
+        line.extend_from_slice(available);
+        reader.consume(available_len);
+    }
+}
+
+#[cfg(feature = "mcp")]
 fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
     use std::sync::Arc;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     use tokio::runtime::Runtime;
 
     let diagnostic_sink = serve_diagnostic_sink(stdio);
@@ -3499,8 +3596,7 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             // Stdio MCP transport
             let stdin = tokio::io::stdin();
             let mut stdout = tokio::io::stdout();
-            let reader = tokio::io::BufReader::new(stdin);
-            let mut lines = reader.lines();
+            let mut reader = tokio::io::BufReader::new(stdin);
 
             print_info_to(
                 diagnostic_sink,
@@ -3508,8 +3604,25 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             );
 
             loop {
-                match lines.next_line().await {
-                    Ok(Some(line)) => {
+                match read_bounded_mcp_line(&mut reader).await {
+                    Ok(McpInputLine::Line(bytes)) => {
+                        let line = match String::from_utf8(bytes) {
+                            Ok(line) => line,
+                            Err(error) => {
+                                let response = mcp_error(
+                                    serde_json::Value::Null,
+                                    -32700,
+                                    format!("MCP request is not UTF-8: {error}"),
+                                );
+                                stdout
+                                    .write_all(response.to_string().as_bytes())
+                                    .await
+                                    .map_err(CliError::Io)?;
+                                stdout.write_all(b"\n").await.map_err(CliError::Io)?;
+                                stdout.flush().await.map_err(CliError::Io)?;
+                                continue;
+                            }
+                        };
                         if let Some(response) = process_mcp_request(&mut mcp_state, &line).await {
                             stdout
                                 .write_all(response.as_bytes())
@@ -3519,7 +3632,20 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
                             stdout.flush().await.map_err(CliError::Io)?;
                         }
                     }
-                    Ok(None) => break,
+                    Ok(McpInputLine::TooLarge) => {
+                        let response = mcp_error(
+                            serde_json::Value::Null,
+                            -32700,
+                            format!("MCP request exceeds {MAX_MCP_REQUEST_LINE_BYTES} bytes"),
+                        );
+                        stdout
+                            .write_all(response.to_string().as_bytes())
+                            .await
+                            .map_err(CliError::Io)?;
+                        stdout.write_all(b"\n").await.map_err(CliError::Io)?;
+                        stdout.flush().await.map_err(CliError::Io)?;
+                    }
+                    Ok(McpInputLine::Eof) => break,
                     Err(e) => {
                         eprintln!("Error reading stdin: {}", e);
                         break;
@@ -3654,35 +3780,177 @@ fn add_base_ref_to_store_tool_schemas(response: &mut serde_json::Value) {
             })
         });
 
-        let examples = schema
-            .entry("examples".to_string())
-            .or_insert_with(|| serde_json::json!([]));
-        let Some(examples) = examples.as_array_mut() else {
-            continue;
-        };
-        if examples
-            .iter()
-            .any(|example| example.get("base_ref").is_some())
-        {
-            continue;
-        }
-
-        let mut explicit_base_example = examples
-            .first()
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(example) = explicit_base_example.as_object_mut() {
-            example.insert(
-                "base_ref".to_string(),
-                serde_json::Value::String("project:client-a".to_string()),
-            );
-            examples.push(explicit_base_example);
-        }
+        // A static base_ref example would only be executable after that base
+        // has been connected. Keep each tool's self-contained active-base
+        // examples and document base_ref through the optional property.
     }
 }
 
 #[cfg(feature = "mcp")]
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2024-11-05"];
+
+#[cfg(feature = "mcp")]
+fn query_contract_mcp_schema() -> serde_json::Value {
+    let strength = serde_json::json!({
+        "oneOf": [
+            { "type": "string", "enum": ["must", "must_not"] },
+            { "type": "object", "properties": {
+                "should": { "type": "object", "properties": {
+                    "weight": { "type": "number", "minimum": 0.0, "maximum": 1.0 }
+                }, "required": ["weight"], "additionalProperties": false }
+            }, "required": ["should"], "additionalProperties": false }
+        ]
+    });
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://memoryx.local/schemas/query-contract-1.0.5.json",
+        "type": "object",
+        "description": "Executable QueryContract. Omitted policy, output, and budget fields use documented MemoryX defaults.",
+        "$defs": {
+            "constraint_value": { "oneOf": [
+                { "type": "string", "enum": ["none"] },
+                { "type": "object", "properties": { "bool": { "type": "boolean" } }, "required": ["bool"], "additionalProperties": false },
+                { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"], "additionalProperties": false },
+                { "type": "object", "properties": { "number": { "type": "number" } }, "required": ["number"], "additionalProperties": false },
+                { "type": "object", "properties": { "ref": { "type": "string" } }, "required": ["ref"], "additionalProperties": false },
+                { "type": "object", "properties": { "time_range": { "type": "object", "properties": {
+                    "from_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                    "to_unix_ns": { "type": ["integer", "null"], "minimum": 0 }
+                }, "additionalProperties": false } }, "required": ["time_range"], "additionalProperties": false },
+                { "type": "object", "properties": { "list": { "type": "array", "items": { "$ref": "#/$defs/constraint_value" } } }, "required": ["list"], "additionalProperties": false }
+            ] }
+        },
+        "properties": {
+            "intent": { "type": "string", "enum": ["lookup", "verify", "explain", "derive", "compare", "plan", "define"] },
+            "targets": { "type": "array", "maxItems": 256, "items": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": ["string", "null"] },
+                    "label": { "type": ["string", "null"] },
+                    "entity_type": { "type": ["string", "null"] },
+                    "aliases": { "type": "array", "items": { "type": "string" } },
+                    "domain_mask": { "type": ["integer", "null"], "minimum": 0 }
+                },
+                "additionalProperties": false
+            } },
+            "semantic_vectors": { "type": "array", "items": { "type": "array", "minItems": 1, "items": { "type": "number" } } },
+            "relations": { "type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "subject": { "type": "string" },
+                    "predicate": { "type": "string" },
+                    "object": { "type": "string" },
+                    "strength": strength.clone()
+                },
+                "required": ["subject", "predicate", "object", "strength"],
+                "additionalProperties": false
+            } },
+            "constraints": { "type": "array", "maxItems": 1024, "items": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "strength": strength,
+                    "target": { "oneOf": [
+                        { "type": "string", "enum": ["entity", "entity_type", "predicate", "relation", "source", "evidence", "time", "context", "domain", "numeric_metric", "text"] },
+                        { "type": "object", "properties": { "custom": { "type": "string" } }, "required": ["custom"], "additionalProperties": false }
+                    ] },
+                    "operator": { "type": "string", "enum": ["eq", "ne", "contains", "exists", "matches", "before", "after", "during", "within", "gte", "lte"] },
+                    "value": { "$ref": "#/$defs/constraint_value" },
+                    "description": { "type": ["string", "null"] }
+                },
+                "required": ["id", "strength", "target", "operator", "value"],
+                "additionalProperties": false
+            } },
+            "quantifiers": { "type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "quantifier": { "oneOf": [
+                        { "type": "string", "enum": ["all", "any"] },
+                        { "type": "object", "properties": { "at_least": { "type": "integer", "minimum": 0 } }, "required": ["at_least"], "additionalProperties": false },
+                        { "type": "object", "properties": { "exactly": { "type": "integer", "minimum": 0 } }, "required": ["exactly"], "additionalProperties": false }
+                    ] },
+                    "constraint_ids": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["quantifier", "constraint_ids"],
+                "additionalProperties": false
+            } },
+            "temporal_scope": { "type": "object", "properties": {
+                "time_range": { "type": ["object", "null"], "properties": {
+                    "from_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                    "to_unix_ns": { "type": ["integer", "null"], "minimum": 0 }
+                }, "additionalProperties": false },
+                "before_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                "after_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                "valid_at_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                "observed_at_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                "latest_count": { "type": ["integer", "null"], "minimum": 0 },
+                "require_current": { "type": "boolean" }
+            }, "required": ["require_current"], "additionalProperties": false },
+            "context_scope": { "type": "object", "properties": {
+                "policy_id": { "type": ["integer", "null"], "minimum": 0 },
+                "selectors": { "type": "array", "items": { "oneOf": [
+                    { "type": "string", "enum": ["active", "user_global"] },
+                    { "type": "object", "properties": { "named": { "type": "string" } }, "required": ["named"], "additionalProperties": false },
+                    { "type": "object", "properties": { "branch": { "type": "string" } }, "required": ["branch"], "additionalProperties": false },
+                    { "type": "object", "properties": { "project": { "type": "string" } }, "required": ["project"], "additionalProperties": false },
+                    { "type": "object", "properties": { "assumption_set": { "type": "string" } }, "required": ["assumption_set"], "additionalProperties": false }
+                ] } },
+                "branch_ids": { "type": "array", "items": { "type": "string" } },
+                "include_conflicting_branches": { "type": "boolean" }
+            }, "required": ["branch_ids", "include_conflicting_branches"], "additionalProperties": false },
+            "source_policy": { "type": "object", "properties": {
+                "allowed_sources": { "type": "array", "items": { "type": "string" } },
+                "forbidden_sources": { "type": "array", "items": { "type": "string" } },
+                "require_provenance": { "type": "boolean" },
+                "allow_federated_sources": { "type": "boolean" }
+            }, "required": ["allowed_sources", "forbidden_sources", "require_provenance", "allow_federated_sources"], "additionalProperties": false },
+            "evidence_policy": { "type": "object", "properties": {
+                "min_evidence_items": { "type": "integer", "minimum": 0 },
+                "require_direct_evidence": { "type": "boolean" },
+                "allow_inferred_claims": { "type": "boolean" },
+                "include_rejected_candidates": { "type": "boolean" }
+            }, "required": ["min_evidence_items", "require_direct_evidence", "allow_inferred_claims", "include_rejected_candidates"], "additionalProperties": false },
+            "freshness_policy": { "type": "object", "properties": {
+                "max_age_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+                "stale_behavior": { "type": "string", "enum": ["allow", "mark_stale", "reject"] }
+            }, "required": ["stale_behavior"], "additionalProperties": false },
+            "ambiguity_policy": { "type": "object", "properties": {
+                "allow_ambiguous_targets": { "type": "boolean" },
+                "require_disambiguation_notes": { "type": "boolean" }
+            }, "required": ["allow_ambiguous_targets", "require_disambiguation_notes"], "additionalProperties": false },
+            "conflict_policy": { "type": "object", "properties": {
+                "mode": { "type": "string", "enum": ["fail", "branch", "include_alternatives", "prefer_trusted", "prefer_recent"] },
+                "include_conflicts": { "type": "boolean" },
+                "fail_on_hard_conflict": { "type": "boolean" },
+                "prefer_latest_branch": { "type": "boolean" }
+            }, "required": ["mode", "include_conflicts", "fail_on_hard_conflict", "prefer_latest_branch"], "additionalProperties": false },
+            "completeness_policy": { "type": "object", "properties": {
+                "require_minimal_proof_subgraph": { "type": "boolean" },
+                "expose_unknowns": { "type": "boolean" },
+                "expose_unsatisfied_constraints": { "type": "boolean" }
+            }, "required": ["require_minimal_proof_subgraph", "expose_unknowns", "expose_unsatisfied_constraints"], "additionalProperties": false },
+            "output_contract": { "type": "object", "properties": {
+                "format": { "type": "string", "enum": ["structured_json", "text_summary", "evidence_table", "minimal_graph"] },
+                "include_answer_graph": { "type": "boolean" },
+                "include_confidence": { "type": "boolean" },
+                "include_provenance": { "type": "boolean" },
+                "include_execution_trace": { "type": "boolean" },
+                "max_items": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                "max_bytes": { "type": "integer", "minimum": 2048, "maximum": 8388608 }
+            }, "additionalProperties": false },
+            "budgets": { "type": "object", "properties": {
+                "max_iterations": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "max_atoms": { "type": "integer", "minimum": 1, "maximum": 65536 },
+                "max_edges": { "type": "integer", "minimum": 0, "maximum": 262144 },
+                "max_io_bytes": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+                "max_time_ms": { "type": "integer", "minimum": 0, "maximum": 300000 },
+                "max_federated_calls": { "type": "integer", "minimum": 0, "maximum": 128, "description": "Maximum remote retrieval calls; local MCP query execution performs zero." }
+            }, "additionalProperties": false }
+        },
+        "required": ["intent"],
+        "additionalProperties": false
+    })
+}
 
 /// MCP initialize policy: echo an explicitly supported client date-version.
 /// Missing, non-string, and non-allowlisted versions are rejected rather than
@@ -3790,10 +4058,15 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                             "properties": {
                                                 "query_text": { "type": "string" },
                                                 "question": { "type": "string" },
-                                                "contract": { "type": "object" },
+                                                "contract": query_contract_mcp_schema(),
                                                 "base_ref": { "type": "string" },
                                                 "ctx_id": { "type": "integer" }
                                             },
+                                            "oneOf": [
+                                                { "required": ["query_text"] },
+                                                { "required": ["question"] },
+                                                { "required": ["contract"] }
+                                            ],
                                             "examples": [
                                                 {
                                                     "query_text": "What decisions mention MemoryX persistence?",
@@ -3871,7 +4144,7 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                                 "base_ref": { "type": "string" },
                                                 "query_text": { "type": "string" },
                                                 "question": { "type": "string" },
-                                                "contract": { "type": "object" },
+                                                "contract": query_contract_mcp_schema(),
                                                 "ctx_id": { "type": "integer" }
                                             },
                                             "required": ["base_ref"],
@@ -3902,7 +4175,7 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
-                                                "contract": { "type": "object" }
+                                                "contract": query_contract_mcp_schema()
                                             },
                                             "required": ["contract"],
                                             "examples": [
@@ -3912,7 +4185,17 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                                         "targets": [{ "label": "term:1" }],
                                                         "relations": [],
                                                         "constraints": [],
-                                                        "quantifiers": []
+                                                        "quantifiers": [],
+                                                        "temporal_scope": { "require_current": false },
+                                                        "context_scope": { "branch_ids": [], "include_conflicting_branches": true },
+                                                        "source_policy": { "allowed_sources": [], "forbidden_sources": [], "require_provenance": true, "allow_federated_sources": true },
+                                                        "evidence_policy": { "min_evidence_items": 0, "require_direct_evidence": false, "allow_inferred_claims": true, "include_rejected_candidates": true },
+                                                        "freshness_policy": { "max_age_unix_ns": null, "stale_behavior": "mark_stale" },
+                                                        "ambiguity_policy": { "allow_ambiguous_targets": true, "require_disambiguation_notes": true },
+                                                        "conflict_policy": { "mode": "branch", "include_conflicts": true, "fail_on_hard_conflict": false, "prefer_latest_branch": false },
+                                                        "completeness_policy": { "require_minimal_proof_subgraph": true, "expose_unknowns": true, "expose_unsatisfied_constraints": true },
+                                                        "output_contract": { "format": "structured_json", "include_answer_graph": true, "include_confidence": true, "include_provenance": true, "include_execution_trace": false, "max_items": 1, "max_bytes": 2048 },
+                                                        "budgets": { "max_iterations": 1, "max_atoms": 1, "max_edges": 0, "max_io_bytes": 0, "max_time_ms": 0, "max_federated_calls": 0 }
                                                     }
                                                 }
                                             ]
@@ -3925,9 +4208,13 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                             "type": "object",
                                             "properties": {
                                                 "query_text": { "type": "string" },
-                                                "contract": { "type": "object" },
+                                                "contract": query_contract_mcp_schema(),
                                                 "ctx_id": { "type": "integer" }
                                             },
+                                            "oneOf": [
+                                                { "required": ["query_text"] },
+                                                { "required": ["contract"] }
+                                            ],
                                             "examples": [
                                                 {
                                                     "query_text": "Find facts about MemoryX persistence",
@@ -4870,6 +5157,58 @@ fn mcp_text_result(id: serde_json::Value, text: String) -> serde_json::Value {
 }
 
 #[cfg(feature = "mcp")]
+fn mcp_answer_result(
+    id: serde_json::Value,
+    answer: &memoryx::store::api::AnswerPack,
+) -> serde_json::Value {
+    let mut payload = answer_pack_json(answer);
+    let mut response = mcp_text_result(id.clone(), payload.to_string());
+    for _ in 0..4 {
+        let emitted = response.to_string().len();
+        if payload["response_limits"]["emitted_bytes"].as_u64() == Some(emitted as u64) {
+            break;
+        }
+        payload["response_limits"]["emitted_bytes"] = serde_json::json!(emitted);
+        response = mcp_text_result(id.clone(), payload.to_string());
+    }
+    let original_bytes = response.to_string().len();
+    if original_bytes <= answer.response_limits.max_bytes as usize {
+        return response;
+    }
+    let payload = serde_json::json!({
+        "status": "Partial",
+        "selected_ctx": answer.selected_ctx,
+        "limitations": [{
+            "code": "BudgetExhausted",
+            "description": "MCP response framing exceeded output_contract.max_bytes; result collections were omitted from this response only and remain durable in the base",
+            "severity": "Warning"
+        }],
+        "response_limits": {
+            "max_items": answer.response_limits.max_items,
+            "max_bytes": answer.response_limits.max_bytes,
+            "items_truncated": answer.response_limits.items_truncated,
+            "bytes_truncated": true,
+            "original_items": answer.response_limits.original_items,
+            "retained_items": 0,
+            "original_bytes": original_bytes,
+            "emitted_bytes": null
+        }
+    });
+    let mut payload = payload;
+    let mut bounded = mcp_text_result(id.clone(), payload.to_string());
+    for _ in 0..4 {
+        let emitted = bounded.to_string().len();
+        if payload["response_limits"]["emitted_bytes"].as_u64() == Some(emitted as u64) {
+            break;
+        }
+        payload["response_limits"]["emitted_bytes"] = serde_json::json!(emitted);
+        bounded = mcp_text_result(id.clone(), payload.to_string());
+    }
+    debug_assert!(bounded.to_string().len() <= answer.response_limits.max_bytes as usize);
+    bounded
+}
+
+#[cfg(feature = "mcp")]
 fn mcp_error(id: serde_json::Value, code: i64, message: impl Into<String>) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -5175,7 +5514,7 @@ fn mcp_query_response(
         .unwrap_or(store.active_context().into()) as u32;
 
     match store.answer_contract(contract, ctx_id) {
-        Ok(answer) => mcp_text_result(id, answer_pack_json(&answer).to_string()),
+        Ok(answer) => mcp_answer_result(id, &answer),
         Err(err) => mcp_error(id, -32000, format!("Query failed: {}", err)),
     }
 }
@@ -6781,11 +7120,14 @@ fn mcp_build_atom_payload(
     // CLAIMS section
     let mut claims_section = ClaimsSection::new();
     for claim in claims {
-        claims_section.add_claim(ClaimRecord::new_u64(
-            claim.subj as u16,
-            claim.pred as u16,
-            claim.obj_val,
-        ));
+        let predicate = u32::try_from(claim.pred)
+            .map_err(|_| format!("predicate {} exceeds SymId", claim.pred))?;
+        let object_tag = ObjTag::from_u8(claim.obj_tag)
+            .ok_or_else(|| format!("invalid object tag {}", claim.obj_tag))?;
+        claims_section.add_claim(
+            ClaimRecord::from_scalar(claim.subj, predicate, object_tag, claim.obj_val)
+                .map_err(|error| error.to_string())?,
+        );
     }
     let claims_bytes = claims_section.to_bytes();
 
@@ -7164,6 +7506,131 @@ mod tests {
     }
 
     #[cfg(feature = "mcp")]
+    fn assert_schema_accepts(schema: &serde_json::Value, value: &serde_json::Value) {
+        fn matches(
+            schema: &serde_json::Value,
+            value: &serde_json::Value,
+            inherited_root: &serde_json::Value,
+        ) -> bool {
+            let root = if schema.get("$id").is_some() {
+                schema
+            } else {
+                inherited_root
+            };
+            if let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+                let Some(pointer) = reference.strip_prefix('#') else {
+                    return false;
+                };
+                return root
+                    .pointer(pointer)
+                    .is_some_and(|resolved| matches(resolved, value, root));
+            }
+            if let Some(options) = schema.get("oneOf").and_then(serde_json::Value::as_array)
+                && options
+                    .iter()
+                    .filter(|option| matches(option, value, root))
+                    .count()
+                    != 1
+            {
+                return false;
+            }
+            if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array)
+                && !allowed.contains(value)
+            {
+                return false;
+            }
+            if let Some(types) = schema.get("type") {
+                let accepts = |kind: &str| match kind {
+                    "null" => value.is_null(),
+                    "boolean" => value.is_boolean(),
+                    "string" => value.is_string(),
+                    "number" => value.is_number(),
+                    "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+                    "array" => value.is_array(),
+                    "object" => value.is_object(),
+                    _ => false,
+                };
+                let valid_type = types.as_str().is_some_and(accepts)
+                    || types.as_array().is_some_and(|items| {
+                        items
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .any(accepts)
+                    });
+                if !valid_type {
+                    return false;
+                }
+            }
+            if let Some(number) = value.as_f64()
+                && (schema
+                    .get("minimum")
+                    .and_then(serde_json::Value::as_f64)
+                    .is_some_and(|minimum| number < minimum)
+                    || schema
+                        .get("maximum")
+                        .and_then(serde_json::Value::as_f64)
+                        .is_some_and(|maximum| number > maximum))
+            {
+                return false;
+            }
+            if let Some(array) = value.as_array() {
+                if schema
+                    .get("minItems")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|minimum| array.len() < minimum as usize)
+                    || schema
+                        .get("maxItems")
+                        .and_then(serde_json::Value::as_u64)
+                        .is_some_and(|maximum| array.len() > maximum as usize)
+                {
+                    return false;
+                }
+                if let Some(items) = schema.get("items")
+                    && !array.iter().all(|item| matches(items, item, root))
+                {
+                    return false;
+                }
+            }
+            if let Some(object) = value.as_object() {
+                if schema
+                    .get("required")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|required| {
+                        required
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .any(|key| !object.contains_key(key))
+                    })
+                {
+                    return false;
+                }
+                let properties = schema
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object);
+                if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false))
+                    && object
+                        .keys()
+                        .any(|key| properties.is_none_or(|known| !known.contains_key(key)))
+                {
+                    return false;
+                }
+                if let Some(properties) = properties {
+                    for (key, child) in object {
+                        if let Some(child_schema) = properties.get(key)
+                            && !matches(child_schema, child, root)
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        }
+
+        assert!(matches(schema, value, schema), "schema rejected {value}");
+    }
+
+    #[cfg(feature = "mcp")]
     fn test_mcp_state(base: PathBuf) -> McpServerState {
         let store = MemoryX::new(StoreConfig::new(base.clone())).unwrap();
         McpServerState::new(base, store).unwrap()
@@ -7210,6 +7677,47 @@ mod tests {
         let exported = ClaimExport::from(&claim_data);
         assert_eq!(exported.subject, 1);
         assert_eq!(exported.predicate, 2);
+    }
+
+    #[test]
+    fn answer_pack_json_enforces_explicit_byte_envelope() {
+        let mut answer = memoryx::store::api::AnswerPack::new(0);
+        answer.response_limits.max_items = 64;
+        answer.response_limits.max_bytes = 2_048;
+        answer
+            .limitations
+            .push(memoryx::store::api::Limitation::warning(
+                memoryx::store::api::LimitationCode::BudgetExhausted,
+                "large".repeat(2_048),
+            ));
+        let value = answer_pack_json(&answer);
+        let encoded = value.to_string();
+        assert!(encoded.len() <= 2_048);
+        assert_eq!(value["status"], "Partial");
+        assert_eq!(value["response_limits"]["bytes_truncated"], true);
+        assert!(value["response_limits"]["original_bytes"].as_u64().unwrap() > 2_048);
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_answer_result_bounds_complete_json_rpc_response() {
+        let mut answer = memoryx::store::api::AnswerPack::new(0);
+        answer.response_limits.max_items = 64;
+        answer.response_limits.max_bytes = 2_048;
+        answer
+            .limitations
+            .push(memoryx::store::api::Limitation::warning(
+                memoryx::store::api::LimitationCode::BudgetExhausted,
+                "large".repeat(2_048),
+            ));
+        let response = mcp_answer_result(serde_json::json!(7), &answer);
+        let encoded = response.to_string();
+        assert!(encoded.len() <= 2_048);
+        let payload: serde_json::Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(payload["response_limits"]["bytes_truncated"], true);
+        assert_eq!(payload["response_limits"]["emitted_bytes"], encoded.len());
     }
 
     #[test]
@@ -7511,14 +8019,9 @@ mod tests {
                 tool["inputSchema"]["properties"].get("base_ref").is_some(),
                 "tool {name} must advertise optional base_ref"
             );
-            assert!(
-                tool["inputSchema"]["examples"]
-                    .as_array()
-                    .is_some_and(|examples| examples
-                        .iter()
-                        .any(|example| example.get("base_ref").is_some())),
-                "tool {name} must include an explicit base_ref example"
-            );
+            // Static examples stay executable against the active base. The
+            // optional base_ref property documents explicit routing without
+            // pretending that an arbitrary named base is already connected.
         }
 
         assert!(names.contains(&"query"));
@@ -8193,5 +8696,83 @@ mod tests {
         assert!(history_response.contains("Operation history"));
         assert!(history_response.contains("DeleteAtom"));
         assert!(history_response.contains("UpdateAtom"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn bounded_mcp_reader_rejects_oversize_and_recovers_next_line() {
+        let mut input = vec![b'x'; MAX_MCP_REQUEST_LINE_BYTES + 1];
+        input.extend_from_slice(b"\n{}\n");
+        let mut reader = tokio::io::BufReader::new(input.as_slice());
+        assert!(matches!(
+            read_bounded_mcp_line(&mut reader).await.unwrap(),
+            McpInputLine::TooLarge
+        ));
+        match read_bounded_mcp_line(&mut reader).await.unwrap() {
+            McpInputLine::Line(line) => assert_eq!(line, b"{}"),
+            _ => panic!("reader did not recover after oversized request"),
+        }
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn query_tool_schema_examples_deserialize_and_execute() {
+        let dir = tempdir().unwrap();
+        let mut state = test_mcp_state(dir.path().join("schema-examples"));
+        let listed = process_mcp_request(
+            &mut state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {}
+            })
+            .to_string(),
+        )
+        .await;
+        let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        for name in ["query", "validate_query_contract", "explain_answer_graph"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing tool {name}"));
+            let examples = tool["inputSchema"]["examples"].as_array().unwrap();
+            let contract_schema = &tool["inputSchema"]["properties"]["contract"];
+            assert!(
+                contract_schema["properties"]["targets"]["items"]["properties"]["aliases"]
+                    .is_object()
+            );
+            assert!(contract_schema["properties"]["relations"]["items"]["required"].is_array());
+            assert!(contract_schema["properties"]["constraints"]["items"]["required"].is_array());
+            assert!(
+                contract_schema["properties"]["budgets"]["properties"]["max_atoms"]["maximum"]
+                    .is_number()
+            );
+            for (index, example) in examples.iter().enumerate() {
+                assert_schema_accepts(&tool["inputSchema"], example);
+                if let Some(contract) = example.get("contract") {
+                    let parsed: memoryx::query::QueryContract =
+                        serde_json::from_value(contract.clone()).unwrap();
+                    parsed.validate().unwrap();
+                }
+                let response = process_mcp_request(
+                    &mut state,
+                    &serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 100 + index,
+                        "method": "tools/call",
+                        "params": {"name": name, "arguments": example}
+                    })
+                    .to_string(),
+                )
+                .await;
+                let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+                assert!(
+                    response.get("error").is_none(),
+                    "{name} example failed: {response}"
+                );
+            }
+        }
     }
 }

@@ -1839,11 +1839,16 @@ fn build_atom_payload(
     // CLAIMS section
     let mut claims_section = memoryx::cas::claims::ClaimsSection::new();
     for claim in claims {
-        claims_section.add_claim(memoryx::cas::claims::ClaimRecord::new_u64(
-            claim.subj as u16,
-            claim.pred as u16,
-            claim.obj_val,
-        ));
+        claims_section.add_claim(
+            memoryx::cas::claims::ClaimRecord::from_scalar(
+                claim.subj,
+                claim.pred as u32,
+                memoryx::store::ObjTag::from_u8(claim.obj_tag)
+                    .unwrap_or(memoryx::store::ObjTag::U64),
+                claim.obj_val,
+            )
+            .map_err(|error| error.to_string())?,
+        );
     }
     let claims_bytes = claims_section.to_bytes();
 

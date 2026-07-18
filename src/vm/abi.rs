@@ -606,8 +606,13 @@ mod tests {
     fn build_claims_bytes(claims: &[ClaimData]) -> Vec<u8> {
         let mut section = crate::cas::claims::ClaimsSection::new();
         for c in claims {
-            let rec =
-                crate::cas::claims::ClaimRecord::new_u64(c.subj as u16, c.pred as u16, c.obj_val);
+            let rec = crate::cas::claims::ClaimRecord::from_scalar(
+                c.subj,
+                c.pred as u32,
+                crate::store::ObjTag::from_u8(c.obj_tag).unwrap_or(crate::store::ObjTag::U64),
+                c.obj_val,
+            )
+            .unwrap();
             section.add_claim(rec);
         }
         section.to_bytes()
