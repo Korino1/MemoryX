@@ -2569,13 +2569,10 @@ fn cmd_query(options: QueryCliOptions<'_>) -> CliResult<()> {
     // Format and output results
     match options.format {
         OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&answer_pack_json(&answer))?
-            );
+            println!("{}", serialize_bounded_answer(&answer, OutputFormat::Json)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&answer_pack_json(&answer))?);
+            println!("{}", serialize_bounded_answer(&answer, OutputFormat::Yaml)?);
         }
         OutputFormat::Table => {
             println!("\n{}", "Query Results".bold().underline());
@@ -2697,6 +2694,7 @@ fn answer_graph_json(graph: &memoryx::store::api::AnswerGraph) -> serde_json::Va
     })
 }
 
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 fn answer_pack_json(answer: &memoryx::store::api::AnswerPack) -> serde_json::Value {
     let full = answer_pack_json_unbounded(answer);
     let original_bytes = full.to_string().len();
@@ -2731,6 +2729,68 @@ fn answer_pack_json(answer: &memoryx::store::api::AnswerPack) -> serde_json::Val
     }
     debug_assert!(bounded.to_string().len() <= answer.response_limits.max_bytes as usize);
     bounded
+}
+
+fn serialize_answer_value(value: &serde_json::Value, format: OutputFormat) -> CliResult<String> {
+    match format {
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(value)?),
+        OutputFormat::Yaml => Ok(serde_yaml::to_string(value)?),
+        OutputFormat::Table => Err(CliError::Validation(
+            "structured output format is required".to_string(),
+        )),
+    }
+}
+
+fn minimal_answer_payload(
+    answer: &memoryx::store::api::AnswerPack,
+    original_bytes: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "Partial",
+        "limitations": [{
+            "code": "BudgetExhausted",
+            "description": "output exceeded output_contract.max_bytes; collections were omitted from this response only",
+            "severity": "Warning"
+        }],
+        "response_limits": {
+            "max_items": answer.response_limits.max_items,
+            "max_bytes": answer.response_limits.max_bytes,
+            "items_truncated": answer.response_limits.items_truncated,
+            "bytes_truncated": true,
+            "original_items": answer.response_limits.original_items,
+            "retained_items": 0,
+            "original_bytes": original_bytes,
+            "emitted_bytes": null
+        }
+    })
+}
+
+fn serialize_bounded_answer(
+    answer: &memoryx::store::api::AnswerPack,
+    format: OutputFormat,
+) -> CliResult<String> {
+    let full = answer_pack_json_unbounded(answer);
+    let full_encoded = serialize_answer_value(&full, format)?;
+    let max_bytes = answer.response_limits.max_bytes as usize;
+    if full_encoded.len() <= max_bytes {
+        return Ok(full_encoded);
+    }
+
+    let mut bounded = minimal_answer_payload(answer, full_encoded.len());
+    for _ in 0..8 {
+        let encoded = serialize_answer_value(&bounded, format)?;
+        if bounded["response_limits"]["emitted_bytes"].as_u64() == Some(encoded.len() as u64) {
+            if encoded.len() <= max_bytes {
+                return Ok(encoded);
+            }
+            break;
+        }
+        bounded["response_limits"]["emitted_bytes"] = serde_json::json!(encoded.len());
+    }
+
+    Err(CliError::Validation(format!(
+        "output_contract.max_bytes={max_bytes} is too small for the bounded response"
+    )))
 }
 
 fn answer_pack_json_unbounded(answer: &memoryx::store::api::AnswerPack) -> serde_json::Value {
@@ -5204,8 +5264,29 @@ fn mcp_answer_result(
         payload["response_limits"]["emitted_bytes"] = serde_json::json!(emitted);
         bounded = mcp_text_result(id.clone(), payload.to_string());
     }
-    debug_assert!(bounded.to_string().len() <= answer.response_limits.max_bytes as usize);
-    bounded
+    if bounded.to_string().len() <= answer.response_limits.max_bytes as usize {
+        bounded
+    } else {
+        // A caller-controlled JSON-RPC id can itself exceed the response budget.
+        // JSON-RPC permits null when an id cannot be recovered from an invalid request.
+        mcp_budget_error(answer.response_limits.max_bytes)
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_budget_error(max_bytes: u32) -> serde_json::Value {
+    let error = mcp_error(
+        serde_json::Value::Null,
+        -32000,
+        "Output budget exceeded; response id omitted to preserve the configured byte limit",
+    );
+    if error.to_string().len() <= max_bytes as usize {
+        error
+    } else {
+        // QueryContract validation requires at least 2048 bytes, so this compact
+        // fallback remains representable for all accepted contracts.
+        serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Output budget exceeded"}})
+    }
 }
 
 #[cfg(feature = "mcp")]
@@ -7698,6 +7779,42 @@ mod tests {
         assert!(value["response_limits"]["original_bytes"].as_u64().unwrap() > 2_048);
     }
 
+    #[test]
+    fn structured_cli_output_bounds_pretty_json_and_yaml() {
+        let mut answer = memoryx::store::api::AnswerPack::new(0);
+        answer.response_limits.max_bytes = 2_048;
+        for _ in 0..10 {
+            answer
+                .limitations
+                .push(memoryx::store::api::Limitation::warning(
+                    memoryx::store::api::LimitationCode::BudgetExhausted,
+                    "whitespace expansion".to_string(),
+                ));
+        }
+        let full = answer_pack_json_unbounded(&answer);
+        assert!(full.to_string().len() <= 2_048);
+        assert!(serde_json::to_string_pretty(&full).unwrap().len() > 2_048);
+
+        answer
+            .limitations
+            .push(memoryx::store::api::Limitation::warning(
+                memoryx::store::api::LimitationCode::BudgetExhausted,
+                "large whitespace-sensitive value ".repeat(2_048),
+            ));
+
+        for format in [OutputFormat::Json, OutputFormat::Yaml] {
+            let encoded = serialize_bounded_answer(&answer, format).unwrap();
+            assert!(encoded.len() <= 2_048, "{format:?} escaped the byte limit");
+            let value: serde_json::Value = match format {
+                OutputFormat::Json => serde_json::from_str(&encoded).unwrap(),
+                OutputFormat::Yaml => serde_yaml::from_str(&encoded).unwrap(),
+                OutputFormat::Table => unreachable!(),
+            };
+            assert_eq!(value["status"], "Partial");
+            assert_eq!(value["response_limits"]["emitted_bytes"], encoded.len());
+        }
+    }
+
     #[cfg(feature = "mcp")]
     #[test]
     fn mcp_answer_result_bounds_complete_json_rpc_response() {
@@ -7718,6 +7835,18 @@ mod tests {
                 .unwrap();
         assert_eq!(payload["response_limits"]["bytes_truncated"], true);
         assert_eq!(payload["response_limits"]["emitted_bytes"], encoded.len());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_answer_result_bounds_huge_caller_controlled_id() {
+        let mut answer = memoryx::store::api::AnswerPack::new(0);
+        answer.response_limits.max_bytes = 2_048;
+        let response = mcp_answer_result(serde_json::Value::String("x".repeat(16 * 1024)), &answer);
+        let encoded = response.to_string();
+        assert!(encoded.len() <= 2_048);
+        assert_eq!(response["id"], serde_json::Value::Null);
+        assert_eq!(response["error"]["code"], -32000);
     }
 
     #[test]

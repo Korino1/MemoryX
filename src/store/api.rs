@@ -136,11 +136,7 @@ fn append_bounded_jsonl<T: Serialize>(
     record: &T,
 ) -> Result<(), StoreError> {
     let encoded = serde_json::to_vec(record).map_err(|error| StoreError::Io(error.to_string()))?;
-    if encoded.len() > MAX_NEW_JOURNAL_RECORD_BYTES {
-        return Err(StoreError::Io(format!(
-            "new {label} journal record exceeds {MAX_NEW_JOURNAL_RECORD_BYTES} bytes"
-        )));
-    }
+    ensure_bounded_journal_record(label, &encoded)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(StoreError::from)?;
     }
@@ -153,6 +149,15 @@ fn append_bounded_jsonl<T: Serialize>(
     file.write_all(b"\n").map_err(StoreError::from)?;
     file.flush().map_err(StoreError::from)?;
     file.sync_data().map_err(StoreError::from)
+}
+
+fn ensure_bounded_journal_record(label: &str, encoded: &[u8]) -> Result<(), StoreError> {
+    if encoded.len() > MAX_NEW_JOURNAL_RECORD_BYTES {
+        return Err(StoreError::Io(format!(
+            "new {label} journal record exceeds {MAX_NEW_JOURNAL_RECORD_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn claim_record_from_data(
@@ -6581,6 +6586,22 @@ impl MemoryX {
         append_bounded_jsonl(&self.config.relations_path(), "relation", relation)
     }
 
+    fn preflight_relation(&self, relation: &RelationRecord) -> Result<(), StoreError> {
+        let encoded =
+            serde_json::to_vec(relation).map_err(|error| StoreError::Io(error.to_string()))?;
+        ensure_bounded_journal_record("relation", &encoded)
+    }
+
+    fn preview_relation_context(
+        &self,
+        ctx_id: CtxId,
+        claim: &ClaimData,
+        atom_id: AtomId,
+    ) -> Result<CtxId, StoreError> {
+        let mut preview = self.ctx_manager.lock().clone();
+        preview.assert_claim_with_atom_id(ctx_id, claim, atom_id)
+    }
+
     /// Create a high-level entity record.
     pub fn create_entity(
         &mut self,
@@ -6766,13 +6787,8 @@ impl MemoryX {
             qualifiers_mask: 0,
         };
         let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
-        let atom_id = self.ingest(
-            &payload,
-            AtomType::FACT,
-            std::slice::from_ref(&claim),
-            &evidence,
-        )?;
-        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, atom_id)?;
+        let atom_id = compute_atom_id_from_payload(&payload)?;
+        let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id)?;
         let relation_id = self
             .read_relations()?
             .iter()
@@ -6786,7 +6802,7 @@ impl MemoryX {
             predicate,
             object,
             atom_id,
-            evidence,
+            evidence: evidence.clone(),
             valid_time: None,
             context: actual_ctx,
             confidence: 5000,
@@ -6794,6 +6810,15 @@ impl MemoryX {
             deprecated: false,
             updated_at_unix_ns: current_unix_ns(),
         };
+        self.preflight_relation(&relation)?;
+        let atom_id = self.ingest(
+            &payload,
+            AtomType::FACT,
+            std::slice::from_ref(&claim),
+            &evidence,
+        )?;
+        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, atom_id)?;
+        debug_assert_eq!(actual_ctx, relation.context);
         self.append_relation(&relation)?;
         Ok(AuthoringResult {
             atom_id,
@@ -6828,14 +6853,8 @@ impl MemoryX {
             qualifiers_mask: 0,
         };
         let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
-        let update = self.update_atom(
-            old_relation.atom_id,
-            payload,
-            AtomType::FACT,
-            vec![claim.clone()],
-            evidence.clone(),
-        )?;
-        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, update.new_atom_id)?;
+        let atom_id = compute_atom_id_from_payload(&payload)?;
+        let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id)?;
         let relation_id = self
             .read_relations()?
             .iter()
@@ -6848,8 +6867,8 @@ impl MemoryX {
             subject,
             predicate,
             object,
-            atom_id: update.new_atom_id,
-            evidence,
+            atom_id,
+            evidence: evidence.clone(),
             valid_time: None,
             context: actual_ctx,
             confidence: 5000,
@@ -6857,6 +6876,17 @@ impl MemoryX {
             deprecated: false,
             updated_at_unix_ns: current_unix_ns(),
         };
+        self.preflight_relation(&relation)?;
+        let update = self.update_atom(
+            old_relation.atom_id,
+            payload,
+            AtomType::FACT,
+            vec![claim.clone()],
+            evidence.clone(),
+        )?;
+        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, update.new_atom_id)?;
+        debug_assert_eq!(update.new_atom_id, relation.atom_id);
+        debug_assert_eq!(actual_ctx, relation.context);
         self.append_relation(&relation)?;
         Ok(AuthoringResult {
             atom_id: update.new_atom_id,
@@ -10166,6 +10196,89 @@ mod tests {
         let relations = store.read_relations().unwrap();
         assert_eq!(relations.len(), 2);
         assert_eq!(relations[1].supersedes, first.relation_id);
+    }
+
+    fn oversized_relation_evidence() -> Vec<EvidenceRef> {
+        vec![EvidenceRef::new([7u8; 32], SectionKind::EVIDENCE, 0, 0, 5000); 16_384]
+    }
+
+    #[test]
+    fn oversized_relation_assert_is_preflighted_without_durable_side_effects() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("oversized-relation-assert"));
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let ctx = store.create_context(0).unwrap();
+            let subject = store.create_entity("subject", "node").unwrap();
+            let object = store.create_entity("object", "node").unwrap();
+
+            assert!(
+                store
+                    .assert_relation(
+                        subject.entity_id,
+                        9,
+                        object.entity_id,
+                        ctx,
+                        oversized_relation_evidence(),
+                    )
+                    .is_err()
+            );
+            assert!(store.read_relations().unwrap().is_empty());
+            assert_eq!(store.list_contexts().len(), 1);
+            assert_eq!(store.verify_integrity().unwrap().checked_atoms, 0);
+        }
+
+        let reopened = MemoryX::new(config).unwrap();
+        assert!(reopened.read_relations().unwrap().is_empty());
+        assert_eq!(reopened.list_contexts().len(), 1);
+        assert_eq!(reopened.verify_integrity().unwrap().checked_atoms, 0);
+    }
+
+    #[test]
+    fn oversized_relation_correction_is_preflighted_without_durable_side_effects() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("oversized-relation-correction"));
+        let original_atom;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let ctx = store.create_context(0).unwrap();
+            let subject = store.create_entity("subject", "node").unwrap();
+            let first_object = store.create_entity("first", "node").unwrap();
+            let second_object = store.create_entity("second", "node").unwrap();
+            let first = store
+                .assert_relation(
+                    subject.entity_id,
+                    9,
+                    first_object.entity_id,
+                    ctx,
+                    Vec::new(),
+                )
+                .unwrap();
+            original_atom = first.atom_id;
+
+            assert!(
+                store
+                    .correct_relation(
+                        first.relation_id.unwrap(),
+                        subject.entity_id,
+                        9,
+                        second_object.entity_id,
+                        ctx,
+                        oversized_relation_evidence(),
+                    )
+                    .is_err()
+            );
+            assert_eq!(store.read_relations().unwrap().len(), 1);
+            assert_eq!(store.list_contexts().len(), 1);
+            assert_eq!(store.verify_integrity().unwrap().checked_atoms, 1);
+        }
+
+        let reopened = MemoryX::new(config).unwrap();
+        let relations = reopened.read_relations().unwrap();
+        assert_eq!(relations.len(), 1);
+        assert_eq!(relations[0].atom_id, original_atom);
+        assert_eq!(reopened.list_contexts().len(), 1);
+        assert_eq!(reopened.verify_integrity().unwrap().checked_atoms, 1);
     }
 
     #[test]
