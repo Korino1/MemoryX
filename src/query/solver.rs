@@ -52,18 +52,27 @@ pub enum IoMode {
 ///
 /// # Fields
 /// - `max_iterations`: Maximum fixed-point iterations (default 10)
-/// - `fetch_budget`: Atoms per iteration (64-512)
-/// - `io_budget`: Bytes per iteration
+/// - `fetch_budget`: Maximum atoms in the complete answer graph
+/// - `io_budget`: Maximum bytes fetched by the complete query
+/// - `max_edges`: Maximum edges in the complete answer graph
+/// - `max_time_ms`: Wall-clock execution deadline
+/// - `max_federated_calls`: Maximum federated calls (currently zero for local solver)
 /// - `max_coalesce_gap`: Maximum gap between offsets for I/O coalescing (64KB default)
 /// - `io_mode`: I/O mode (MMAP, IO_URING, DIRECT)
 #[derive(Debug, Clone)]
 pub struct SolverConfig {
     /// Maximum iterations (default 10)
     pub max_iterations: u32,
-    /// Fetch budget: atoms per iteration (64-512)
+    /// Maximum atoms in the complete answer graph.
     pub fetch_budget: u32,
-    /// I/O budget: bytes per iteration
+    /// Maximum bytes fetched by the complete query.
     pub io_budget: u32,
+    /// Maximum edges in the complete answer graph.
+    pub max_edges: u32,
+    /// Maximum wall-clock execution time in milliseconds.
+    pub max_time_ms: u64,
+    /// Maximum federated calls. The local solver performs none.
+    pub max_federated_calls: u32,
     /// Maximum gap for I/O coalescing (default 64KB)
     pub max_coalesce_gap: usize,
     /// I/O mode
@@ -75,7 +84,10 @@ impl Default for SolverConfig {
         SolverConfig {
             max_iterations: 10,
             fetch_budget: 128,
-            io_budget: 256 * 1024,       // 256KB
+            io_budget: 256 * 1024, // 256KB
+            max_edges: 8192,
+            max_time_ms: 30_000,
+            max_federated_calls: 16,
             max_coalesce_gap: 64 * 1024, // 64KB
             io_mode: IoMode::Mmap,
         }
@@ -90,6 +102,9 @@ impl SolverConfig {
             max_iterations,
             fetch_budget,
             io_budget,
+            max_edges: 8192,
+            max_time_ms: 30_000,
+            max_federated_calls: 16,
             max_coalesce_gap: 64 * 1024,
             io_mode: IoMode::Mmap,
         }
@@ -114,11 +129,19 @@ impl SolverConfig {
         if self.max_iterations == 0 {
             return Err(SolverError::InvalidConfig("max_iterations must be > 0"));
         }
-        if self.fetch_budget < 64 || self.fetch_budget > 512 {
-            return Err(SolverError::InvalidConfig("fetch_budget must be 64-512"));
+        if self.fetch_budget > 65_536 {
+            return Err(SolverError::InvalidConfig("fetch_budget must be <= 65536"));
         }
-        if self.io_budget < 1024 {
-            return Err(SolverError::InvalidConfig("io_budget must be >= 1024"));
+        if self.max_edges > 262_144 {
+            return Err(SolverError::InvalidConfig("max_edges must be <= 262144"));
+        }
+        if self.max_time_ms > 300_000 {
+            return Err(SolverError::InvalidConfig("max_time_ms must be <= 300000"));
+        }
+        if self.max_federated_calls > 128 {
+            return Err(SolverError::InvalidConfig(
+                "max_federated_calls must be <= 128",
+            ));
         }
         Ok(())
     }
@@ -193,6 +216,8 @@ pub struct SolverState {
     pub rejected_candidates: Vec<RejectedCandidateSummary>,
     /// Bounded query planning trace.
     pub query_trace: crate::store::api::QueryTrace,
+    /// Federated calls consumed by this query. Local solving keeps this at zero.
+    pub federated_calls: u32,
 }
 
 impl SolverState {
@@ -214,6 +239,7 @@ impl SolverState {
             prev_graph_hash: 0,
             rejected_candidates: Vec::new(),
             query_trace: crate::store::api::QueryTrace::default(),
+            federated_calls: 0,
         }
     }
 
@@ -270,7 +296,11 @@ impl SolverState {
             .iter()
             .map(|(_, _, len)| *len as u64)
             .sum();
-        if total_io > config.io_budget as u64 {
+        if total_io > u64::from(config.io_budget)
+            || self.answer_graph.nodes.len() > config.fetch_budget as usize
+            || self.answer_graph.edges.len() > config.max_edges as usize
+            || self.federated_calls > config.max_federated_calls
+        {
             self.budget_exceeded = true;
             return false;
         }
@@ -970,7 +1000,7 @@ impl SetCoverSolver {
 
         while covered_gaps.len() < gaps.len() && !available.is_empty() {
             // Find candidate with best benefit/cost ratio
-            let mut best_idx = None;
+            let mut best_idx: Option<usize> = None;
             let mut best_ratio = f64::NEG_INFINITY;
 
             for &idx in &available {
@@ -1010,7 +1040,11 @@ impl SetCoverSolver {
 
                 let ratio = marginal_benefit / cost;
 
-                if ratio > best_ratio {
+                if ratio > best_ratio
+                    || (ratio == best_ratio
+                        && best_idx
+                            .is_some_and(|best| candidate.atom_id < candidates[best].atom_id))
+                {
                     best_ratio = ratio;
                     best_idx = Some(idx);
                 }
@@ -1746,7 +1780,7 @@ impl FixedPointSolver {
                     let copy_len = claim.object_value.len().min(object.len());
                     object[..copy_len].copy_from_slice(&claim.object_value[..copy_len]);
                     ClaimData {
-                        subj: u64::from(claim.subject_local),
+                        subj: claim.subject_local,
                         pred: u64::from(claim.predicate_local),
                         obj_tag: claim.object_tag.to_u8(),
                         obj_val: u64::from_le_bytes(object),
@@ -1815,6 +1849,14 @@ impl FixedPointSolver {
                 LimitationCode::IncompleteEvidence,
                 "Lexical candidates were found, but they contain no knowledge claims; only source-backed candidate evidence is returned"
                     .to_owned(),
+            ));
+        }
+
+        if state.budget_exceeded {
+            pack.status = AnswerStatus::BudgetExhausted;
+            pack.limitations.push(Limitation::warning(
+                LimitationCode::BudgetExhausted,
+                "query execution stopped at a configured local budget".to_owned(),
             ));
         }
 
@@ -1963,10 +2005,25 @@ impl FixedPointSolver {
     /// Run fixed-point iterations until convergence or limits
     fn run_iterations(&self, state: &mut SolverState) -> Result<(), SolverError> {
         let max_iterations = self.config.max_iterations;
+        let started = std::time::Instant::now();
         let mut prev_graph_cost = f64::NEG_INFINITY;
         let mut stable_count = 0;
 
+        if self.config.fetch_budget == 0
+            || self.config.io_budget == 0
+            || self.config.max_time_ms == 0
+        {
+            state.budget_exceeded = true;
+            state.stable = true;
+            return Ok(());
+        }
+
         for iteration in 0..max_iterations {
+            if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+                state.budget_exceeded = true;
+                state.stable = true;
+                break;
+            }
             state.iterations = iteration + 1;
             state.generation += 1;
 
@@ -1984,6 +2041,22 @@ impl FixedPointSolver {
 
             // Run one iteration
             self.iteration(state)?;
+
+            if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+                state.budget_exceeded = true;
+                state.stable = true;
+            }
+
+            if state.answer_graph.edges.len() > self.config.max_edges as usize {
+                state
+                    .answer_graph
+                    .edges
+                    .truncate(self.config.max_edges as usize);
+                state.budget_exceeded = true;
+            }
+            if state.stable {
+                break;
+            }
 
             // Check for convergence
             let current_cost = state.answer_graph.total_cost;
@@ -2010,7 +2083,8 @@ impl FixedPointSolver {
             .recalculate_cost(&self.cost_weights, self.now_ns);
 
         if state.iterations >= max_iterations && !state.stable {
-            return Err(SolverError::MaxIterationsReached);
+            state.budget_exceeded = true;
+            state.stable = true;
         }
 
         Ok(())
@@ -2107,12 +2181,33 @@ impl FixedPointSolver {
         let inferred_steps = self.infer_claim_steps(&admissible, &ctx_updated);
 
         // Step 5: Build minimal support subgraph (set cover)
-        let selected_indices = SetCoverSolver::greedy_select(
+        let mut selected_indices = SetCoverSolver::greedy_select(
             &admissible,
             &state.gaps,
             &self.cost_weights,
             state.goal.output_schema,
         );
+        let mut io_used = state
+            .fetched_offsets
+            .iter()
+            .map(|(_, _, len)| u64::from(*len))
+            .sum::<u64>();
+        selected_indices.retain(|index| {
+            let candidate_bytes = u64::from(admissible[*index].estimated_io_bytes);
+            if io_used.saturating_add(candidate_bytes) > u64::from(self.config.io_budget) {
+                state.budget_exceeded = true;
+                false
+            } else {
+                io_used += candidate_bytes;
+                true
+            }
+        });
+        let remaining_atoms =
+            (self.config.fetch_budget as usize).saturating_sub(state.answer_graph.nodes.len());
+        if selected_indices.len() > remaining_atoms {
+            selected_indices.truncate(remaining_atoms);
+            state.budget_exceeded = true;
+        }
 
         // Step 6: Update answer graph
         for &idx in &selected_indices {
@@ -3263,11 +3358,18 @@ impl FixedPointSolver {
                 } else {
                     ClaimStatus::Verified
                 };
+                let object_tag = ObjTag::from_u8(claim_data.obj_tag).unwrap_or(ObjTag::NULL);
+                let object_value = match object_tag {
+                    ObjTag::I64 => ConstValue::i64(claim_data.obj_val as i64),
+                    ObjTag::F64 => ConstValue::f64(f64::from_bits(claim_data.obj_val)),
+                    ObjTag::SYM => ConstValue::sym(claim_data.obj_val as u32),
+                    _ => ConstValue::u64(claim_data.obj_val),
+                };
                 let claim = ClaimView::new(
-                    EntityRef::Node(node.atom_ref.node_num),
+                    EntityRef::Node(claim_data.subj),
                     claim_data.pred as SymId,
-                    ObjTag::from_u8(claim_data.obj_tag).unwrap_or(ObjTag::NULL),
-                    ConstValue::u64(claim_data.obj_val),
+                    object_tag,
+                    object_value,
                     claim_data.qualifiers_mask,
                     node.trust,
                     node.atom_ref.atom_id,
@@ -3357,36 +3459,6 @@ impl FixedPointSolver {
                         }
                     }
                 }
-            }
-        }
-
-        for claim_data in &state.answer_graph.derived_claims {
-            if let Some(subject_node) = state
-                .answer_graph
-                .nodes
-                .iter()
-                .find(|node| node.atom_ref.node_num == claim_data.subj)
-            {
-                let claim_status = if subject_node.evidence_refs.is_empty() {
-                    ClaimStatus::InsufficientEvidence
-                } else {
-                    ClaimStatus::Derived
-                };
-                let claim = ClaimView::new(
-                    EntityRef::Node(claim_data.subj),
-                    claim_data.pred as SymId,
-                    ObjTag::from_u8(claim_data.obj_tag).unwrap_or(ObjTag::NULL),
-                    ConstValue::u64(claim_data.obj_val),
-                    claim_data.qualifiers_mask,
-                    subject_node.trust,
-                    subject_node.atom_ref.atom_id,
-                )
-                .with_provenance(
-                    claim_status,
-                    subject_node.evidence_refs.clone(),
-                    subject_node.evidence_refs.clone(),
-                );
-                pack.add_claim(claim);
             }
         }
 

@@ -2,9 +2,10 @@
 //!
 //! This module provides the CLAIMS section (0x03) of AtomBody:
 //! - Bit-packed, columnar claim storage
-//! - Format: u32 claim_count followed by claim records:
-//!   * u16 subject_local (index in SYMBOLS)
-//!   * u16 predicate_local (index in SYMBOLS)
+//! - V1 format: u32 claim_count followed by u16/u16 claim records.
+//! - V2 format: `CLM2`, u32 claim_count, then claim records with:
+//!   * u64 subject identity
+//!   * u32 predicate SymId
 //!   * u8 object_tag (type tag from ObjTag enum)
 //!   * object_value (variable length based on object_tag)
 
@@ -13,13 +14,18 @@ use crate::store::ObjTag;
 use crate::utils::crc32;
 use std::fmt;
 
+const CLAIMS_V2_MAGIC: [u8; 4] = *b"CLM2";
+const CLAIMS_V1_RECORD_PREFIX: usize = 5;
+const CLAIMS_V2_RECORD_PREFIX: usize = 13;
+const MAX_CLAIMS_PER_SECTION: usize = 1_000_000;
+
 /// Claim record in the CLAIMS section
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClaimRecord {
-    /// Subject local index (in SYMBOLS section)
-    pub subject_local: u16,
-    /// Predicate local index (in SYMBOLS section)
-    pub predicate_local: u16,
+    /// Durable subject identity. V1 local indices are widened losslessly.
+    pub subject_local: u64,
+    /// Durable predicate SymId. V1 local indices are widened losslessly.
+    pub predicate_local: u32,
     /// Object tag type
     pub object_tag: ObjTag,
     /// Object value as bytes (interpret based on object_tag)
@@ -27,8 +33,58 @@ pub struct ClaimRecord {
 }
 
 impl ClaimRecord {
+    /// Build a typed claim from the scalar authoring representation.
+    ///
+    /// BYTES and REF require non-scalar payloads and therefore fail closed.
+    pub fn from_scalar(
+        subject_local: u64,
+        predicate_local: u32,
+        object_tag: ObjTag,
+        object_value: u64,
+    ) -> Result<Self, CasError> {
+        match object_tag {
+            ObjTag::NULL => Ok(Self::new_null(subject_local, predicate_local)),
+            ObjTag::BOOL if object_value <= 1 => Ok(Self::new_bool(
+                subject_local,
+                predicate_local,
+                object_value != 0,
+            )),
+            ObjTag::BOOL => Err(CasError::CanonicalExtractionFailed {
+                reason: "BOOL object must be 0 or 1".to_owned(),
+            }),
+            ObjTag::I64 => Ok(Self::new_i64(
+                subject_local,
+                predicate_local,
+                object_value as i64,
+            )),
+            ObjTag::U64 => Ok(Self::new_u64(subject_local, predicate_local, object_value)),
+            ObjTag::F64 => Ok(Self::new_f64(
+                subject_local,
+                predicate_local,
+                f64::from_bits(object_value),
+            )),
+            ObjTag::SYM => Ok(Self::new_sym(
+                subject_local,
+                predicate_local,
+                u32::try_from(object_value).map_err(|_| CasError::CanonicalExtractionFailed {
+                    reason: "SYM object exceeds u32".to_owned(),
+                })?,
+            )),
+            ObjTag::NODENUM => Ok(Self::new_nodenum(
+                subject_local,
+                predicate_local,
+                object_value,
+            )),
+            ObjTag::BYTES | ObjTag::REF => Err(CasError::CanonicalExtractionFailed {
+                reason: format!(
+                    "{object_tag:?} object cannot be represented by scalar object_value"
+                ),
+            }),
+        }
+    }
+
     /// Create a new ClaimRecord with a null object
-    pub fn new_null(subject_local: u16, predicate_local: u16) -> Self {
+    pub fn new_null(subject_local: u64, predicate_local: u32) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -38,7 +94,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with a boolean object
-    pub fn new_bool(subject_local: u16, predicate_local: u16, value: bool) -> Self {
+    pub fn new_bool(subject_local: u64, predicate_local: u32, value: bool) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -48,7 +104,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with an i64 object
-    pub fn new_i64(subject_local: u16, predicate_local: u16, value: i64) -> Self {
+    pub fn new_i64(subject_local: u64, predicate_local: u32, value: i64) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -58,7 +114,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with a u64 object
-    pub fn new_u64(subject_local: u16, predicate_local: u16, value: u64) -> Self {
+    pub fn new_u64(subject_local: u64, predicate_local: u32, value: u64) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -68,7 +124,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with an f64 object
-    pub fn new_f64(subject_local: u16, predicate_local: u16, value: f64) -> Self {
+    pub fn new_f64(subject_local: u64, predicate_local: u32, value: f64) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -78,7 +134,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with bytes object
-    pub fn new_bytes(subject_local: u16, predicate_local: u16, value: &[u8]) -> Self {
+    pub fn new_bytes(subject_local: u64, predicate_local: u32, value: &[u8]) -> Self {
         let mut object_value = Vec::with_capacity(4 + value.len());
         object_value.extend_from_slice(&(value.len() as u32).to_le_bytes());
         object_value.extend_from_slice(value);
@@ -91,7 +147,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with a symbol object
-    pub fn new_sym(subject_local: u16, predicate_local: u16, sym_id: u32) -> Self {
+    pub fn new_sym(subject_local: u64, predicate_local: u32, sym_id: u32) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -101,7 +157,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with a reference object
-    pub fn new_ref(subject_local: u16, predicate_local: u16, atom_id: [u8; 32]) -> Self {
+    pub fn new_ref(subject_local: u64, predicate_local: u32, atom_id: [u8; 32]) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -111,7 +167,7 @@ impl ClaimRecord {
     }
 
     /// Create a new ClaimRecord with a node number object
-    pub fn new_nodenum(subject_local: u16, predicate_local: u16, node_num: u64) -> Self {
+    pub fn new_nodenum(subject_local: u64, predicate_local: u32, node_num: u64) -> Self {
         Self {
             subject_local,
             predicate_local,
@@ -233,21 +289,21 @@ impl ClaimRecord {
 
     /// Deserialize from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CasError> {
-        if bytes.len() < 5 {
+        if bytes.len() < CLAIMS_V2_RECORD_PREFIX {
             return Err(CasError::BufferTooSmall {
-                expected: 5,
+                expected: CLAIMS_V2_RECORD_PREFIX,
                 actual: bytes.len(),
             });
         }
 
-        let subject_local = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let predicate_local = u16::from_le_bytes([bytes[2], bytes[3]]);
-        let object_tag_byte = bytes[4];
+        let subject_local = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let predicate_local = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let object_tag_byte = bytes[12];
 
         let object_tag = ObjTag::from_u8(object_tag_byte)
             .ok_or(CasError::InvalidSectionKind(object_tag_byte as u32))?;
 
-        let object_value = bytes[5..].to_vec();
+        let object_value = bytes[CLAIMS_V2_RECORD_PREFIX..].to_vec();
 
         Ok(Self {
             subject_local,
@@ -311,7 +367,7 @@ impl ClaimsSection {
     }
 
     /// Find claims by subject
-    pub fn find_by_subject(&self, subject_local: u16) -> Vec<&ClaimRecord> {
+    pub fn find_by_subject(&self, subject_local: u64) -> Vec<&ClaimRecord> {
         self.claims
             .iter()
             .filter(|c| c.subject_local == subject_local)
@@ -319,7 +375,7 @@ impl ClaimsSection {
     }
 
     /// Find claims by predicate
-    pub fn find_by_predicate(&self, predicate_local: u16) -> Vec<&ClaimRecord> {
+    pub fn find_by_predicate(&self, predicate_local: u32) -> Vec<&ClaimRecord> {
         self.claims
             .iter()
             .filter(|c| c.predicate_local == predicate_local)
@@ -328,9 +384,9 @@ impl ClaimsSection {
 
     /// Calculate the serialized size in bytes
     pub fn serialized_size(&self) -> usize {
-        let mut size = 4; // claim_count
+        let mut size = 8; // V2 magic + claim_count
         for claim in &self.claims {
-            size += 5; // subject_local + predicate_local + object_tag
+            size += CLAIMS_V2_RECORD_PREFIX;
             size += claim.object_value.len();
         }
         size
@@ -340,7 +396,7 @@ impl ClaimsSection {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.serialized_size());
 
-        // Write claim count
+        bytes.extend_from_slice(&CLAIMS_V2_MAGIC);
         bytes.extend_from_slice(&(self.claims.len() as u32).to_le_bytes());
 
         // Write each ClaimRecord
@@ -360,35 +416,64 @@ impl ClaimsSection {
             });
         }
 
-        let claim_count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let is_v2 = bytes.starts_with(&CLAIMS_V2_MAGIC);
+        let count_offset = if is_v2 { 4 } else { 0 };
+        if bytes.len() < count_offset + 4 {
+            return Err(CasError::BufferTooSmall {
+                expected: count_offset + 4,
+                actual: bytes.len(),
+            });
+        }
+        let claim_count =
+            u32::from_le_bytes(bytes[count_offset..count_offset + 4].try_into().unwrap()) as usize;
+        if claim_count > MAX_CLAIMS_PER_SECTION {
+            return Err(CasError::CanonicalExtractionFailed {
+                reason: format!("claim count {claim_count} exceeds {MAX_CLAIMS_PER_SECTION}"),
+            });
+        }
         let mut claims = Vec::with_capacity(claim_count);
-        let mut offset = 4usize;
+        let mut offset = count_offset + 4;
+        let prefix_len = if is_v2 {
+            CLAIMS_V2_RECORD_PREFIX
+        } else {
+            CLAIMS_V1_RECORD_PREFIX
+        };
 
         for _ in 0..claim_count {
             if offset >= bytes.len() {
                 return Err(CasError::BufferTooSmall {
-                    expected: offset + 5,
+                    expected: offset + prefix_len,
                     actual: bytes.len(),
                 });
             }
 
             // Read subject_local, predicate_local, and object_tag
-            if offset + 5 > bytes.len() {
+            if offset + prefix_len > bytes.len() {
                 return Err(CasError::BufferTooSmall {
-                    expected: offset + 5,
+                    expected: offset + prefix_len,
                     actual: bytes.len(),
                 });
             }
 
-            let subject_local = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
-            let predicate_local = u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]);
-            let object_tag_byte = bytes[offset + 4];
+            let (subject_local, predicate_local, object_tag_byte) = if is_v2 {
+                (
+                    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()),
+                    u32::from_le_bytes(bytes[offset + 8..offset + 12].try_into().unwrap()),
+                    bytes[offset + 12],
+                )
+            } else {
+                (
+                    u64::from(u16::from_le_bytes([bytes[offset], bytes[offset + 1]])),
+                    u32::from(u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]])),
+                    bytes[offset + 4],
+                )
+            };
 
             let object_tag = ObjTag::from_u8(object_tag_byte)
                 .ok_or(CasError::InvalidSectionKind(object_tag_byte as u32))?;
 
             // Find the end of this claim record based on object_tag
-            let object_value_start = offset + 5;
+            let object_value_start = offset + prefix_len;
             let object_value_len = match object_tag {
                 ObjTag::NULL => 0,
                 ObjTag::BOOL => 1,
@@ -563,5 +648,41 @@ mod tests {
 
         let with_predicate_6 = claims.find_by_predicate(6);
         assert_eq!(with_predicate_6.len(), 1);
+    }
+
+    #[test]
+    fn claims_v2_preserves_managed_predicate_and_typed_object() {
+        let mut claims = ClaimsSection::new();
+        claims.add_claim(
+            ClaimRecord::from_scalar(
+                u64::MAX - 1,
+                0xF123_4567,
+                ObjTag::F64,
+                (-17.25f64).to_bits(),
+            )
+            .unwrap(),
+        );
+        let bytes = claims.to_bytes();
+        assert!(bytes.starts_with(b"CLM2"));
+        let restored = ClaimsSection::from_bytes(&bytes).unwrap();
+        let claim = &restored.claims[0];
+        assert_eq!(claim.subject_local, u64::MAX - 1);
+        assert_eq!(claim.predicate_local, 0xF123_4567);
+        assert_eq!(claim.object_tag, ObjTag::F64);
+        assert_eq!(claim.as_f64(), Some(-17.25));
+    }
+
+    #[test]
+    fn claims_v1_remains_readable() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&7u16.to_le_bytes());
+        bytes.extend_from_slice(&9u16.to_le_bytes());
+        bytes.push(ObjTag::SYM.to_u8());
+        bytes.extend_from_slice(&42u32.to_le_bytes());
+        let restored = ClaimsSection::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.claims[0].subject_local, 7);
+        assert_eq!(restored.claims[0].predicate_local, 9);
+        assert_eq!(restored.claims[0].as_sym(), Some(42));
     }
 }

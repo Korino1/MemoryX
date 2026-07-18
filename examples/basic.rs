@@ -288,11 +288,15 @@ fn build_atom_payload(
 
     let mut claims_section = ClaimsSection::new();
     for claim in claims {
-        claims_section.add_claim(ClaimRecord::new_u64(
-            claim.subj as u16,
-            claim.pred as u16,
-            claim.obj_val,
-        ));
+        claims_section.add_claim(
+            ClaimRecord::from_scalar(
+                claim.subj,
+                claim.pred as u32,
+                ObjTag::from_u8(claim.obj_tag).unwrap_or(ObjTag::U64),
+                claim.obj_val,
+            )
+            .expect("example claim must be scalar"),
+        );
     }
     let claims_bytes = claims_section.to_bytes();
 

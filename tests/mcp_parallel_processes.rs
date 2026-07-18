@@ -691,6 +691,9 @@ fn predicate_bootstrap_and_symbol_only_multi_source_query_survive_reopen() {
     let base_name = "symbol-only-multi-source";
     let symbol = "val_08a_3r_gb1_next";
     let atom_id;
+    let predicate_id;
+    let managed_claim_atom;
+    let managed_relation_atom;
 
     {
         let mut process = McpProcess::spawn(root.path(), base_name);
@@ -715,7 +718,10 @@ fn predicate_bootstrap_and_symbol_only_multi_source_query_survive_reopen() {
             .expect("register managed predicate");
         let registered: Value =
             serde_json::from_str(response_text(&registered)).expect("predicate JSON");
-        assert_eq!(registered["predicate_id"], 0x8000_0000u64);
+        predicate_id = registered["predicate_id"]
+            .as_u64()
+            .expect("deterministic predicate id");
+        assert!(predicate_id >= 0x8000_0000u64);
         let stable_identity = registered["stable_identity"].clone();
 
         let repeated = process
@@ -738,6 +744,47 @@ fn predicate_bootstrap_and_symbol_only_multi_source_query_survive_reopen() {
             ))
             .expect("conflicting predicate response");
         assert_eq!(conflict["error"]["code"], -32602);
+
+        for (id, name) in [(3030, "managed subject"), (3031, "managed object")] {
+            assert_success(
+                &process
+                    .request(tool_request(
+                        id,
+                        "create_entity",
+                        json!({"canonical_name": name, "entity_type": "test"}),
+                    ))
+                    .expect("create managed entity"),
+            );
+        }
+        let managed_claim = process
+            .request(tool_request(
+                3032,
+                "add_claim",
+                json!({
+                    "entity_id": 1,
+                    "predicate": predicate_id,
+                    "object": 77,
+                    "object_tag": "SYM",
+                    "ctx_id": 0
+                }),
+            ))
+            .expect("managed add_claim");
+        assert_success(&managed_claim);
+        managed_claim_atom = ingested_atom_id(&managed_claim);
+        let managed_relation = process
+            .request(tool_request(
+                3033,
+                "assert_relation",
+                json!({
+                    "subject": 1,
+                    "predicate": predicate_id,
+                    "object": 2,
+                    "ctx_id": 0
+                }),
+            ))
+            .expect("managed assert_relation");
+        assert_success(&managed_relation);
+        managed_relation_atom = ingested_atom_id(&managed_relation);
 
         let ingest = process
             .request(tool_request(
@@ -833,18 +880,37 @@ fn predicate_bootstrap_and_symbol_only_multi_source_query_survive_reopen() {
         .expect("resolve predicate by canonical name");
     let resolved: Value =
         serde_json::from_str(response_text(&resolved)).expect("resolved predicate JSON");
-    assert_eq!(resolved["predicate_id"], 0x8000_0000u64);
+    assert_eq!(resolved["predicate_id"], predicate_id);
     let inspected = reopened
         .request(tool_request(
             3023,
             "get_predicate",
-            json!({"predicate_id": 0x8000_0000u64}),
+            json!({"predicate_id": predicate_id}),
         ))
         .expect("inspect predicate by id");
     assert_eq!(
         serde_json::from_str::<Value>(response_text(&inspected)).unwrap(),
         resolved
     );
+
+    for (id, managed_atom, expected_tag, expected_value) in [
+        (3034, managed_claim_atom, "SYM", json!({"Sym": 77})),
+        (3035, managed_relation_atom, "NODENUM", json!({"U64": 2})),
+    ] {
+        let response = reopened
+            .request(tool_request(
+                id,
+                "query",
+                json!({"contract": {"intent": "lookup", "targets": [{"label": format!("atom:{managed_atom}")}]}, "ctx_id": 0}),
+            ))
+            .expect("query managed authored atom after reopen");
+        let answer: Value = serde_json::from_str(response_text(&response)).unwrap();
+        assert!(answer["claims"].as_array().unwrap().iter().any(|claim| {
+            claim["pred"].as_u64() == Some(predicate_id)
+                && claim["obj_tag"] == expected_tag
+                && claim["obj_value"] == expected_value
+        }));
+    }
 
     let provenance = reopened
         .request(tool_request(
@@ -930,6 +996,60 @@ fn predicate_bootstrap_and_symbol_only_multi_source_query_survive_reopen() {
         "reopened symbol-only MCP process failed: {}",
         report.stderr
     );
+}
+
+#[test]
+fn multi_candidate_answer_graph_is_deterministic_across_process_reopen() {
+    let root = TempDir::new().expect("determinism temp root");
+    let base_name = "deterministic-candidates";
+    let query_text = "deterministic_shared_symbol";
+    let first_graph;
+    {
+        let mut process = McpProcess::spawn(root.path(), base_name);
+        process
+            .request(codex_initialize_request(4000))
+            .expect("initialize first process");
+        for (id, suffix) in [(4001, "alpha"), (4002, "beta")] {
+            let response = process
+                .request(tool_request(
+                    id,
+                    "ingest",
+                    json!({
+                        "atom_type": "DECISION",
+                        "symbols": [query_text, suffix],
+                        "claims": []
+                    }),
+                ))
+                .expect("ingest deterministic candidate");
+            assert_success(&response);
+        }
+        let response = process
+            .request(tool_request(
+                4003,
+                "query",
+                json!({"query_text": query_text, "ctx_id": 0}),
+            ))
+            .expect("first deterministic query");
+        let answer: Value = serde_json::from_str(response_text(&response)).unwrap();
+        first_graph = answer["graph"].clone();
+        assert!(!first_graph["nodes"].as_array().unwrap().is_empty());
+        assert!(process.finish().status.success());
+    }
+
+    let mut reopened = McpProcess::spawn(root.path(), base_name);
+    reopened
+        .request(codex_initialize_request(4010))
+        .expect("initialize reopened process");
+    let response = reopened
+        .request(tool_request(
+            4011,
+            "query",
+            json!({"query_text": query_text, "ctx_id": 0}),
+        ))
+        .expect("reopened deterministic query");
+    let answer: Value = serde_json::from_str(response_text(&response)).unwrap();
+    assert_eq!(answer["graph"], first_graph);
+    assert!(reopened.finish().status.success());
 }
 
 fn assert_single_source_graph(graph: &Value, atom_id: &str) {
