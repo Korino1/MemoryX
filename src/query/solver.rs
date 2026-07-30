@@ -73,6 +73,8 @@ pub struct SolverConfig {
     pub max_time_ms: u64,
     /// Maximum federated calls. The local solver performs none.
     pub max_federated_calls: u32,
+    /// Maximum transient context branches created during one solve.
+    pub max_context_branches: u32,
     /// Maximum gap for I/O coalescing (default 64KB)
     pub max_coalesce_gap: usize,
     /// I/O mode
@@ -88,6 +90,7 @@ impl Default for SolverConfig {
             max_edges: 8192,
             max_time_ms: 30_000,
             max_federated_calls: 16,
+            max_context_branches: 128,
             max_coalesce_gap: 64 * 1024, // 64KB
             io_mode: IoMode::Mmap,
         }
@@ -105,6 +108,7 @@ impl SolverConfig {
             max_edges: 8192,
             max_time_ms: 30_000,
             max_federated_calls: 16,
+            max_context_branches: 128,
             max_coalesce_gap: 64 * 1024,
             io_mode: IoMode::Mmap,
         }
@@ -141,6 +145,11 @@ impl SolverConfig {
         if self.max_federated_calls > 128 {
             return Err(SolverError::InvalidConfig(
                 "max_federated_calls must be <= 128",
+            ));
+        }
+        if self.max_context_branches > 65_536 {
+            return Err(SolverError::InvalidConfig(
+                "max_context_branches must be <= 65536",
             ));
         }
         Ok(())
@@ -1808,6 +1817,7 @@ impl FixedPointSolver {
         goal: GoalSpec,
         ctx_policy: CtxPolicyId,
     ) -> Result<AnswerPack, SolverError> {
+        let solve_started = std::time::Instant::now();
         // Validate configuration
         self.config.validate()?;
 
@@ -1838,9 +1848,15 @@ impl FixedPointSolver {
             &state.gaps,
             &self.cost_weights,
         );
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
 
         // Extract claims with full provenance chains
         self.extract_claims(&mut pack, &state);
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
         if pack.graph.nodes.is_empty() && state.goal.lexical_resolution_required {
             pack.status = AnswerStatus::NoMatch;
         } else if !pack.graph.nodes.is_empty() && pack.claims.is_empty() {
@@ -1873,6 +1889,9 @@ impl FixedPointSolver {
                 pack.status = AnswerStatus::PolicyBlocked;
             }
         }
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
 
         // Generate alternative answer paths for comparison
         // Re-collect candidates from the final iteration for alternate generation
@@ -1885,11 +1904,31 @@ impl FixedPointSolver {
                 3, // Up to 3 alternates
             );
         }
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
 
         self.apply_conflict_policy_to_pack(&mut pack, &state);
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
         pack.query_trace = state.query_trace.clone();
 
         Ok(pack)
+    }
+
+    fn deadline_exceeded(&self, started: std::time::Instant) -> bool {
+        started.elapsed().as_millis() >= u128::from(self.config.max_time_ms)
+    }
+
+    fn deadline_exhausted_pack(ctx_id: CtxId) -> AnswerPack {
+        let mut pack = AnswerPack::new(ctx_id);
+        pack.status = AnswerStatus::BudgetExhausted;
+        pack.limitations.push(Limitation::warning(
+            LimitationCode::BudgetExhausted,
+            "query execution stopped at the configured wall-clock deadline".to_owned(),
+        ));
+        pack
     }
 
     fn apply_conflict_policy_to_pack(&self, pack: &mut AnswerPack, state: &SolverState) {
@@ -2006,6 +2045,7 @@ impl FixedPointSolver {
     fn run_iterations(&self, state: &mut SolverState) -> Result<(), SolverError> {
         let max_iterations = self.config.max_iterations;
         let started = std::time::Instant::now();
+        let initial_context_count = self.ctx_manager.lock().list_contexts().len();
         let mut prev_graph_cost = f64::NEG_INFINITY;
         let mut stable_count = 0;
 
@@ -2040,7 +2080,7 @@ impl FixedPointSolver {
             }
 
             // Run one iteration
-            self.iteration(state)?;
+            self.iteration(state, started, initial_context_count)?;
 
             if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
                 state.budget_exceeded = true;
@@ -2091,7 +2131,12 @@ impl FixedPointSolver {
     }
 
     /// Run one iteration of fixed-point solving (SKF-1.1 Section 5.2)
-    fn iteration(&self, state: &mut SolverState) -> Result<(), SolverError> {
+    fn iteration(
+        &self,
+        state: &mut SolverState,
+        started: std::time::Instant,
+        initial_context_count: usize,
+    ) -> Result<(), SolverError> {
         // Step 1: Route uncovered gaps to candidates
         let mut all_candidates = Vec::new();
         let planned_actions = RetrievalPlanner::plan(
@@ -2109,6 +2154,10 @@ impl FixedPointSolver {
             .extend(planned_actions.iter().map(|action| action.to_trace(true)));
 
         for action in planned_actions {
+            if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+                state.budget_exceeded = true;
+                break;
+            }
             let Some(gap) = state.get_gap(action.gap_id) else {
                 continue;
             };
@@ -2129,13 +2178,25 @@ impl FixedPointSolver {
         }
 
         // Step 2: Filter by invariants (real INVARIANTS section evaluation)
-        let filter_result = self.filter_by_invariants(&all_candidates, state)?;
+        let filter_result = self.filter_by_invariants(&all_candidates, state, started)?;
 
         // Step 2.1: Process NeedBranch candidates - create TMS context branches
         // SKF-1.1 Section 3.2: Each NeedBranch creates an alternative CTX'
         let mut admissible = filter_result.admissible;
 
         for branched in filter_result.need_branch {
+            if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms)
+                || self
+                    .ctx_manager
+                    .lock()
+                    .list_contexts()
+                    .len()
+                    .saturating_sub(initial_context_count)
+                    >= self.config.max_context_branches as usize
+            {
+                state.budget_exceeded = true;
+                break;
+            }
             // Create Conflict object for TMS branching
             let conflict = Conflict::new(
                 branched.conflicting_atom_id.unwrap_or([0u8; 32]),
@@ -2175,7 +2236,12 @@ impl FixedPointSolver {
 
         // Step 3: Update context (branch on conflicts)
         // Simplified: just track conflicts in candidates
-        let ctx_updated = self.update_context(&admissible, state)?;
+        let ctx_updated =
+            self.update_context(&admissible, state, started, initial_context_count)?;
+        if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+            state.budget_exceeded = true;
+            return Ok(());
+        }
 
         // Step 4: Infer new claims and integrate them into the current fixed-point state
         let inferred_steps = self.infer_claim_steps(&admissible, &ctx_updated);
@@ -2373,14 +2439,18 @@ impl FixedPointSolver {
         }
 
         let branch_ctx_id = candidate.branch_ctx_id?;
-        let allowed = state.goal.context_scope.branch_ids.iter().any(|branch| {
+        let explicitly_allowed = state.goal.context_scope.branch_ids.iter().any(|branch| {
             branch
                 .strip_prefix("ctx:")
                 .and_then(|value| value.parse::<CtxId>().ok())
                 .is_some_and(|ctx_id| ctx_id == branch_ctx_id)
         });
+        let selected_allowed =
+            state.goal.context_scope.selectors.iter().any(|selector| {
+                matches!(selector, crate::query::contract::ContextSelector::Active)
+            }) && branch_ctx_id == state.ctx_id;
 
-        if allowed {
+        if explicitly_allowed || selected_allowed {
             return None;
         }
 
@@ -2423,7 +2493,8 @@ impl FixedPointSolver {
     fn filter_by_invariants(
         &self,
         candidates: &[Candidate],
-        state: &SolverState,
+        state: &mut SolverState,
+        started: std::time::Instant,
     ) -> Result<InvariantFilterResult, SolverError> {
         let mut admissible = Vec::new();
         let mut need_branch = Vec::new();
@@ -2476,6 +2547,10 @@ impl FixedPointSolver {
 
         // 3. For each candidate: load atom body and evaluate invariants
         for candidate in candidates {
+            if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+                state.budget_exceeded = true;
+                break;
+            }
             // Skip candidates that don't require invariant check
             if !candidate.requires_invariant_check {
                 admissible.push(candidate.clone());
@@ -2640,6 +2715,8 @@ impl FixedPointSolver {
         &self,
         candidates: &[Candidate],
         state: &mut SolverState,
+        started: std::time::Instant,
+        initial_context_count: usize,
     ) -> Result<CtxId, SolverError> {
         // Track conflict counts for reporting
         let hard_conflicts: u32 = candidates.iter().map(|c| c.hard_conflicts).sum();
@@ -2662,11 +2739,37 @@ impl FixedPointSolver {
         let mut branch_ctx_created: Option<CtxId> = None;
 
         for candidate in candidates {
+            if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+                state.budget_exceeded = true;
+                break;
+            }
             // Determine target context for this candidate
             let target_ctx = candidate.branch_ctx_id.unwrap_or(current_ctx);
 
             // Assert each derived claim from this candidate into context
             for claim in &candidate.derived_claims {
+                if started.elapsed().as_millis() >= u128::from(self.config.max_time_ms) {
+                    state.budget_exceeded = true;
+                    break;
+                }
+                let preview = self.ctx_manager.lock().clone().assert_claim_with_atom_id(
+                    target_ctx,
+                    claim,
+                    candidate.atom_id,
+                );
+                let would_branch = preview
+                    .as_ref()
+                    .is_ok_and(|result_ctx_id| *result_ctx_id != target_ctx);
+                let created_branches = self
+                    .ctx_manager
+                    .lock()
+                    .list_contexts()
+                    .len()
+                    .saturating_sub(initial_context_count);
+                if would_branch && created_branches >= self.config.max_context_branches as usize {
+                    state.budget_exceeded = true;
+                    break;
+                }
                 // Use the candidate's atom_id as source for proper provenance
                 let result = self.ctx_manager.lock().assert_claim_with_atom_id(
                     target_ctx,

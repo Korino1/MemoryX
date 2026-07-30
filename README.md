@@ -297,6 +297,27 @@ the next attachment returns an explicit error and does not discard existing
 provenance. Query output is separately bounded by `output_contract.max_items`
 and reports `BudgetExhausted` when the response is truncated.
 
+Every proof record now identifies its provenance representation as `embedded`,
+`attached`, `derived`, `federated`, or `legacy_unknown` when an older serialized
+record did not contain enough information to classify it. Attached sources are synced before a
+successful MCP response and all distinct source IDs remain visible after reopen.
+
+Exact QueryContract targets are fail-closed. Prefer typed selectors such as
+`{"atom_id":"<64 hex>"}`, `{"node_id":42}`, `{"entity_id":7}`,
+`{"term_id":3}`, `{"symbol_id":9}`, or
+`{"stable_key":"project:depends_on"}`. The legacy `id` field still accepts
+`atom:`, `node:`, `term:`, and `sym:` prefixes. An unresolved exact selector
+returns `NoMatch`; it never broadens into an unrestricted query. Normal queries
+use only current atom versions. Set `temporal_scope.require_current` to `false`
+explicitly when a historical query must include superseded atoms.
+
+MCP results keep human-readable `content` and also provide
+`structuredContent`. Mutation results include stable operation identifiers,
+affected IDs, and `durability: "committed"`. In `list_contexts`, `selected`
+means the context selected for the request, while `state` is `open` or `closed`;
+an open branch is not automatically the selected context. Query-time conflict
+branches are isolated and are never persisted by a read query.
+
 Different physical bases can be used in parallel by different MCP clients. One
 physical base root has exactly one mutable owner at a time: a second process is
 rejected with an explicit writer-lease error before it can open mutable store
@@ -337,6 +358,10 @@ MemoryX keeps bases in explicit scoped roots:
 
 - Project scope: `<repo>/.memoryx/bases/<name>`
 - User scope: `<home>/.memoryx/bases/<name>`
+
+An explicit absolute project path is accepted independently of process CWD only
+when its physical shape is `<project>/.memoryx/bases/<name>`. Arbitrary absolute
+directories remain rejected.
 
 Each opened base contains a persistent `.memoryx.writer.lock` file. The file is
 not a stale-lock sentinel: the operating system lock is held only for the owner
@@ -418,7 +443,9 @@ benchmarks/            Honest RAG-comparison scaffold
 
 ## Status
 
-- Current crate version: `1.0.5`.
+- Current crate version: `2.0.0`. This is a major version because the public
+  Rust query/provenance structures gained fields; existing on-disk bases and
+  MCP JSON remain backward-readable.
 - CLI, MCP, and persisted-base compatibility are maintained for the 1.0 release
   line. Low-level Rust CAS structs are implementation-facing and may evolve;
   consumers should prefer the high-level store API.
@@ -697,6 +724,27 @@ atom/source. На один atom допускается не более 256 пр�
 query response отдельно ограничивается `output_contract.max_items`; усечение
 помечается `BudgetExhausted`.
 
+Каждая proof-запись явно указывает представление provenance: `embedded`,
+`attached`, `derived`, `federated` или `legacy_unknown`, если старой
+serialized-записи недостаточно для точной классификации. Привязанные источники синхронизируются до
+успешного MCP-ответа, а все разные source ID видны после повторного открытия.
+
+Точные targets в QueryContract работают fail-closed. Рекомендуются typed
+selectors: `{"atom_id":"<64 hex>"}`, `{"node_id":42}`,
+`{"entity_id":7}`, `{"term_id":3}`, `{"symbol_id":9}` или
+`{"stable_key":"project:depends_on"}`. Legacy-поле `id` поддерживает префиксы
+`atom:`, `node:`, `term:` и `sym:`. Неразрешённый точный selector возвращает
+`NoMatch` и не расширяет запрос на всю базу. Обычный запрос использует только
+текущие версии atoms; для явного исторического запроса задайте
+`temporal_scope.require_current: false`.
+
+MCP сохраняет человекочитаемый `content` и одновременно возвращает
+`structuredContent`. Mutation-ответы содержат стабильное имя операции,
+затронутые ID и `durability: "committed"`. В `list_contexts` поле `selected`
+означает выбранный для запроса context, а `state` имеет значение `open` или
+`closed`: открытая ветка не обязательно является выбранной. Временные ветки,
+созданные read-query для проверки конфликтов, не сохраняются в базе.
+
 Разные физические базы могут параллельно использоваться разными MCP-клиентами.
 У одного физического корня базы одновременно может быть только один процесс,
 изменяющий данные: второй процесс получит явную ошибку writer lease до открытия
@@ -737,6 +785,10 @@ MemoryX хранит базы в явных scoped roots:
 
 - Project scope: `<repo>/.memoryx/bases/<name>`
 - User scope: `<home>/.memoryx/bases/<name>`
+
+Явный абсолютный project path принимается независимо от CWD только при
+физической структуре `<project>/.memoryx/bases/<name>`. Произвольные абсолютные
+папки по-прежнему отклоняются.
 
 В каждой открытой базе сохраняется файл `.memoryx.writer.lock`. Это не маркер
 устаревшей блокировки: операционная система удерживает lock только пока жив
@@ -786,7 +838,9 @@ CLI и MCP открывают одну и ту же durable store layout. `updat
 
 ## Статус
 
-- Текущая версия crate: `1.0.5`.
+- Текущая версия crate: `2.0.0`. Это major-версия, поскольку публичные Rust
+  структуры запросов и provenance получили новые поля; существующие базы на
+  диске и MCP JSON остаются обратно читаемыми.
 - Совместимость CLI, MCP и persisted bases поддерживается в release line 1.0.
   Низкоуровневые Rust CAS structs являются implementation-facing; внешним
   клиентам следует использовать high-level store API.

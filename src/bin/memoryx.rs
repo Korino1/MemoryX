@@ -1997,7 +1997,20 @@ fn validate_allowed_base_path(path: &Path) -> CliResult<PathBuf> {
     let project_root = canonical_physical_path(&project_base_root()?)?;
     let user_root = canonical_physical_path(&user_base_root()?)?;
 
-    if candidate.starts_with(&project_root) || candidate.starts_with(&user_root) {
+    let explicit_project_root = candidate
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "bases"))
+        .and_then(Path::parent)
+        .filter(|parent| parent.file_name().is_some_and(|name| name == ".memoryx"))
+        .and_then(Path::parent)
+        .map(|root| root.join(".memoryx").join("bases"));
+
+    if candidate.starts_with(&project_root)
+        || candidate.starts_with(&user_root)
+        || explicit_project_root
+            .as_ref()
+            .is_some_and(|root| candidate.starts_with(root))
+    {
         Ok(candidate)
     } else {
         Err(CliError::Validation(format!(
@@ -3164,9 +3177,7 @@ fn cmd_import(
 
 /// Show statistics
 fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()> {
-    use memoryx::cas::io::{
-        CasStore as CasIoStore, INDEX_EXTENSION, SEGMENT_EXTENSION, SEGMENT_PREFIX,
-    };
+    use memoryx::cas::io::{INDEX_EXTENSION, SEGMENT_EXTENSION, SEGMENT_PREFIX};
     use memoryx::graph::GraphStore;
 
     print_info(&format!("Collecting statistics for '{}'", base.display()));
@@ -3181,11 +3192,7 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
     let mut seg_total_size = 0u64;
     let mut total_records = 0u32;
 
-    if cas_dir.exists()
-        && let Ok(cas_store) = CasIoStore::open(&cas_dir, None)
-    {
-        cas_store.init_reader().unwrap();
-
+    if cas_dir.exists() {
         for entry in std::fs::read_dir(&cas_dir)
             .map_err(CliError::Io)?
             .filter_map(|e| e.ok())
@@ -3274,15 +3281,31 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
         }
     }
 
+    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
+    let atom_ids = store.list_atom_ids();
+    let mut total_claims = 0usize;
+    let mut atom_types = HashMap::new();
+    for atom_id in &atom_ids {
+        let atom = store.get_atom(atom_id)?;
+        total_claims = total_claims.saturating_add(atom.claims.len());
+        *atom_types
+            .entry(format!("{:?}", atom.atom_type))
+            .or_insert(0usize) += 1;
+    }
+    let contexts = store.list_contexts();
+    let conflicts = contexts
+        .iter()
+        .map(|context| context.conflicts.len())
+        .sum::<usize>();
     let stats = StorageStats {
-        total_atoms: total_records as usize,
-        total_claims: 0, // Would need to read each atom to count claims
-        atom_types: HashMap::new(),
+        total_atoms: atom_ids.len(),
+        total_claims,
+        atom_types,
         storage_size_bytes: seg_total_size,
         index_size_bytes: idx_total_size,
         graph_edges: edge_count as usize,
-        contexts: 1,
-        conflicts: 0,
+        contexts: contexts.len(),
+        conflicts,
     };
 
     // --- Output ---
@@ -3291,6 +3314,7 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
             let json = serde_json::json!({
                 "total_atoms": stats.total_atoms,
                 "total_claims": stats.total_claims,
+                "atom_types": stats.atom_types,
                 "cas_segments": seg_count,
                 "cas_size_bytes": seg_total_size,
                 "index_files": idx_count,
@@ -3307,6 +3331,8 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
         OutputFormat::Yaml => {
             let yaml = serde_json::json!({
                 "total_atoms": stats.total_atoms,
+                "total_claims": stats.total_claims,
+                "atom_types": stats.atom_types,
                 "cas_segments": seg_count,
                 "cas_size_bytes": seg_total_size,
                 "graph_nodes": node_count,
@@ -3332,6 +3358,10 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
                 format_bytes(idx_total_size)
             );
             println!("  Index Entries:   {}", total_records);
+            println!("  Live Atoms:      {}", stats.total_atoms);
+            println!("  Claims:          {}", stats.total_claims);
+            println!("  Contexts:        {}", stats.contexts);
+            println!("  Conflicts:       {}", stats.conflicts);
             println!("  Graph Nodes:     {}", node_count.to_string().green());
             println!(
                 "  Graph Edges:     {}",
@@ -3886,6 +3916,12 @@ fn query_contract_mcp_schema() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "id": { "type": ["string", "null"] },
+                    "entity_id": { "type": ["integer", "null"], "minimum": 0 },
+                    "atom_id": { "type": ["string", "null"], "pattern": "^[0-9a-fA-F]{64}$" },
+                    "node_id": { "type": ["integer", "null"], "minimum": 0 },
+                    "term_id": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295u64 },
+                    "symbol_id": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295u64 },
+                    "stable_key": { "type": ["string", "null"], "minLength": 1 },
                     "label": { "type": ["string", "null"] },
                     "entity_type": { "type": ["string", "null"] },
                     "aliases": { "type": "array", "items": { "type": "string" } },
@@ -3945,7 +3981,7 @@ fn query_contract_mcp_schema() -> serde_json::Value {
                 "observed_at_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
                 "latest_count": { "type": ["integer", "null"], "minimum": 0 },
                 "require_current": { "type": "boolean" }
-            }, "required": ["require_current"], "additionalProperties": false },
+            }, "additionalProperties": false },
             "context_scope": { "type": "object", "properties": {
                 "policy_id": { "type": ["integer", "null"], "minimum": 0 },
                 "selectors": { "type": "array", "items": { "oneOf": [
@@ -4004,7 +4040,8 @@ fn query_contract_mcp_schema() -> serde_json::Value {
                 "max_edges": { "type": "integer", "minimum": 0, "maximum": 262144 },
                 "max_io_bytes": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
                 "max_time_ms": { "type": "integer", "minimum": 0, "maximum": 300000 },
-                "max_federated_calls": { "type": "integer", "minimum": 0, "maximum": 128, "description": "Maximum remote retrieval calls; local MCP query execution performs zero." }
+                "max_federated_calls": { "type": "integer", "minimum": 0, "maximum": 128, "description": "Maximum remote retrieval calls; local MCP query execution performs zero." },
+                "max_context_branches": { "type": "integer", "minimum": 0, "maximum": 65536, "description": "Maximum transient conflict branches created inside the isolated query workspace; read queries never persist them." }
             }, "additionalProperties": false }
         },
         "required": ["intent"],
@@ -4367,7 +4404,21 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                             "type": "object",
                                             "properties": {
                                                 "atom_type": { "type": "string" },
-                                                "claims": { "type": "array" },
+                                                "claims": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                            "subj": { "type": "integer", "minimum": 0 },
+                                                            "pred": { "type": "integer", "minimum": 0 },
+                                                            "obj_tag": { "type": "integer", "minimum": 0, "maximum": 8 },
+                                                            "obj_val": { "type": "integer", "minimum": 0 },
+                                                            "qualifiers_mask": { "type": "integer", "minimum": 0, "maximum": 4294967295u64 }
+                                                        },
+                                                        "required": ["subj", "pred", "obj_tag", "obj_val"]
+                                                    }
+                                                },
                                                 "symbols": {
                                                     "type": "array",
                                                     "items": { "type": "string" }
@@ -4446,7 +4497,21 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                             "properties": {
                                                 "atom_id": { "type": "string" },
                                                 "atom_type": { "type": "string" },
-                                                "claims": { "type": "array" },
+                                                "claims": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                            "subj": { "type": "integer", "minimum": 0 },
+                                                            "pred": { "type": "integer", "minimum": 0 },
+                                                            "obj_tag": { "type": "integer", "minimum": 0, "maximum": 8 },
+                                                            "obj_val": { "type": "integer", "minimum": 0 },
+                                                            "qualifiers_mask": { "type": "integer", "minimum": 0, "maximum": 4294967295u64 }
+                                                        },
+                                                        "required": ["subj", "pred", "obj_tag", "obj_val"]
+                                                    }
+                                                },
                                                 "symbols": {
                                                     "type": "array",
                                                     "items": { "type": "string" }
@@ -4479,7 +4544,21 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                             "properties": {
                                                 "atom_id": { "type": "string" },
                                                 "atom_type": { "type": "string" },
-                                                "claims": { "type": "array" },
+                                                "claims": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                            "subj": { "type": "integer", "minimum": 0 },
+                                                            "pred": { "type": "integer", "minimum": 0 },
+                                                            "obj_tag": { "type": "integer", "minimum": 0, "maximum": 8 },
+                                                            "obj_val": { "type": "integer", "minimum": 0 },
+                                                            "qualifiers_mask": { "type": "integer", "minimum": 0, "maximum": 4294967295u64 }
+                                                        },
+                                                        "required": ["subj", "pred", "obj_tag", "obj_val"]
+                                                    }
+                                                },
                                                 "symbols": {
                                                     "type": "array",
                                                     "items": { "type": "string" }
@@ -4512,7 +4591,21 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                             "properties": {
                                                 "atom_id": { "type": "string" },
                                                 "atom_type": { "type": "string" },
-                                                "claims": { "type": "array" },
+                                                "claims": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                            "subj": { "type": "integer", "minimum": 0 },
+                                                            "pred": { "type": "integer", "minimum": 0 },
+                                                            "obj_tag": { "type": "integer", "minimum": 0, "maximum": 8 },
+                                                            "obj_val": { "type": "integer", "minimum": 0 },
+                                                            "qualifiers_mask": { "type": "integer", "minimum": 0, "maximum": 4294967295u64 }
+                                                        },
+                                                        "required": ["subj", "pred", "obj_tag", "obj_val"]
+                                                    }
+                                                },
                                                 "symbols": {
                                                     "type": "array",
                                                     "items": { "type": "string" }
@@ -5211,7 +5304,36 @@ fn mcp_text_result(id: serde_json::Value, text: String) -> serde_json::Value {
         "jsonrpc": "2.0",
         "id": id,
         "result": {
-            "content": [{"type": "text", "text": text}]
+            "content": [{"type": "text", "text": text.clone()}],
+            "structuredContent": {
+                "schema_version": "memoryx.text-result.v1",
+                "status": "ok",
+                "text": text
+            }
+        }
+    })
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_structured_result(
+    id: serde_json::Value,
+    text: String,
+    mut structured: serde_json::Value,
+) -> serde_json::Value {
+    if let Some(object) = structured.as_object_mut() {
+        object
+            .entry("schema_version")
+            .or_insert_with(|| serde_json::json!("memoryx.tool-result.v1"));
+        object
+            .entry("status")
+            .or_insert_with(|| serde_json::json!("ok"));
+    }
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": structured
         }
     })
 }
@@ -5309,6 +5431,60 @@ fn mcp_arguments_object(
     arguments
         .and_then(serde_json::Value::as_object)
         .ok_or_else(|| mcp_error(id, -32602, "Tool arguments must be an object"))
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_optional_u32(
+    args: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<u32>, String> {
+    let Some(value) = args.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_u64()
+        .ok_or_else(|| format!("{field} must be an unsigned integer"))?;
+    u32::try_from(value)
+        .map(Some)
+        .map_err(|_| format!("{field} must be a valid u32"))
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_selected_context(
+    store: &MemoryX,
+    args: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<CtxId, String> {
+    let Some(ctx_id) = mcp_optional_u32(args, field)? else {
+        return Ok(store.active_context());
+    };
+    if ctx_id != store.active_context()
+        && !store
+            .list_contexts()
+            .iter()
+            .any(|context| context.ctx_id == ctx_id)
+    {
+        return Err(format!("context {ctx_id} does not exist"));
+    }
+    Ok(ctx_id)
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_required_context(
+    store: &MemoryX,
+    args: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<CtxId, String> {
+    let ctx_id = mcp_optional_u32(args, field)?
+        .ok_or_else(|| format!("Missing required field '{field}'"))?;
+    if !store
+        .list_contexts()
+        .iter()
+        .any(|context| context.ctx_id == ctx_id)
+    {
+        return Err(format!("context {ctx_id} does not exist"));
+    }
+    Ok(ctx_id)
 }
 
 #[cfg(feature = "mcp")]
@@ -5589,10 +5765,10 @@ fn mcp_query_response(
         Ok(contract) => contract,
         Err(err) => return mcp_error(id, -32602, err),
     };
-    let ctx_id = args
-        .get("ctx_id")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(store.active_context().into()) as u32;
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
     match store.answer_contract(contract, ctx_id) {
         Ok(answer) => mcp_answer_result(id, &answer),
@@ -5658,10 +5834,10 @@ fn mcp_explain_answer_graph_response(
         Ok(contract) => contract,
         Err(err) => return mcp_error(id, -32602, err),
     };
-    let ctx_id = args
-        .get("ctx_id")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(store.active_context().into()) as u32;
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
     match store.answer_contract(contract, ctx_id) {
         Ok(answer) => mcp_text_result(
@@ -5781,15 +5957,24 @@ fn mcp_create_context_response(
     id: serde_json::Value,
     arguments: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    let policy_id = arguments
-        .and_then(|value| value.as_object())
-        .and_then(|args| args.get("policy_id"))
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    match store.create_context(policy_id as u32) {
-        Ok(ctx_id) => mcp_text_result(
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(error) => return error,
+    };
+    let policy_id = match mcp_optional_u32(args, "policy_id") {
+        Ok(policy_id) => policy_id.unwrap_or(0),
+        Err(error) => return mcp_error(id, -32602, error),
+    };
+    match store.create_context(policy_id) {
+        Ok(ctx_id) => mcp_structured_result(
             id,
             format!("created_ctx={}\npolicy_id={}", ctx_id, policy_id),
+            serde_json::json!({
+                "operation": "create_context",
+                "ctx_id": ctx_id,
+                "policy_id": policy_id,
+                "durability": "committed"
+            }),
         ),
         Err(error) => mcp_error(id, -32603, format!("Create context failed: {error}")),
     }
@@ -5801,11 +5986,14 @@ fn mcp_list_conflicts_response(
     id: serde_json::Value,
     arguments: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    let ctx_id = arguments
-        .and_then(|value| value.as_object())
-        .and_then(|args| args.get("ctx_id"))
-        .and_then(|value| value.as_u64())
-        .unwrap_or(store.active_context().into()) as u32;
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(error) => return error,
+    };
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
     let conflicts = store.list_conflicts(ctx_id);
     let lines = conflicts
         .iter()
@@ -5986,20 +6174,17 @@ fn mcp_ingest_response(
         Ok(c) => c,
         Err(e) => return mcp_error(id, -32602, format!("Invalid claim: {}", e)),
     };
-    let symbols: Vec<String> = args
-        .get("symbols")
-        .and_then(|value| value.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let trust_level = args
-        .get("trust_level")
-        .and_then(|value| value.as_u64())
-        .map(|value| u16::try_from(value).unwrap_or(5000))
-        .unwrap_or(5000);
+    let symbols = match mcp_parse_symbols(args.get("symbols"), "symbols") {
+        Ok(symbols) => symbols,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
+    let trust_level = match args.get("trust_level").and_then(|value| value.as_u64()) {
+        Some(value) => match u16::try_from(value) {
+            Ok(value) => value,
+            Err(_) => return mcp_error(id, -32602, "trust_level is outside u16 range"),
+        },
+        None => 5000,
+    };
     let domain_mask = args
         .get("domain_mask")
         .and_then(|value| value.as_u64())
@@ -6012,7 +6197,7 @@ fn mcp_ingest_response(
         };
 
     match store.ingest(&payload, atom_type, &claims, &[]) {
-        Ok(atom_id) => mcp_text_result(
+        Ok(atom_id) => mcp_structured_result(
             id,
             format!(
                 "Successfully ingested atom\nAtom ID: {}\nType: {:?}\nClaims: {}",
@@ -6020,6 +6205,13 @@ fn mcp_ingest_response(
                 atom_type,
                 claims.len()
             ),
+            serde_json::json!({
+                "operation": "ingest",
+                "atom_id": hex::encode(atom_id),
+                "atom_type": format!("{atom_type:?}"),
+                "claim_count": claims.len(),
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Ingest failed: {}", e)),
     }
@@ -6064,7 +6256,19 @@ fn mcp_batch_ingest_response(
                     output.push_str(&format!("\n ... and {} more", result.atom_ids.len() - 5));
                 }
             }
-            mcp_text_result(id, output)
+            mcp_structured_result(
+                id,
+                output,
+                serde_json::json!({
+                    "operation": "batch_ingest",
+                    "total": result.total,
+                    "success_count": result.success_count(),
+                    "error_count": result.error_count(),
+                    "atom_ids": result.atom_ids.iter().map(hex::encode).collect::<Vec<_>>(),
+                    "errors": result.errors.iter().map(|error| format!("{error:?}")).collect::<Vec<_>>(),
+                    "durability": "committed"
+                }),
+            )
         }
         Err(e) => mcp_error(id, -32603, format!("Batch ingest failed: {}", e)),
     }
@@ -6111,15 +6315,10 @@ fn mcp_update_atom_response(
         Ok(c) => c,
         Err(e) => return mcp_error(id, -32602, format!("Invalid claim: {}", e)),
     };
-    let symbols: Vec<String> = args
-        .get("symbols")
-        .and_then(|value| value.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let symbols = match mcp_parse_symbols(args.get("symbols"), "symbols") {
+        Ok(symbols) => symbols,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
     let new_payload = match mcp_build_atom_payload(atom_type, &symbols, &claims, 5000, 0xFFFF) {
         Ok(p) => p,
@@ -6127,13 +6326,19 @@ fn mcp_update_atom_response(
     };
 
     match store.update_atom(old_atom_id, new_payload, atom_type, claims, vec![]) {
-        Ok(result) => mcp_text_result(
+        Ok(result) => mcp_structured_result(
             id,
             format!(
                 "Successfully updated atom:\nNew Atom ID: {}\nSupersedes: {}\nNote: Old atom preserved for provenance",
                 hex::encode(result.new_atom_id),
                 hex::encode(result.supersedes)
             ),
+            serde_json::json!({
+                "operation": "update_atom",
+                "atom_id": hex::encode(result.new_atom_id),
+                "supersedes_atom_id": hex::encode(result.supersedes),
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Update failed: {}", e)),
     }
@@ -6169,7 +6374,7 @@ fn mcp_delete_atom_response(
     let delete_reason = mcp_parse_delete_reason(reason_str);
 
     match store.delete_atom(atom_id, delete_reason) {
-        Ok(result) => mcp_text_result(
+        Ok(result) => mcp_structured_result(
             id,
             format!(
                 "Successfully deleted atom:\nOriginal Atom ID: {}\nTombstone ID: {}\nReason: {:?}\nNote: Atom content preserved for audit trail",
@@ -6177,6 +6382,13 @@ fn mcp_delete_atom_response(
                 hex::encode(result.tombstone_id),
                 delete_reason
             ),
+            serde_json::json!({
+                "operation": "delete_atom",
+                "atom_id": atom_id_str,
+                "tombstone_id": hex::encode(result.tombstone_id),
+                "reason": format!("{delete_reason:?}"),
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Delete failed: {}", e)),
     }
@@ -6265,12 +6477,17 @@ fn mcp_register_source_response(
     };
 
     match store.register_source(kind, label, location) {
-        Ok(source) => mcp_text_result(
+        Ok(source) => mcp_structured_result(
             id,
             format!(
                 "Registered source\nSource ID: {}\nKind: {:?}\nLabel: {}",
                 source.source_id, source.kind, source.label
             ),
+            serde_json::json!({
+                "operation": "register_source",
+                "source": source,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Source registration failed: {}", e)),
     }
@@ -6335,12 +6552,18 @@ fn mcp_attach_atom_source_response(
     };
 
     match store.set_atom_source(atom_id, source_id) {
-        Ok(()) => mcp_text_result(
+        Ok(()) => mcp_structured_result(
             id,
             format!(
                 "Attached source\nAtom ID: {}\nSource ID: {}",
                 atom_id_str, source_id
             ),
+            serde_json::json!({
+                "operation": "attach_atom_source",
+                "atom_id": atom_id_str,
+                "source_id": source_id,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Attach source failed: {}", e)),
     }
@@ -6420,7 +6643,15 @@ fn mcp_register_predicate_response(
         cardinality,
     };
     match store.register_predicate(contract) {
-        Ok(predicate) => mcp_text_result(id, mcp_predicate_text(&predicate)),
+        Ok(predicate) => mcp_structured_result(
+            id,
+            mcp_predicate_text(&predicate),
+            serde_json::json!({
+                "operation": "register_predicate",
+                "predicate": predicate,
+                "durability": "committed"
+            }),
+        ),
         Err(error) => mcp_error(
             id,
             -32602,
@@ -6511,12 +6742,17 @@ fn mcp_create_entity_response(
     };
 
     match store.create_entity(canonical_name, entity_type) {
-        Ok(entity) => mcp_text_result(
+        Ok(entity) => mcp_structured_result(
             id,
             format!(
                 "Created entity\nEntity ID: {}\nName: {}\nType: {}",
                 entity.entity_id, entity.canonical_name, entity.entity_type
             ),
+            serde_json::json!({
+                "operation": "create_entity",
+                "entity": entity,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Create entity failed: {}", e)),
     }
@@ -6570,13 +6806,18 @@ fn mcp_alias_entity_response(
     };
 
     match store.alias_entity(entity_id, alias) {
-        Ok(entity) => mcp_text_result(
+        Ok(entity) => mcp_structured_result(
             id,
             format!(
                 "Aliased entity\nEntity ID: {}\nAliases: {}",
                 entity.entity_id,
                 entity.aliases.join(", ")
             ),
+            serde_json::json!({
+                "operation": "alias_entity",
+                "entity": entity,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Alias entity failed: {}", e)),
     }
@@ -6600,7 +6841,7 @@ fn mcp_merge_entities_response(
     };
 
     match store.merge_entities(target_entity, source_entity) {
-        Ok(entity) => mcp_text_result(
+        Ok(entity) => mcp_structured_result(
             id,
             format!(
                 "Merged entities\nTarget Entity ID: {}\nMerged from: {:?}\nAliases: {}",
@@ -6608,6 +6849,11 @@ fn mcp_merge_entities_response(
                 entity.merged_from,
                 entity.aliases.join(", ")
             ),
+            serde_json::json!({
+                "operation": "merge_entities",
+                "entity": entity,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Merge entities failed: {}", e)),
     }
@@ -6634,12 +6880,17 @@ fn mcp_split_entity_response(
     };
 
     match store.split_entity(source_entity, canonical_name, entity_type) {
-        Ok(entity) => mcp_text_result(
+        Ok(entity) => mcp_structured_result(
             id,
             format!(
                 "Split entity\nNew Entity ID: {}\nName: {}\nSplit from: {:?}",
                 entity.entity_id, entity.canonical_name, entity.split_from
             ),
+            serde_json::json!({
+                "operation": "split_entity",
+                "entity": entity,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Split entity failed: {}", e)),
     }
@@ -6678,14 +6929,13 @@ fn mcp_add_claim_response(
         },
         None => ObjTag::U64,
     };
-    let ctx_id = args
-        .get("ctx_id")
-        .and_then(|value| value.as_u64())
-        .and_then(|value| CtxId::try_from(value).ok())
-        .unwrap_or_else(|| store.active_context());
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
     match store.add_entity_claim(entity_id, predicate, object_tag, object, ctx_id, Vec::new()) {
-        Ok(result) => mcp_text_result(
+        Ok(result) => mcp_structured_result(
             id,
             format!(
                 "Added entity claim\nEntity ID: {}\nAtom ID: {}\nContext: {}",
@@ -6693,6 +6943,13 @@ fn mcp_add_claim_response(
                 hex::encode(result.atom_id),
                 result.ctx_id
             ),
+            serde_json::json!({
+                "operation": "add_claim",
+                "entity_id": entity_id,
+                "atom_id": hex::encode(result.atom_id),
+                "ctx_id": result.ctx_id,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Add claim failed: {}", e)),
     }
@@ -6721,14 +6978,13 @@ fn mcp_assert_relation_response(
     let Some(object) = args.get("object").and_then(|value| value.as_u64()) else {
         return mcp_error(id, -32602, "Missing required integer field 'object'");
     };
-    let ctx_id = args
-        .get("ctx_id")
-        .and_then(|value| value.as_u64())
-        .and_then(|value| CtxId::try_from(value).ok())
-        .unwrap_or_else(|| store.active_context());
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
     match store.assert_relation(subject, predicate, object, ctx_id, Vec::new()) {
-        Ok(result) => mcp_text_result(
+        Ok(result) => mcp_structured_result(
             id,
             format!(
                 "Asserted relation\nRelation ID: {}\nAtom ID: {}\nContext: {}",
@@ -6736,6 +6992,13 @@ fn mcp_assert_relation_response(
                 hex::encode(result.atom_id),
                 result.ctx_id
             ),
+            serde_json::json!({
+                "operation": "assert_relation",
+                "relation_id": result.relation_id,
+                "atom_id": hex::encode(result.atom_id),
+                "ctx_id": result.ctx_id,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Assert relation failed: {}", e)),
     }
@@ -6767,14 +7030,13 @@ fn mcp_correct_relation_response(
     let Some(object) = args.get("object").and_then(|value| value.as_u64()) else {
         return mcp_error(id, -32602, "Missing required integer field 'object'");
     };
-    let ctx_id = args
-        .get("ctx_id")
-        .and_then(|value| value.as_u64())
-        .and_then(|value| CtxId::try_from(value).ok())
-        .unwrap_or_else(|| store.active_context());
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
     match store.correct_relation(relation_id, subject, predicate, object, ctx_id, Vec::new()) {
-        Ok(result) => mcp_text_result(
+        Ok(result) => mcp_structured_result(
             id,
             format!(
                 "Corrected relation\nNew Relation ID: {}\nNew Atom ID: {}\nContext: {}",
@@ -6782,6 +7044,13 @@ fn mcp_correct_relation_response(
                 hex::encode(result.atom_id),
                 result.ctx_id
             ),
+            serde_json::json!({
+                "operation": "correct_relation",
+                "relation_id": result.relation_id,
+                "atom_id": hex::encode(result.atom_id),
+                "ctx_id": result.ctx_id,
+                "durability": "committed"
+            }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Correct relation failed: {}", e)),
     }
@@ -6798,11 +7067,12 @@ fn mcp_list_contexts_response(
 
     let mut output = String::new();
     output.push_str("Contexts:\n");
-    output.push_str(&format!("  Active: {}\n", active_ctx));
+    output.push_str(&format!("  Selected context: {}\n", active_ctx));
     output.push_str(&format!("  Total: {}\n\n", contexts.len()));
 
     for (idx, ctx) in contexts.iter().enumerate() {
-        let status = if ctx.active { "active" } else { "frozen" };
+        let status = if ctx.active { "open" } else { "closed" };
+        let selected = ctx.ctx_id == active_ctx;
 
         let parent_str = match ctx.parent_ctx {
             Some(p) => format!("{}", p),
@@ -6810,8 +7080,8 @@ fn mcp_list_contexts_response(
         };
 
         output.push_str(&format!(
-            "[{}] ID: {}, Status: {}, Parent: {}",
-            idx, ctx.ctx_id, status, parent_str
+            "[{}] ID: {}, State: {}, Selected: {}, Parent: {}",
+            idx, ctx.ctx_id, status, selected, parent_str
         ));
 
         // Add branch reason if not Manual
@@ -6841,7 +7111,30 @@ fn mcp_list_contexts_response(
         output.push('\n');
     }
 
-    mcp_text_result(id, output)
+    let structured_contexts = contexts
+        .iter()
+        .map(|ctx| {
+            serde_json::json!({
+                "ctx_id": ctx.ctx_id,
+                "selected": ctx.ctx_id == active_ctx,
+                "state": if ctx.active { "open" } else { "closed" },
+                "parent_ctx": ctx.parent_ctx,
+                "branch_reason": format!("{:?}", ctx.branch_reason).to_lowercase(),
+                "policy_id": ctx.policy_id,
+                "claim_count": ctx.active_claims.len(),
+                "conflict_count": ctx.conflicts.len()
+            })
+        })
+        .collect::<Vec<_>>();
+    mcp_structured_result(
+        id,
+        output,
+        serde_json::json!({
+            "operation": "list_contexts",
+            "selected_context_id": active_ctx,
+            "contexts": structured_contexts
+        }),
+    )
 }
 #[cfg(feature = "mcp")]
 fn mcp_branch_context_response(
@@ -6853,27 +7146,35 @@ fn mcp_branch_context_response(
         Ok(args) => args,
         Err(err) => return err,
     };
-    let Some(parent_ctx) = args.get("parent_ctx").and_then(|value| value.as_u64()) else {
-        return mcp_error(id, -32602, "Missing required integer field 'parent_ctx'");
+    let parent_ctx = match mcp_required_context(store, args, "parent_ctx") {
+        Ok(parent_ctx) => parent_ctx,
+        Err(error) => return mcp_error(id, -32602, error),
     };
     let reason_str = args
         .get("reason")
         .and_then(|value| value.as_str())
         .unwrap_or("Manual");
     let branch_reason = mcp_parse_branch_reason(reason_str);
-    let policy_id = args
-        .get("policy_id")
-        .and_then(|value| value.as_u64())
-        .map(|value| u32::try_from(value).unwrap_or(0))
-        .unwrap_or(0);
+    let policy_id = match mcp_optional_u32(args, "policy_id") {
+        Ok(policy_id) => policy_id.unwrap_or(0),
+        Err(error) => return mcp_error(id, -32602, error),
+    };
 
-    match store.branch_ctx(parent_ctx as u32, branch_reason, policy_id) {
-        Ok(Some(new_ctx)) => mcp_text_result(
+    match store.branch_ctx(parent_ctx, branch_reason, policy_id) {
+        Ok(Some(new_ctx)) => mcp_structured_result(
             id,
             format!(
                 "Created branch context: {}\nParent context: {}\nReason: {:?}\nPolicy ID: {}",
                 new_ctx, parent_ctx, branch_reason, policy_id
             ),
+            serde_json::json!({
+                "operation": "branch_context",
+                "ctx_id": new_ctx,
+                "parent_ctx": parent_ctx,
+                "branch_reason": format!("{branch_reason:?}").to_lowercase(),
+                "policy_id": policy_id,
+                "durability": "committed"
+            }),
         ),
         Ok(None) => mcp_error(id, -32603, "Failed to create branch context"),
         Err(error) => mcp_error(id, -32603, format!("Branch context failed: {error}")),
@@ -7060,14 +7361,40 @@ fn mcp_parse_atom_type(s: &str) -> Option<AtomType> {
 
 #[cfg(feature = "mcp")]
 fn mcp_parse_claim_from_json(value: &serde_json::Value) -> Result<ClaimData, String> {
-    let subj = value.get("subj").and_then(|v| v.as_u64()).unwrap_or(0);
-    let pred = value.get("pred").and_then(|v| v.as_u64()).unwrap_or(0);
-    let obj_tag = value.get("obj_tag").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-    let obj_val = value.get("obj_val").and_then(|v| v.as_u64()).unwrap_or(0);
-    let qualifiers_mask = value
-        .get("qualifiers_mask")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "claim must be a JSON object".to_owned())?;
+    const CLAIM_FIELDS: &[&str] = &["subj", "pred", "obj_tag", "obj_val", "qualifiers_mask"];
+    if let Some(unknown) = object
+        .keys()
+        .find(|field| !CLAIM_FIELDS.contains(&field.as_str()))
+    {
+        return Err(format!("unknown claim field '{unknown}'"));
+    }
+    let required_u64 = |field: &str| {
+        object
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("claim field '{field}' must be an unsigned integer"))
+    };
+    let subj = required_u64("subj")?;
+    let pred = required_u64("pred")?;
+    let obj_tag_raw = required_u64("obj_tag")?;
+    let obj_tag = u8::try_from(obj_tag_raw)
+        .map_err(|_| "claim field 'obj_tag' is outside u8 range".to_owned())?;
+    ObjTag::from_u8(obj_tag)
+        .ok_or_else(|| format!("claim field 'obj_tag' has unsupported value {obj_tag}"))?;
+    let obj_val = required_u64("obj_val")?;
+    let qualifiers_mask = match object.get("qualifiers_mask") {
+        None => 0,
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| "claim field 'qualifiers_mask' must be an unsigned integer".to_owned())
+            .and_then(|value| {
+                u32::try_from(value)
+                    .map_err(|_| "claim field 'qualifiers_mask' is outside u32 range".to_owned())
+            })?,
+    };
 
     Ok(ClaimData {
         subj,
@@ -7079,33 +7406,61 @@ fn mcp_parse_claim_from_json(value: &serde_json::Value) -> Result<ClaimData, Str
 }
 
 #[cfg(feature = "mcp")]
+fn mcp_parse_symbols(
+    value: Option<&serde_json::Value>,
+    field: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .ok_or_else(|| format!("field '{field}' must be an array"))?
+        .iter()
+        .map(|symbol| {
+            symbol
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| format!("field '{field}' entries must be strings"))
+        })
+        .collect()
+}
+
+#[cfg(feature = "mcp")]
 fn mcp_parse_batch_atom_from_json(value: &serde_json::Value) -> Result<BatchAtom, String> {
-    let atom_type_str = value
+    let object = value
+        .as_object()
+        .ok_or_else(|| "batch atom must be a JSON object".to_owned())?;
+    let atom_type_str = object
         .get("atom_type")
         .and_then(|v| v.as_str())
-        .unwrap_or("FACT");
+        .ok_or_else(|| "batch atom field 'atom_type' must be a string".to_owned())?;
     let atom_type = mcp_parse_atom_type(atom_type_str)
         .ok_or_else(|| format!("Invalid atom type: {}", atom_type_str))?;
 
-    let claims_json: Vec<serde_json::Value> = value
+    let claims_json = object
         .get("claims")
         .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| "batch atom field 'claims' must be an array".to_owned())?;
     let claims: Vec<ClaimData> = claims_json
         .iter()
         .map(mcp_parse_claim_from_json)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let symbols: Vec<String> = value
-        .get("symbols")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let symbols = match object.get("symbols") {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| "batch atom field 'symbols' must be an array".to_owned())?
+            .iter()
+            .map(|symbol| {
+                symbol
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| "batch atom symbols must be strings".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
 
     let payload = mcp_build_atom_payload(atom_type, &symbols, &claims, 5000, 0xFFFF)
         .map_err(|e| format!("Failed to build payload: {}", e))?;
@@ -8903,5 +9258,285 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn ingest_rejects_stringified_claim_without_mutating_store() {
+        let dir = tempdir().unwrap();
+        let mut state = test_mcp_state(dir.path().join("strict-claims"));
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 500,
+            "method": "tools/call",
+            "params": {
+                "name": "ingest",
+                "arguments": {
+                    "atom_type": "DECISION",
+                    "claims": ["{\"subj\":1,\"pred\":2,\"obj_tag\":3,\"obj_val\":4}"],
+                    "symbols": ["must_not_persist"]
+                }
+            }
+        })
+        .to_string();
+        let response = process_mcp_request(&mut state, &request).await;
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("JSON object"))
+        );
+        assert!(
+            test_mcp_active_store_mut(&mut state)
+                .list_atom_ids()
+                .is_empty()
+        );
+
+        for (id_value, claim) in [
+            (
+                504,
+                serde_json::json!({
+                    "subj": 1, "pred": 2, "obj_tag": 3, "obj_val": 4,
+                    "qualifiers_mask": "zero"
+                }),
+            ),
+            (
+                505,
+                serde_json::json!({
+                    "subj": 1, "pred": 2, "obj_tag": 3, "obj_val": 4,
+                    "qualifiers_mask": u64::from(u32::MAX) + 1
+                }),
+            ),
+        ] {
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id_value,
+                "method": "tools/call",
+                "params": {
+                    "name": "ingest",
+                    "arguments": {"atom_type": "FACT", "claims": [claim]}
+                }
+            })
+            .to_string();
+            let response = process_mcp_request(&mut state, &request).await;
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["error"]["code"], -32602);
+            assert!(
+                test_mcp_active_store_mut(&mut state)
+                    .list_atom_ids()
+                    .is_empty()
+            );
+        }
+
+        let invalid_context = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 506,
+            "method": "tools/call",
+            "params": {
+                "name": "query",
+                "arguments": {
+                    "query_text": "nothing",
+                    "ctx_id": u64::from(u32::MAX) + 1
+                }
+            }
+        })
+        .to_string();
+        let response = process_mcp_request(&mut state, &invalid_context).await;
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+
+        for (id_value, policy_id) in [
+            (507, serde_json::json!("seven")),
+            (508, serde_json::json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id_value,
+                "method": "tools/call",
+                "params": {
+                    "name": "create_context",
+                    "arguments": {"policy_id": policy_id}
+                }
+            })
+            .to_string();
+            let response = process_mcp_request(&mut state, &request).await;
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["error"]["code"], -32602);
+        }
+        assert!(
+            test_mcp_active_store_mut(&mut state)
+                .list_contexts()
+                .is_empty()
+        );
+
+        let create_context = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 509,
+            "method": "tools/call",
+            "params": {
+                "name": "create_context",
+                "arguments": {"policy_id": 7}
+            }
+        })
+        .to_string();
+        let response = process_mcp_request(&mut state, &create_context).await;
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["result"]["structuredContent"]["ctx_id"], 0);
+
+        let invalid_context_calls = [
+            serde_json::json!({
+                "name": "query",
+                "arguments": {"query_text": "nothing", "ctx_id": 99}
+            }),
+            serde_json::json!({
+                "name": "explain_answer_graph",
+                "arguments": {"query_text": "nothing", "ctx_id": 99}
+            }),
+            serde_json::json!({
+                "name": "list_conflicts",
+                "arguments": {"ctx_id": 99}
+            }),
+            serde_json::json!({
+                "name": "add_claim",
+                "arguments": {
+                    "entity_id": 1, "predicate": 2, "object": 3, "ctx_id": 99
+                }
+            }),
+            serde_json::json!({
+                "name": "assert_relation",
+                "arguments": {
+                    "subject": 1, "predicate": 2, "object": 3,
+                    "ctx_id": u64::from(u32::MAX) + 1
+                }
+            }),
+            serde_json::json!({
+                "name": "correct_relation",
+                "arguments": {
+                    "relation_id": 1, "subject": 1, "predicate": 2, "object": 3,
+                    "ctx_id": "zero"
+                }
+            }),
+            serde_json::json!({
+                "name": "branch_context",
+                "arguments": {"parent_ctx": 99, "policy_id": 0}
+            }),
+            serde_json::json!({
+                "name": "branch_context",
+                "arguments": {
+                    "parent_ctx": u64::from(u32::MAX) + 1, "policy_id": 0
+                }
+            }),
+            serde_json::json!({
+                "name": "branch_context",
+                "arguments": {
+                    "parent_ctx": 0, "policy_id": u64::from(u32::MAX) + 1
+                }
+            }),
+        ];
+        for (offset, params) in invalid_context_calls.into_iter().enumerate() {
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 510 + offset,
+                "method": "tools/call",
+                "params": params
+            })
+            .to_string();
+            let response = process_mcp_request(&mut state, &request).await;
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                response["error"]["code"], -32602,
+                "request unexpectedly passed: {response}"
+            );
+        }
+        let store = test_mcp_active_store_mut(&mut state);
+        assert_eq!(store.list_contexts().len(), 1);
+        assert!(store.list_atom_ids().is_empty());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn mutation_and_context_results_are_structured_and_unambiguous() {
+        let dir = tempdir().unwrap();
+        let mut state = test_mcp_state(dir.path().join("structured-mutations"));
+        let create = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 501,
+            "method": "tools/call",
+            "params": {"name": "create_context", "arguments": {"policy_id": 7}}
+        })
+        .to_string();
+        let create = process_mcp_request(&mut state, &create).await;
+        let create: serde_json::Value = serde_json::from_str(&create).unwrap();
+        assert_eq!(
+            create["result"]["structuredContent"]["operation"],
+            "create_context"
+        );
+        assert_eq!(create["result"]["structuredContent"]["ctx_id"], 0);
+        assert_eq!(
+            create["result"]["structuredContent"]["durability"],
+            "committed"
+        );
+
+        let list = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 502,
+            "method": "tools/call",
+            "params": {"name": "list_contexts", "arguments": {}}
+        })
+        .to_string();
+        let list = process_mcp_request(&mut state, &list).await;
+        let list: serde_json::Value = serde_json::from_str(&list).unwrap();
+        let structured = &list["result"]["structuredContent"];
+        assert_eq!(structured["selected_context_id"], 0);
+        assert_eq!(structured["contexts"][0]["selected"], true);
+        assert_eq!(structured["contexts"][0]["state"], "open");
+    }
+
+    #[test]
+    fn explicit_absolute_project_scoped_base_is_cwd_independent() {
+        let dir = tempdir().unwrap();
+        let base = dir
+            .path()
+            .join("external-project")
+            .join(".memoryx")
+            .join("bases")
+            .join("knowledge");
+        let validated = validate_allowed_base_path(&base).unwrap();
+        assert!(validated.ends_with(Path::new(".memoryx").join("bases").join("knowledge")));
+        let arbitrary = dir.path().join("external-project").join("knowledge");
+        assert!(validate_allowed_base_path(&arbitrary).is_err());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn ingest_tool_schema_requires_typed_claim_objects() {
+        let dir = tempdir().unwrap();
+        let mut state = test_mcp_state(dir.path().join("claim-schema"));
+        let listed = process_mcp_request(
+            &mut state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 503,
+                "method": "tools/list",
+                "params": {}
+            })
+            .to_string(),
+        )
+        .await;
+        let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        let ingest = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "ingest")
+            .unwrap();
+        let claim = &ingest["inputSchema"]["properties"]["claims"]["items"];
+        assert_eq!(claim["type"], "object");
+        assert_eq!(
+            claim["required"],
+            serde_json::json!(["subj", "pred", "obj_tag", "obj_val"])
+        );
+        assert_eq!(claim["additionalProperties"], false);
     }
 }
