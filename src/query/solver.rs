@@ -1744,10 +1744,6 @@ impl FixedPointSolver {
     ///
     /// Uses the candidate's atom_id to read the full atom body from storage.
     fn load_atom_body(&self, atom_id: &AtomId) -> Result<Vec<u8>, SolverError> {
-        // Re-init reader to see newly written atoms (Windows file sharing workaround)
-        if let Err(e) = self.cas.init_reader() {
-            eprintln!("WARN: init_reader failed: {:?}", e);
-        }
         self.cas
             .read(atom_id)
             .map_err(|e| SolverError::CasError(e.to_string()))?
@@ -1820,6 +1816,14 @@ impl FixedPointSolver {
         let solve_started = std::time::Instant::now();
         // Validate configuration
         self.config.validate()?;
+        // Refresh the persisted CAS view once for the whole query. Rebuilding
+        // the reader for every routed candidate reloads every segment index and
+        // can exceed QueryContract.max_time_ms before the solver gets another
+        // opportunity to observe its cooperative deadline. Atoms written by
+        // the live owner remain visible through CasStore's write-through cache.
+        self.cas
+            .init_reader()
+            .map_err(|error| SolverError::CasError(error.to_string()))?;
 
         // Reuse an explicitly selected context. Legacy callers pass a policy id
         // here, so a missing id still creates a context with that policy.
@@ -1839,7 +1843,7 @@ impl FixedPointSolver {
         let mut state = SolverState::new(ctx_id, goal, gaps);
 
         // Run fixed-point iterations
-        self.run_iterations(&mut state)?;
+        self.run_iterations(&mut state, solve_started)?;
 
         // Build answer pack with full confidence, limitations
         let mut pack = AnswerPack::from_solver(
@@ -2032,19 +2036,67 @@ impl FixedPointSolver {
             }
         }
 
-        candidates = self.filter_by_contract_constraints(candidates, state).0;
+        candidates = Self::merge_duplicate_candidates(candidates);
+        self.filter_by_contract_constraints(candidates, state).0
+    }
 
-        // Deduplicate by atom_id
-        let mut seen = std::collections::HashSet::new();
-        candidates.retain(|c| seen.insert(c.atom_id));
+    /// Merge repeated router hits before invariant evaluation and inference.
+    ///
+    /// LOOKUP goals commonly route the same physical atom for both their fact
+    /// and evidence gaps. Keeping both copies multiplies CAS reads, invariant
+    /// evaluation, inference, and branch work without adding information.
+    /// Branch-qualified candidates remain distinct.
+    fn merge_duplicate_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
+        let mut merged = Vec::<Candidate>::new();
+        let mut positions = std::collections::HashMap::<(AtomId, Option<CtxId>), usize>::new();
 
-        candidates
+        for mut candidate in candidates {
+            candidate.covers_gaps.sort_unstable();
+            candidate.covers_gaps.dedup();
+            let key = (candidate.atom_id, candidate.branch_ctx_id);
+            if let Some(&position) = positions.get(&key) {
+                let existing = &mut merged[position];
+                existing.covers_gaps.extend(candidate.covers_gaps);
+                existing.covers_gaps.sort_unstable();
+                existing.covers_gaps.dedup();
+                // Preserve the strictest gate and the most conservative cost /
+                // trust metadata when the same atom arrived through different
+                // router backends. In particular, an ANN duplicate may never
+                // lose its mandatory invariant-filter flag.
+                existing.requires_invariant_check |= candidate.requires_invariant_check;
+                existing.ann_candidate_requires_filtering |=
+                    candidate.ann_candidate_requires_filtering;
+                existing.trust = existing.trust.min(candidate.trust);
+                existing.estimated_io_bytes = existing
+                    .estimated_io_bytes
+                    .max(candidate.estimated_io_bytes);
+                existing.hard_conflicts = existing.hard_conflicts.max(candidate.hard_conflicts);
+                existing.soft_conflicts = existing.soft_conflicts.max(candidate.soft_conflicts);
+                for evidence in candidate.evidence_refs {
+                    if !existing.evidence_refs.iter().any(|current| {
+                        current.atom_id == evidence.atom_id
+                            && current.offset == evidence.offset
+                            && current.section_kind == evidence.section_kind
+                    }) {
+                        existing.evidence_refs.push(evidence);
+                    }
+                }
+            } else {
+                positions.insert(key, merged.len());
+                merged.push(candidate);
+            }
+        }
+
+        merged
     }
 
     /// Run fixed-point iterations until convergence or limits
-    fn run_iterations(&self, state: &mut SolverState) -> Result<(), SolverError> {
+    fn run_iterations(
+        &self,
+        state: &mut SolverState,
+        started: std::time::Instant,
+    ) -> Result<(), SolverError> {
         let max_iterations = self.config.max_iterations;
-        let started = std::time::Instant::now();
         let initial_context_count = self.ctx_manager.lock().list_contexts().len();
         let mut prev_graph_cost = f64::NEG_INFINITY;
         let mut stable_count = 0;
@@ -2168,11 +2220,16 @@ impl FixedPointSolver {
             }
         }
 
+        all_candidates = Self::merge_duplicate_candidates(all_candidates);
         let (filtered_candidates, contract_rejections) =
             self.filter_by_contract_constraints(all_candidates, state);
         state.rejected_candidates.extend(contract_rejections);
         let all_candidates = filtered_candidates;
 
+        if self.deadline_exceeded(started) {
+            state.budget_exceeded = true;
+            return Ok(());
+        }
         if all_candidates.is_empty() {
             return Ok(()); // No candidates available
         }
@@ -2245,6 +2302,10 @@ impl FixedPointSolver {
 
         // Step 4: Infer new claims and integrate them into the current fixed-point state
         let inferred_steps = self.infer_claim_steps(&admissible, &ctx_updated);
+        if self.deadline_exceeded(started) {
+            state.budget_exceeded = true;
+            return Ok(());
+        }
 
         // Step 5: Build minimal support subgraph (set cover)
         let mut selected_indices = SetCoverSolver::greedy_select(
@@ -2253,6 +2314,10 @@ impl FixedPointSolver {
             &self.cost_weights,
             state.goal.output_schema,
         );
+        if self.deadline_exceeded(started) {
+            state.budget_exceeded = true;
+            return Ok(());
+        }
         let mut io_used = state
             .fetched_offsets
             .iter()
@@ -2277,6 +2342,10 @@ impl FixedPointSolver {
 
         // Step 6: Update answer graph
         for &idx in &selected_indices {
+            if self.deadline_exceeded(started) {
+                state.budget_exceeded = true;
+                break;
+            }
             let candidate = &admissible[idx];
 
             // Create node
@@ -2320,6 +2389,10 @@ impl FixedPointSolver {
 
         // Add edges for connectivity
         self.add_edges(&mut state.answer_graph, &selected_indices, &admissible);
+        if self.deadline_exceeded(started) {
+            state.budget_exceeded = true;
+            return Ok(());
+        }
 
         // Step 6.1: Add derived claims to the answer graph and let them close remaining gaps
         self.apply_inferred_claims(
@@ -3587,10 +3660,18 @@ impl FixedPointSolver {
 
     /// Solve with custom context
     pub fn solve_with_ctx(&self, goal: GoalSpec, ctx_id: CtxId) -> Result<AnswerPack, SolverError> {
+        let solve_started = std::time::Instant::now();
+        self.config.validate()?;
+        self.cas
+            .init_reader()
+            .map_err(|error| SolverError::CasError(error.to_string()))?;
         let gaps = BackwardWaveGenerator::generate(&goal);
         let mut state = SolverState::new(ctx_id, goal, gaps);
 
-        self.run_iterations(&mut state)?;
+        self.run_iterations(&mut state, solve_started)?;
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
 
         let mut pack = AnswerPack::from_solver(
             state.answer_graph.clone(),
@@ -3599,6 +3680,9 @@ impl FixedPointSolver {
             &self.cost_weights,
         );
         self.extract_claims(&mut pack, &state);
+        if self.deadline_exceeded(solve_started) {
+            return Ok(Self::deadline_exhausted_pack(state.ctx_id));
+        }
         if pack.graph.nodes.is_empty() && state.goal.lexical_resolution_required {
             pack.status = AnswerStatus::NoMatch;
         } else if !pack.graph.nodes.is_empty() && pack.claims.is_empty() {
@@ -3729,6 +3813,47 @@ mod tests {
         let weights = CostWeights::default();
         let ratio = candidate.benefit_cost_ratio(&gaps, &weights);
         assert!(ratio > 0.0);
+    }
+
+    #[test]
+    fn duplicate_router_hits_merge_gap_coverage_but_preserve_branches() {
+        let candidate = Candidate {
+            atom_id: [7u8; 32],
+            node_num: 7,
+            seg_id: 0,
+            offset: 0,
+            atom_type: AtomType::FACT,
+            trust: 5000,
+            estimated_io_bytes: 256,
+            source_priority: SourcePriority::CasExact,
+            source_backend: crate::query::router::BackendKind::Cas,
+            covers_gaps: vec![0],
+            hard_conflicts: 0,
+            soft_conflicts: 0,
+            age_ns: 0,
+            domain_mask: 0xFFFF,
+            evidence_refs: Vec::new(),
+            derived_claims: Vec::new(),
+            requires_invariant_check: true,
+            ann_candidate_requires_filtering: false,
+            branch_ctx_id: None,
+        };
+        let mut repeated = candidate.clone();
+        repeated.covers_gaps = vec![1, 0, 1];
+        let mut branch_qualified = candidate.clone();
+        branch_qualified.branch_ctx_id = Some(9);
+        branch_qualified.covers_gaps = vec![2];
+
+        let merged = FixedPointSolver::merge_duplicate_candidates(vec![
+            candidate,
+            repeated,
+            branch_qualified,
+        ]);
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].covers_gaps, vec![0, 1]);
+        assert_eq!(merged[1].branch_ctx_id, Some(9));
+        assert_eq!(merged[1].covers_gaps, vec![2]);
     }
 
     #[test]
