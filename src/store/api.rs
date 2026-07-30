@@ -80,7 +80,13 @@ fn normalized_lexical_terms(values: impl IntoIterator<Item = String>) -> Vec<Str
             normalized
                 .split(|character: char| !(character.is_alphanumeric() || character == '_'))
                 .filter(|term| !term.is_empty())
-                .map(ToOwned::to_owned),
+                .flat_map(|term| {
+                    std::iter::once(term.to_owned()).chain(
+                        term.split('_')
+                            .filter(|part| !part.is_empty())
+                            .map(ToOwned::to_owned),
+                    )
+                }),
         );
     }
     terms.sort();
@@ -1706,6 +1712,7 @@ pub enum HistoryOperation {
     Ingest,
     BatchIngest,
     UpdateAtom,
+    TransitionRelation,
     DeleteAtom,
     RebuildIndexes,
     Repair,
@@ -1800,6 +1807,17 @@ pub struct AuthoringResult {
     pub atom_id: AtomId,
     pub relation_id: Option<u64>,
     pub ctx_id: CtxId,
+}
+
+/// Result of replacing one current relation with a durable successor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationTransitionResult {
+    pub previous_relation_id: u64,
+    pub previous_atom_id: AtomId,
+    pub relation_id: u64,
+    pub atom_id: AtomId,
+    pub ctx_id: CtxId,
+    pub source_ids: Vec<SourceId>,
 }
 
 // ============================================================================
@@ -3115,6 +3133,49 @@ impl CtxManager {
             ctx.active_claims.insert(claim_id, active_claim);
         }
 
+        Ok(ctx_id)
+    }
+
+    /// Replace one explicitly identified active claim in the same context.
+    ///
+    /// This is the TMS operation used by current-state relation transitions:
+    /// the incumbent must be active, is removed before conflict probing, and
+    /// the successor is installed without creating an implicit branch.
+    pub fn replace_claim_with_atom_id(
+        &mut self,
+        ctx_id: CtxId,
+        old_atom_id: AtomId,
+        claim: &ClaimData,
+        new_atom_id: AtomId,
+    ) -> Result<CtxId, StoreError> {
+        let mut preview = self.clone();
+        let preview_ctx = preview
+            .get_ctx_mut(ctx_id)
+            .ok_or(StoreError::ContextNotFound)?;
+        let previous_len = preview_ctx.active_claims.len();
+        preview_ctx
+            .active_claims
+            .retain(|_, active| active.atom_id != old_atom_id);
+        if preview_ctx.active_claims.len() == previous_len {
+            return Err(StoreError::ClaimRejected(
+                "relation being replaced is not active in the selected context".to_owned(),
+            ));
+        }
+        if preview
+            .probe_conflict_with_atoms(ctx_id, claim, new_atom_id)
+            .is_some()
+        {
+            return Err(StoreError::ClaimRejected(
+                "replacement relation conflicts with another active claim".to_owned(),
+            ));
+        }
+        let claim_id = Self::compute_claim_id(claim);
+        preview
+            .get_ctx_mut(ctx_id)
+            .ok_or(StoreError::ContextNotFound)?
+            .active_claims
+            .insert(claim_id, ActiveClaim::new(new_atom_id, claim.clone()));
+        *self = preview;
         Ok(ctx_id)
     }
 
@@ -5164,6 +5225,31 @@ pub struct StoreIntegritySummary {
     pub errors: Vec<String>,
 }
 
+/// Logical and physical counts with explicit, stable metric semantics.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StoreStatistics {
+    /// Non-tombstoned CAS atoms, including superseded atoms retained for history.
+    pub cas_live_atom_count: usize,
+    /// Claims contained in non-tombstoned CAS atoms, including superseded history.
+    pub cas_live_claim_count: usize,
+    /// Non-tombstoned CAS atom counts grouped by atom type.
+    pub cas_live_atom_types: std::collections::BTreeMap<String, usize>,
+    /// Non-tombstoned atoms that are not superseded by a newer atom.
+    pub current_atom_count: usize,
+    /// Claims contained in current, non-superseded atoms.
+    pub current_claim_count: usize,
+    /// Relation records after deprecation and supersession filtering.
+    pub active_relation_count: usize,
+    pub registered_entity_count: usize,
+    pub registered_predicate_count: usize,
+    pub registered_source_count: usize,
+    pub context_count: usize,
+    pub conflict_count: usize,
+    /// Graph storage counts include historical and superseded nodes/edges.
+    pub physical_graph_node_count: u64,
+    pub physical_graph_edge_count: u64,
+}
+
 impl StoreIntegritySummary {
     #[inline]
     pub fn is_valid(&self) -> bool {
@@ -6100,6 +6186,15 @@ impl MemoryX {
         pack.evidence.clear();
         pack.evidence_records.clear();
         for node in &mut pack.graph.nodes {
+            if let Some(metadata) = self.meta.get_meta(&node.atom_ref.atom_id)
+                && !self
+                    .list_atom_source_ids(&node.atom_ref.atom_id)?
+                    .is_empty()
+                && let Some(evidence) =
+                    Self::attached_source_evidence_ref(node.atom_ref.atom_id, metadata)
+            {
+                node.evidence_refs.push(evidence);
+            }
             let mut unique_refs = Vec::with_capacity(node.evidence_refs.len());
             for evidence in std::mem::take(&mut node.evidence_refs) {
                 if !unique_refs
@@ -6649,6 +6744,60 @@ impl MemoryX {
             })
             .map(|predicate| predicate.predicate_id)
             .collect::<HashSet<_>>();
+        let entity_terms = entities
+            .iter()
+            .map(|entity| {
+                (
+                    entity.entity_id,
+                    normalized_lexical_terms(
+                        [entity.canonical_name.clone()]
+                            .into_iter()
+                            .chain(entity.aliases.clone()),
+                    )
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let predicate_terms = predicates
+            .iter()
+            .map(|predicate| {
+                (
+                    predicate.predicate_id,
+                    normalized_lexical_terms([
+                        predicate.contract.stable_key.clone(),
+                        predicate.contract.canonical_name.clone(),
+                    ])
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let exact_specific_terms = entities
+            .iter()
+            .flat_map(|entity| std::iter::once(&entity.canonical_name).chain(entity.aliases.iter()))
+            .chain(predicates.iter().flat_map(|predicate| {
+                [
+                    &predicate.contract.stable_key,
+                    &predicate.contract.canonical_name,
+                ]
+            }))
+            .map(|value| value.nfkc().collect::<String>().trim().to_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>();
+        let known_relation_terms = query_terms
+            .iter()
+            .filter(|query| {
+                entity_terms.values().any(|terms| terms.contains(*query))
+                    || predicate_terms.values().any(|terms| terms.contains(*query))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let relation_metadata_is_specific = !known_relation_terms.is_empty()
+            && (known_relation_terms.len() >= 2
+                || known_relation_terms
+                    .iter()
+                    .any(|term| exact_specific_terms.contains(term)));
 
         let mut atom_ids = entities
             .iter()
@@ -6664,12 +6813,24 @@ impl MemoryX {
             relations
                 .iter()
                 .filter(|relation| {
+                    let relation_terms = entity_terms
+                        .get(&relation.subject)
+                        .into_iter()
+                        .chain(entity_terms.get(&relation.object))
+                        .chain(predicate_terms.get(&relation.predicate))
+                        .flat_map(|terms| terms.iter())
+                        .collect::<HashSet<_>>();
+                    let relation_metadata_match = relation_metadata_is_specific
+                        && known_relation_terms
+                            .iter()
+                            .all(|term| relation_terms.contains(term));
                     (include_superseded
                         || (!relation.deprecated
                             && !relation_superseded.contains(&relation.relation_id)))
                         && (matching_entities.contains(&relation.subject)
                             || matching_entities.contains(&relation.object)
-                            || matching_predicates.contains(&relation.predicate))
+                            || matching_predicates.contains(&relation.predicate)
+                            || relation_metadata_match)
                 })
                 .map(|relation| relation.atom_id),
         );
@@ -7144,6 +7305,172 @@ impl MemoryX {
         })
     }
 
+    /// Replace one current relation while retaining immutable history.
+    ///
+    /// The old relation and atom remain durable and the successor carries a
+    /// `SUPERSEDES` link. The selected context replaces the old active claim
+    /// rather than retaining two current values or creating an implicit branch.
+    /// Registered source ids are accumulated on the successor atom.
+    pub fn transition_relation(
+        &mut self,
+        old_relation_id: u64,
+        new_object: EntityId,
+        ctx_id: CtxId,
+        evidence: Vec<EvidenceRef>,
+        source_ids: Vec<SourceId>,
+    ) -> Result<RelationTransitionResult, StoreError> {
+        if self.get_entity(new_object)?.is_none() {
+            return Err(StoreError::Io(format!("entity {} not found", new_object)));
+        }
+        let relations = self.read_relations()?;
+        let superseded = relations
+            .iter()
+            .filter_map(|relation| relation.supersedes)
+            .collect::<HashSet<_>>();
+        let old_relation = relations
+            .iter()
+            .find(|relation| relation.relation_id == old_relation_id)
+            .cloned()
+            .ok_or_else(|| StoreError::Io(format!("relation {} not found", old_relation_id)))?;
+        if old_relation.deprecated || superseded.contains(&old_relation_id) {
+            return Err(StoreError::Io(format!(
+                "relation {} is not current",
+                old_relation_id
+            )));
+        }
+        if old_relation.object == new_object {
+            return Err(StoreError::Io(format!(
+                "relation {} already has object {}",
+                old_relation_id, new_object
+            )));
+        }
+        self.validate_relation_contract(
+            old_relation.subject,
+            old_relation.predicate,
+            new_object,
+            Some(old_relation_id),
+        )?;
+
+        let mut source_ids = source_ids;
+        source_ids.sort_unstable();
+        source_ids.dedup();
+        if source_ids.len() > MAX_SOURCES_PER_ATOM {
+            return Err(StoreError::Io(format!(
+                "relation transition exceeds {MAX_SOURCES_PER_ATOM} source attachments"
+            )));
+        }
+        for source_id in &source_ids {
+            if self.get_source(*source_id)?.is_none() {
+                return Err(StoreError::Io(format!("source {} not found", source_id)));
+            }
+        }
+
+        let claim = ClaimData {
+            subj: old_relation.subject,
+            pred: u64::from(old_relation.predicate),
+            obj_tag: ObjTag::NODENUM.to_u8(),
+            obj_val: new_object,
+            qualifiers_mask: 0,
+        };
+        let symbols = self.authoring_symbols(
+            old_relation.subject,
+            old_relation.predicate,
+            Some(new_object),
+        )?;
+        let payload =
+            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
+        let atom_id = compute_atom_id_from_payload(&payload)?;
+        let mut context_preview = self.ctx_manager.lock().clone();
+        context_preview
+            .replace_claim_with_atom_id(ctx_id, old_relation.atom_id, &claim, atom_id)
+            .map_err(|error| {
+                StoreError::Context(format!("relation transition preflight failed: {error}"))
+            })?;
+
+        let relation_id = relations
+            .iter()
+            .map(|relation| relation.relation_id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Io("relation id space exhausted".to_owned()))?;
+        let relation = RelationRecord {
+            relation_id,
+            subject: old_relation.subject,
+            predicate: old_relation.predicate,
+            object: new_object,
+            atom_id,
+            evidence: evidence.clone(),
+            valid_time: None,
+            context: ctx_id,
+            confidence: old_relation.confidence,
+            supersedes: Some(old_relation_id),
+            deprecated: false,
+            updated_at_unix_ns: current_unix_ns(),
+        };
+        self.preflight_relation(&relation)?;
+
+        let update = self.update_atom(
+            old_relation.atom_id,
+            payload,
+            AtomType::FACT,
+            vec![claim.clone()],
+            evidence,
+        )?;
+        debug_assert_eq!(update.new_atom_id, atom_id);
+        for source_id in &source_ids {
+            self.set_atom_source(atom_id, *source_id)?;
+        }
+        self.replace_claim_with_atom_id(ctx_id, old_relation.atom_id, &claim, atom_id)
+            .map_err(|error| {
+                StoreError::Context(format!(
+                    "relation transition context persistence failed: {error}"
+                ))
+            })?;
+        self.append_relation(&relation)?;
+
+        let mut details = HashMap::new();
+        details.insert(
+            "previous_relation_id".to_owned(),
+            old_relation_id.to_string(),
+        );
+        details.insert("relation_id".to_owned(), relation_id.to_string());
+        details.insert("subject".to_owned(), old_relation.subject.to_string());
+        details.insert("predicate".to_owned(), old_relation.predicate.to_string());
+        details.insert(
+            "previous_object".to_owned(),
+            old_relation.object.to_string(),
+        );
+        details.insert("object".to_owned(), new_object.to_string());
+        details.insert("context".to_owned(), ctx_id.to_string());
+        details.insert(
+            "source_ids".to_owned(),
+            source_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        self.record_history(
+            HistoryOperation::TransitionRelation,
+            vec![
+                crate::cas::hex_encode(&atom_id),
+                crate::cas::hex_encode(&old_relation.atom_id),
+            ],
+            details,
+        )?;
+        self.flush()?;
+
+        Ok(RelationTransitionResult {
+            previous_relation_id: old_relation_id,
+            previous_atom_id: old_relation.atom_id,
+            relation_id,
+            atom_id,
+            ctx_id,
+            source_ids,
+        })
+    }
+
     /// High-level context fork wrapper for authoring workflows.
     pub fn fork_context(
         &mut self,
@@ -7544,7 +7871,7 @@ impl MemoryX {
                     }
                 }
             }
-            if lexical_terms_fully_resolved {
+            if !lexical_query_terms.is_empty() {
                 for atom_id in
                     self.metadata_atoms_for_terms(&lexical_query_terms, include_superseded)?
                 {
@@ -7677,6 +8004,53 @@ impl MemoryX {
             index_generation: self.loc_index.live_atom_ids().len() as u64,
             context_id,
             solver_version: env!("CARGO_PKG_VERSION").to_owned(),
+        })
+    }
+
+    /// Return stable logical metrics plus explicitly labelled physical graph metrics.
+    pub fn statistics(&self) -> Result<StoreStatistics, StoreError> {
+        let atom_ids = self.list_atom_ids();
+        let superseded_atoms = self.superseded_atom_ids();
+        let mut cas_live_claim_count = 0usize;
+        let mut cas_live_atom_types = std::collections::BTreeMap::new();
+        let mut current_atom_count = 0usize;
+        let mut current_claim_count = 0usize;
+        for atom_id in &atom_ids {
+            let atom = self.get_atom(atom_id)?;
+            cas_live_claim_count = cas_live_claim_count.saturating_add(atom.claims.len());
+            *cas_live_atom_types
+                .entry(format!("{:?}", atom.atom_type))
+                .or_insert(0) += 1;
+            if !superseded_atoms.contains(atom_id) {
+                current_atom_count = current_atom_count.saturating_add(1);
+                current_claim_count = current_claim_count.saturating_add(atom.claims.len());
+            }
+        }
+        let relations = self.read_relations()?;
+        let superseded = relations
+            .iter()
+            .filter_map(|relation| relation.supersedes)
+            .collect::<HashSet<_>>();
+        let active_relation_count = relations
+            .iter()
+            .filter(|relation| !relation.deprecated && !superseded.contains(&relation.relation_id))
+            .count();
+        let contexts = self.list_contexts();
+        let conflict_count = contexts.iter().map(|context| context.conflicts.len()).sum();
+        Ok(StoreStatistics {
+            cas_live_atom_count: atom_ids.len(),
+            cas_live_claim_count,
+            cas_live_atom_types,
+            current_atom_count,
+            current_claim_count,
+            active_relation_count,
+            registered_entity_count: self.list_entities()?.len(),
+            registered_predicate_count: self.list_predicates()?.len(),
+            registered_source_count: self.sources.len(),
+            context_count: contexts.len(),
+            conflict_count,
+            physical_graph_node_count: self.graph.node_count(),
+            physical_graph_edge_count: self.graph.edge_count(),
         })
     }
 
@@ -7861,6 +8235,18 @@ impl MemoryX {
         atom_id: AtomId,
     ) -> Result<CtxId, StoreError> {
         self.mutate_contexts(|manager| manager.assert_claim_with_atom_id(ctx_id, claim, atom_id))
+    }
+
+    fn replace_claim_with_atom_id(
+        &mut self,
+        ctx_id: CtxId,
+        old_atom_id: AtomId,
+        claim: &ClaimData,
+        new_atom_id: AtomId,
+    ) -> Result<CtxId, StoreError> {
+        self.mutate_contexts(|manager| {
+            manager.replace_claim_with_atom_id(ctx_id, old_atom_id, claim, new_atom_id)
+        })
     }
 
     /// List conflicts in a context (SKF-1.1 §10.3, 3.3)
@@ -12952,5 +13338,298 @@ mod tests {
             )
             .unwrap();
         assert_eq!(common_token.status, AnswerStatus::NoMatch);
+    }
+
+    #[test]
+    fn exact_relation_metadata_query_ignores_filler_terms_and_preserves_no_match() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("relation-natural-query"));
+        let relation_atom;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let module = store.create_entity("kpa-mod-520", "module").unwrap();
+            let session = store
+                .create_entity("019fb2a9-8464-75e0-ae57-7c633bdb791a", "codex_session")
+                .unwrap();
+            relation_atom = store
+                .assert_relation(
+                    module.entity_id,
+                    predicate.predicate_id,
+                    session.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap()
+                .atom_id;
+        }
+
+        let store = MemoryX::new(config).unwrap();
+        let answer = store
+            .answer(
+                "What exact has_session_state follows for kpa-mod-520 and why is it 019fb2a9-8464-75e0-ae57-7c633bdb791a?",
+                0,
+            )
+            .unwrap();
+        assert_ne!(answer.status, AnswerStatus::NoMatch);
+        assert!(
+            answer
+                .query_trace
+                .retrieval_actions
+                .iter()
+                .any(|action| action.selected)
+        );
+        assert!(
+            answer
+                .graph
+                .nodes
+                .iter()
+                .any(|node| node.atom_ref.atom_id == relation_atom)
+        );
+
+        let unrelated = store
+            .answer(
+                "Which unrelated transport widget owns the lunar scheduler?",
+                0,
+            )
+            .unwrap();
+        assert_eq!(unrelated.status, AnswerStatus::NoMatch);
+        assert!(unrelated.graph.nodes.is_empty());
+    }
+
+    #[test]
+    fn many_to_one_relation_transition_is_durable_sourced_and_current() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("relation-transition"));
+        let (old_relation_id, old_atom_id, new_relation_id, new_atom_id, source_ids);
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let module = store.create_entity("kpa-mod-520", "module").unwrap();
+            let not_activated = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let bound = store
+                .create_entity("019fb2a9-8464-75e0-ae57-7c633bdb791a", "codex_session")
+                .unwrap();
+            let source_a = store
+                .register_source(
+                    SourceKind::File,
+                    "session registry",
+                    SourceLocation {
+                        path: Some("SESSION_REGISTRY.md".to_owned()),
+                        line_range: Some((1, 5)),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            let source_b = store
+                .register_source(
+                    SourceKind::File,
+                    "activation evidence",
+                    SourceLocation {
+                        path: Some("activation.json".to_owned()),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            source_ids = vec![source_a.source_id, source_b.source_id];
+
+            let old = store
+                .assert_relation(
+                    module.entity_id,
+                    predicate.predicate_id,
+                    not_activated.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            old_relation_id = old.relation_id.unwrap();
+            old_atom_id = old.atom_id;
+            assert!(
+                store
+                    .transition_relation(
+                        old_relation_id,
+                        not_activated.entity_id,
+                        0,
+                        Vec::new(),
+                        Vec::new()
+                    )
+                    .is_err(),
+                "a no-op transition must not create a self-superseding atom"
+            );
+            assert!(
+                store
+                    .assert_relation(
+                        module.entity_id,
+                        predicate.predicate_id,
+                        bound.entity_id,
+                        0,
+                        Vec::new(),
+                    )
+                    .is_err(),
+                "direct assertion must still fail closed for ManyToOne"
+            );
+            assert_eq!(store.list_contexts().len(), 1);
+
+            let transitioned = store
+                .transition_relation(
+                    old_relation_id,
+                    bound.entity_id,
+                    0,
+                    Vec::new(),
+                    vec![source_b.source_id, source_a.source_id, source_a.source_id],
+                )
+                .unwrap();
+            new_relation_id = transitioned.relation_id;
+            new_atom_id = transitioned.atom_id;
+            assert_eq!(transitioned.source_ids, source_ids);
+            assert_ne!(new_atom_id, old_atom_id);
+            let context = store
+                .list_contexts()
+                .into_iter()
+                .find(|context| context.ctx_id == 0)
+                .unwrap();
+            assert!(
+                context
+                    .active_claims
+                    .values()
+                    .all(|claim| claim.atom_id != old_atom_id)
+            );
+            assert!(
+                context
+                    .active_claims
+                    .values()
+                    .any(|claim| claim.atom_id == new_atom_id)
+            );
+            assert!(
+                store
+                    .transition_relation(
+                        old_relation_id,
+                        bound.entity_id,
+                        0,
+                        Vec::new(),
+                        Vec::new()
+                    )
+                    .is_err(),
+                "a superseded relation cannot be transitioned twice"
+            );
+        }
+
+        let reopened = MemoryX::new(config).unwrap();
+        let provenance = reopened.get_provenance(&new_atom_id).unwrap();
+        let mut persisted_sources = provenance
+            .direct_evidence
+            .iter()
+            .filter_map(|link| link.source_id)
+            .collect::<Vec<_>>();
+        persisted_sources.sort_unstable();
+        assert_eq!(persisted_sources, source_ids);
+        let context = reopened
+            .list_contexts()
+            .into_iter()
+            .find(|context| context.ctx_id == 0)
+            .unwrap();
+        assert!(
+            context
+                .active_claims
+                .values()
+                .all(|claim| claim.atom_id != old_atom_id)
+        );
+        assert!(
+            context
+                .active_claims
+                .values()
+                .any(|claim| claim.atom_id == new_atom_id)
+        );
+        let relations = reopened.read_relations().unwrap();
+        assert!(relations.iter().any(|relation| {
+            relation.relation_id == new_relation_id && relation.supersedes == Some(old_relation_id)
+        }));
+        assert!(
+            reopened
+                .history(20)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.operation == HistoryOperation::TransitionRelation)
+        );
+    }
+
+    #[test]
+    fn statistics_match_snapshot_integrity_and_separate_current_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("statistics"));
+        let mut store = MemoryX::new(config).unwrap();
+        assert_eq!(store.create_context(0).unwrap(), 0);
+        let predicate = store
+            .register_predicate(managed_contract(
+                "has_session_state",
+                PredicateCardinality::ManyToOne,
+            ))
+            .unwrap();
+        let module = store.create_entity("module", "component").unwrap();
+        let initial = store.create_entity("initial", "state").unwrap();
+        let bound = store.create_entity("bound", "state").unwrap();
+        let relation = store
+            .assert_relation(
+                module.entity_id,
+                predicate.predicate_id,
+                initial.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+
+        let before = store.statistics().unwrap();
+        assert_eq!(before.cas_live_atom_count, 1);
+        assert_eq!(before.cas_live_claim_count, 1);
+        assert_eq!(before.current_atom_count, 1);
+        assert_eq!(before.current_claim_count, 1);
+        assert_eq!(before.active_relation_count, 1);
+        assert_eq!(
+            before.cas_live_atom_count,
+            store.knowledge_snapshot(0).unwrap().cas_atom_count
+        );
+        assert_eq!(
+            before.cas_live_atom_count,
+            store.verify_integrity().unwrap().checked_atoms
+        );
+
+        store
+            .transition_relation(
+                relation.relation_id.unwrap(),
+                bound.entity_id,
+                0,
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap();
+        let after = store.statistics().unwrap();
+        assert_eq!(after.cas_live_atom_count, 2);
+        assert_eq!(after.cas_live_claim_count, 2);
+        assert_eq!(after.current_atom_count, 1);
+        assert_eq!(after.current_claim_count, 1);
+        assert_eq!(after.active_relation_count, 1);
+        assert_eq!(
+            after.cas_live_atom_count,
+            store.knowledge_snapshot(0).unwrap().cas_atom_count
+        );
+        assert_eq!(
+            after.cas_live_atom_count,
+            store.verify_integrity().unwrap().checked_atoms
+        );
+        assert!(after.physical_graph_node_count >= after.cas_live_atom_count as u64);
     }
 }
