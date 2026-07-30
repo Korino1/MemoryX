@@ -1,0 +1,11 @@
+{"id":"conflict-a","context":"release","provenance":"synthetic/conflict-a.md","text":"Synthetic benchmark source A: the deployment target is region north."}
+{"id":"conflict-b","context":"release","provenance":"synthetic/conflict-b.md","text":"Synthetic benchmark source B: the deployment target is region south."}
+{"id":"temporal-v1","context":"operations-history","provenance":"synthetic/temporal-v1.md","text":"Synthetic benchmark source: version 1 permits export mode alpha."}
+{"id":"temporal-v2","context":"operations-current","provenance":"synthetic/temporal-v2.md","text":"Synthetic benchmark source: version 2 supersedes version 1 and permits export mode beta."}
+{"id":"hop-policy","context":"engineering","provenance":"synthetic/hop-policy.md","text":"Synthetic benchmark source: a release is approved only when it has a signed review."}
+{"id":"hop-review","context":"engineering","provenance":"synthetic/hop-review.md","text":"Synthetic benchmark source: release R-17 has a signed review."}
+{"id":"constraint-allowed","context":"restricted","provenance":"synthetic/constraint-allowed.md","text":"Synthetic benchmark source: only the green deployment lane is approved for the restricted request."}
+{"id":"constraint-forbidden","context":"restricted","provenance":"synthetic/constraint-forbidden.md","text":"Synthetic benchmark source: the red deployment lane is experimental and forbidden by the request constraint."}
+{"id":"provenance-source","context":"support","provenance":"synthetic/provenance-source.md","text":"Synthetic benchmark source: repair procedure Q requires a verified snapshot before rebuild."}
+{"id":"project-a","context":"project-a","provenance":"synthetic/project-a.md","text":"Synthetic benchmark source: project A uses retention window 14 days."}
+{"id":"project-b","context":"project-b","provenance":"synthetic/project-b.md","text":"Synthetic benchmark source: project B uses retention window 90 days."}

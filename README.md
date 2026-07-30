@@ -1,178 +1,189 @@
 # MemoryX
-                    It is NOT a RAG
-MemoryX is a local-first knowledge base for cases where simple text search or
-classic RAG is not enough. It stores knowledge as small verifiable atoms with
-claims, evidence, provenance, contexts, graph links, and conflict handling.
 
-Instead of returning only "similar text chunks", MemoryX tries to assemble an
-answer from a consistent proof-like subgraph. This makes it useful for project
-memory, engineering decisions, research notes, audit trails, timelines,
-contradicting sources, and assistant-accessible knowledge bases.
+MemoryX is a local-first knowledge base for information that must remain
+traceable over time. It stores small knowledge atoms instead of treating a
+document chunk or a search hit as the final truth. Atoms can contain claims,
+evidence, source information, contexts, graph links, history, and explicit
+conflicts.
 
-## What MemoryX Is
+MemoryX is useful when an assistant or a person needs to:
 
-MemoryX is not a hosted SaaS product and not just a wrapper around a vector
-database. It is a Rust knowledge-store engine with:
+- keep project decisions and research notes locally;
+- see which source supports an answer;
+- keep contradictory or outdated claims instead of silently blending them;
+- distinguish current knowledge from superseded knowledge;
+- query several project or user bases;
+- repair and verify durable local storage;
+- expose the knowledge base to Codex or another MCP client.
+
+MemoryX is probably unnecessary if all you need is ordinary full-text or
+semantic search through document chunks. It is not a hosted service and it does
+not replace a model: retrieval proposes candidates, while validation and the
+`FixedPointSolver` assemble a structured answer from the stored state. The
+answer can include an `AnswerPack`, an `AnswerGraph`, evidence paths, gaps, and
+conflicts rather than unsupported text.
+
+## What It Includes
 
 - Knowledge atoms with content-addressed identity.
-- Claims with evidence, status, confidence components, and provenance.
-- Contexts and branches for alternative assumptions or project-specific views.
-- Explicit conflict tracking instead of silently merging contradictions.
-- Lexical, semantic, and graph retrieval.
-- A fixed-point solver that builds a structured `AnswerPack` and `AnswerGraph`.
-- Durable local storage with history, tombstones, repair, and rebuild commands.
-- MCP support so AI assistants can query and write to the knowledge base.
-- Federation primitives for connecting compatible bases.
+- Claims, evidence, source provenance, contexts, branches, and conflict tracking.
+- Lexical, semantic, and graph search.
+- Fixed-point answer assembly through `FixedPointSolver`.
+- Durable `CAS` storage with history, tombstones, integrity checks, and repair.
+- `CRDT` metadata, `WAL`, snapshots, and rebuildable indexes.
+- MCP access with 42 tools for reading, writing, provenance, graph work, and
+  multiple bases.
+- Federation primitives for compatible bases.
+- Portable release builds by default, with explicit CPU-specific builds only
+  when they are intentionally labelled.
 
-If you only need semantic search over document chunks, MemoryX is probably more
-complex than necessary. If you need traceable answers, conflict visibility,
-context control, and durable project memory, MemoryX is the intended tool.
+## MemoryX And Ordinary RAG
 
-## MemoryX vs Classic RAG
+MemoryX is not a universal replacement for RAG. They solve different parts of
+the problem:
 
-| Aspect | Classic RAG | MemoryX |
+| Need | Ordinary RAG | MemoryX |
 | --- | --- | --- |
-| Storage unit | Text chunks | Knowledge atoms with claims and evidence |
-| Source of truth | Retrieved text plus model interpretation | Stored atoms, claims, evidence, contexts, and graph links |
-| Retrieval role | Retrieval often drives the final answer | Retrieval proposes candidates; validation and solver decide |
-| Query control | Prompt instructions and top-k settings | Explicit `QueryContract` with constraints and policies |
-| Reasoning path | Query -> retrieve chunks -> generate text | Backward gaps + forward candidates + fixed-point answer assembly |
-| Output | Usually generated prose | Structured `AnswerPack` and proof-style `AnswerGraph` |
-| Contradictions | Often hidden, blended, or resolved by the model | Stored as conflicts, alternatives, or branches |
-| Missing evidence | Can become hallucinated text | Reported as unknowns, limitations, gaps, or insufficient evidence |
-| Context | Usually implicit and global | Explicit contexts, branches, project/user scopes, and policies |
-| Temporal changes | Old chunks can be retrieved as current | History, `SUPERSEDES`, tombstones, snapshots, and temporal policy |
-| Explainability | "Found in document X" | Claim/evidence/source provenance plus supporting graph |
-| Reproducibility | Depends on model, prompt, and retrieval state | Snapshot + query contract + structured answer state |
-| Multi-project work | Usually separate indexes or conventions | Scoped bases plus Multi-Base MCP routing |
-| Assistant operations | Often query-only retrieval endpoint | MCP read/write/admin tools for maintaining the knowledge base |
-| Federation | Often merges retrieved text | Compatible claims/provenance/metadata between bases |
-| Durability | Index rebuild depends on external document pipeline | CAS integrity, repair/rebuild, history, and snapshots |
-| Best fit | FAQ and documentation search | Research, engineering, audit, timelines, decision memory, agent memory |
+| Find relevant documentation quickly | Good fit | Supported, but may be more than needed |
+| Keep a verifiable unit of knowledge | Usually keeps text chunks | Keeps atoms, claims, evidence, and sources |
+| Handle two sources that disagree | May blend or rank the passages | Keeps the conflict or separates contexts |
+| Distinguish current and old decisions | Depends on document filtering | Keeps versions, superseding links, and history |
+| Explain why an answer was accepted | Usually cites retrieved passages | Returns claims, provenance, limitations, and an answer graph |
+| Say that evidence is missing | Depends on the prompt and model | Has explicit insufficient-evidence and limitation states |
 
-Full comparison: `docs/MEMORYX_VS_RAG.md`.
+Use ordinary RAG for straightforward document search. Use MemoryX when
+traceability, conflicting facts, history, controlled contexts, or durable
+assistant memory matter. See the
+[full capability comparison](docs/MEMORYX_VS_RAG.md) and the
+[reproducible benchmark](docs/BENCHMARK_RAG_COMPARISON.md).
 
-## Build Requirements
+## Install A Ready EXE
 
-MemoryX currently uses nightly Rust.
+MemoryX is a command-line program; no installer is required. If you already
+have a prepared `memoryx.exe`, place it in a stable directory, for example
+`C:\Tools\MemoryX\memoryx.exe`, and check it:
 
-```bash
+```powershell
+$exe = "C:\Tools\MemoryX\memoryx.exe"
+& $exe --version
+& $exe --help
+```
+
+For MCP, use an executable that was built with the `mcp` feature. Check that
+the command is available with `& $exe serve --help`. The examples below use
+PowerShell; the same arguments work from other shells.
+
+## Build From Source
+
+The repository currently uses nightly Rust. Install the toolchain and build a
+portable release with MCP support:
+
+```powershell
 rustup toolchain install nightly
-cargo +nightly build --release
+cargo +nightly build --release --features mcp
 ```
 
-Portable release builds are the default. For local CPU-specific benchmarking you
-may set `RUSTFLAGS="-C target-cpu=native"`, but do not publish that binary as a
-generic release. See `docs/PORTABLE_CPU_BUILDS.md`.
+The resulting executable is:
 
-## Quick Start
-
-Create a local base:
-
-```bash
-cargo +nightly run --release --bin memoryx -- init --base default
+```text
+target/release/memoryx.exe
 ```
 
-Ingest data:
+Without `--features mcp`, the command-line database functions can still be
+built, but the MCP server is not included. The default release is portable.
+For local CPU-specific builds, see [`docs/PORTABLE_CPU_BUILDS.md`](docs/PORTABLE_CPU_BUILDS.md)
+and do not publish a machine-specific binary as a generic release.
 
-```bash
-cargo +nightly run --release --bin memoryx -- ingest --base default facts.json
+## First Steps
+
+Create a project base, add data, query it, and inspect its statistics:
+
+```powershell
+$exe = ".\target\release\memoryx.exe"
+
+& $exe --base-scope project init --base default
+& $exe --base-scope project ingest --base default facts.json
+& $exe --base-scope project query --base default "What decisions are stored?"
+& $exe --base-scope project stats --base default
 ```
 
-Query the base:
+For a personal base shared by projects, use `user` instead of `project`:
 
-```bash
-cargo +nightly run --release --bin memoryx -- query --base default "what does the base know about Rust ownership?"
+```powershell
+& $exe --base-scope user init --base default
+& $exe --base-scope user ingest --base default facts.json
 ```
 
-Compile an editable query contract without executing it:
+Use `--help` for all command options. Useful maintenance commands are
+`import`, `export`, `history`, `snapshot`, `compact`, `verify-integrity`,
+`rebuild-index`, and `repair`.
 
-```bash
-cargo +nightly run --release --bin memoryx -- --format json query --emit-contract "Explain MemoryX MCP"
+## Project And User Bases
+
+The scope controls the physical root of a base:
+
+| Scope | Physical path |
+| --- | --- |
+| `project` | `<repo>/.memoryx/bases/<name>` |
+| `user` | `<home>/.memoryx/bases/<name>`; on Windows this is normally `%USERPROFILE%\\.memoryx\\bases\\<name>` |
+
+For example, a project base named `default` is stored in:
+
+```text
+<repo>/.memoryx/bases/default/
+  cas/
+  index/
+  graph/
+  meta/
+    history.log
+    sources.jsonl
+    atom_sources.jsonl
+    predicates.jsonl
+    entities.jsonl
+    relations.jsonl
+  inverted/
 ```
 
-Run a saved query contract and return structured output:
+The command-line interface and MCP open the same durable store. `update_atom`
+creates a new version linked with `SUPERSEDES`; `delete_atom` creates a
+tombstone instead of physically erasing the old atom. Successful mutations are
+recorded in `meta/history.log`.
 
-```bash
-cargo +nightly run --release --bin memoryx -- --format json query --contract contract.json
+One physical base may have only one process holding the write lease at a time.
+Do not point two independent writer processes at the same directory. Different
+physical bases may be used in parallel. If several applications need one live
+logical base, use one coordinating owner service or separate synchronized
+replicas.
+
+## Connect MCP To Codex Or An IDE
+
+`memoryx serve --stdio` is the production MCP transport. `memoryx serve` without
+`--stdio` starts the HTTP federation server, not MCP. Put an `mcpServers` block
+like this into the MCP configuration of Codex or the IDE. The exact location of
+that configuration is client-specific.
+
+For a ready executable and a project base:
+
+```json
+{
+  "mcpServers": {
+    "memoryx-project": {
+      "command": "C:\\Tools\\MemoryX\\memoryx.exe",
+      "args": [
+        "--base-scope",
+        "project",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
 ```
 
-Show base statistics:
-
-```bash
-cargo +nightly run --release --bin memoryx -- stats --base default
-```
-
-## CLI
-
-The main binary is `memoryx`.
-
-Common commands:
-
-- `init`
-- `ingest`
-- `query`
-- `import`
-- `export`
-- `stats`
-- `compact`
-- `verify-integrity`
-- `rebuild-index`
-- `repair`
-- `history`
-- `snapshot`
-- `serve`
-
-Help:
-
-```bash
-cargo +nightly run --release --bin memoryx -- --help
-```
-
-Useful examples:
-
-```bash
-# Create a project-scoped base
-cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
-
-# Import atoms from JSON
-cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
-
-# Export atoms to CSV
-cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
-
-# Verify and repair a base
-cargo +nightly run --release --bin memoryx -- verify-integrity --base default
-cargo +nightly run --release --bin memoryx -- rebuild-index --base default
-cargo +nightly run --release --bin memoryx -- repair --base default
-```
-
-## MCP For Assistants
-
-Production MCP entry point:
-
-```bash
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
-```
-
-`memoryx serve --stdio` exposes the store-backed MCP surface. It currently
-provides 42 tools for querying, ingestion, updates, provenance, entities,
-relations, contexts, conflicts, graph traversal, history, and multi-base
-routing.
-
-Important distinction:
-
-- `memoryx serve --stdio` is the production MCP transport.
-- `memoryx serve` without `--stdio` starts the HTTP federation server, not MCP.
-- `examples/mcp_server_full.rs` is a demonstration example, not the production entry point.
-
-### MCP Client Configuration
-
-Most MCP-capable IDEs and agent clients use a JSON object shaped like
-`mcpServers`. Adjust the command path if you run a prebuilt `memoryx.exe`
-instead of `cargo`.
-
-Project-local base:
+For a user base, change `project` to `user`. For a source checkout instead of
+an executable, use:
 
 ```json
 {
@@ -200,69 +211,49 @@ Project-local base:
 }
 ```
 
-Shared user-level base:
+After connecting, ask the client to call `active_base` or `list_bases` first.
+The MCP server preserves human-readable `content` and also returns
+`structuredContent`. Successful mutations report `durability: "committed"`.
 
-```json
-{
-  "mcpServers": {
-    "memoryx-user": {
-      "command": "cargo",
-      "args": [
-        "+nightly",
-        "run",
-        "--release",
-        "--features",
-        "mcp",
-        "--bin",
-        "memoryx",
-        "--",
-        "--base-scope",
-        "user",
-        "serve",
-        "--base",
-        "default",
-        "--stdio"
-      ]
-    }
-  }
-}
-```
+## Safe Use Of The 42 MCP Tools
 
-Prebuilt executable example:
+Use the tools in this order:
 
-```json
-{
-  "mcpServers": {
-    "memoryx": {
-      "command": "E:\\Memory bank\\memoryx.exe",
-      "args": [
-        "--base-scope",
-        "project",
-        "serve",
-        "--base",
-        "default",
-        "--stdio"
-      ]
-    }
-  }
-}
-```
+1. Call `active_base` or `list_bases` before reading or writing.
+2. Use `connect_base` for another base and pass its `base_ref` to tools that
+   support it; use `switch_base` only when changing the active base is intended.
+3. For a complex question, call `compile_query_contract`, then
+   `validate_query_contract`, then `query` or `query_base`.
+4. Before presenting an important fact, inspect `get_provenance_path`,
+   `explain_answer_graph`, or `extract_subgraph`.
+5. Use write tools only after the user explicitly asks to change the base.
 
-Example MCP tool calls:
+Exact selectors fail closed: an unresolved selector returns `NoMatch` instead
+of broadening the request to the whole base. Normal queries use current atom
+versions. Historical queries must explicitly set
+`temporal_scope.require_current` to `false`. Read-time conflict branches are
+not saved. `register_predicate` IDs must be obtained through
+`resolve_predicate`; do not invent numeric IDs. `attach_atom_source` preserves
+distinct sources and is idempotent for the same atom/source pair.
 
-```json
-{"name":"compile_query_contract","arguments":{"query_text":"Explain MemoryX MCP"}}
-```
+The complete tool surface is grouped below. The names are exact MCP tool names.
 
-```json
-{"name":"query","arguments":{"query_text":"What decisions mention persistence?","ctx_id":0}}
-```
+| Category | Tools | Safe purpose |
+| --- | --- | --- |
+| Query and answer evidence | `query`, `query_base`, `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`, `get_provenance_path` | Build, validate, answer, and inspect the evidence path. |
+| Base selection | `list_bases`, `active_base`, `connect_base`, `switch_base` | Find, connect, and select bases. |
+| Search | `search_lex`, `search_graph`, `search_semantic` | Search candidate knowledge without treating search alone as the final answer. |
+| Atom writes and history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Add, revise, remove through tombstones, and review changes. |
+| Claim correction | `supersede_claim`, `correct_claim`, `correct_relation` | Replace incorrect or outdated claims while keeping history. |
+| Sources | `register_source`, `list_sources`, `attach_atom_source` | Register sources and attach them to atoms. |
+| Predicate contracts | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Define and resolve stable relation types. |
+| Entities and relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Maintain entities, aliases, claims, and relations. |
+| Contexts and conflicts | `create_context`, `list_contexts`, `branch_context`, `list_conflicts` | Separate assumptions and inspect unresolved conflicts. |
+| Graph traversal | `graph_neighbors`, `graph_walk`, `extract_subgraph` | Inspect connected knowledge and local reasoning subgraphs. |
 
-```json
-{"name":"get_provenance_path","arguments":{"atom_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
-```
+## Multiple Bases
 
-Multi-base MCP workflow:
+One MCP process can connect several compatible bases. A typical sequence is:
 
 ```json
 {"name":"list_bases","arguments":{}}
@@ -273,347 +264,260 @@ Multi-base MCP workflow:
 ```
 
 ```json
-{"name":"query_base","arguments":{"base_ref":"project:client-a","query_text":"What decisions mention persistence?","ctx_id":0}}
+{"name":"query_base","arguments":{"base_ref":"project:client-a","query_text":"Which decisions mention persistence?","ctx_id":0}}
 ```
 
 ```json
 {"name":"switch_base","arguments":{"base_ref":"project:client-a"}}
 ```
 
-Existing store-backed MCP tools use the active base by default. Most of them can
-also accept `base_ref` to operate on a connected base without changing the
-active base.
+Use `base_ref` to query or update a connected base without changing the active
+base whenever the selected tool supports that field.
 
-Managed predicate authoring is fail-closed. `register_predicate` derives the
-numeric ID from the complete normalized contract, so registration order does
-not affect identity. Repeating the same contract is idempotent; a conflicting
-key/name, hash collision, incoherent inverse, or invalid cardinality is rejected.
-Use `resolve_predicate` before `add_claim` or `assert_relation`; do not invent a
-numeric managed ID.
+## Backup, Snapshot, And Repair
 
-`attach_atom_source` accumulates distinct sources and is idempotent for the same
-atom/source pair. A single atom can have at most 256 direct source attachments;
-the next attachment returns an explicit error and does not discard existing
-provenance. Query output is separately bounded by `output_contract.max_items`
-and reports `BudgetExhausted` when the response is truncated.
+`snapshot` reports the logical identity of the current knowledge state. It is
+useful for reproducibility, but it is not a copy of the files.
 
-Every proof record now identifies its provenance representation as `embedded`,
-`attached`, `derived`, `federated`, or `legacy_unknown` when an older serialized
-record did not contain enough information to classify it. Attached sources are synced before a
-successful MCP response and all distinct source IDs remain visible after reopen.
+For a filesystem backup, stop every process that writes to the base, then copy
+the complete base directory, including `cas`, `index`, `graph`, `meta`, and
+`inverted`. Do not copy a live base while another process is writing to it.
 
-Exact QueryContract targets are fail-closed. Prefer typed selectors such as
-`{"atom_id":"<64 hex>"}`, `{"node_id":42}`, `{"entity_id":7}`,
-`{"term_id":3}`, `{"symbol_id":9}`, or
-`{"stable_key":"project:depends_on"}`. The legacy `id` field still accepts
-`atom:`, `node:`, `term:`, and `sym:` prefixes. An unresolved exact selector
-returns `NoMatch`; it never broadens into an unrestricted query. Normal queries
-use only current atom versions. Set `temporal_scope.require_current` to `false`
-explicitly when a historical query must include superseded atoms.
+Check and repair a project base with:
 
-MCP results keep human-readable `content` and also provide
-`structuredContent`. Mutation results include stable operation identifiers,
-affected IDs, and `durability: "committed"`. In `list_contexts`, `selected`
-means the context selected for the request, while `state` is `open` or `closed`;
-an open branch is not automatically the selected context. Query-time conflict
-branches are isolated and are never persisted by a read query.
-
-Different physical bases can be used in parallel by different MCP clients. One
-physical base root has exactly one mutable owner at a time: a second process is
-rejected with an explicit writer-lease error before it can open mutable store
-components. If several applications need the same live logical base, route them
-through one coordinating owner service or use separate replicas synchronized
-through CRDT/federation; do not point independent writer processes at the same
-directory.
-
-### MCP Tool Map
-
-| Category | Tools | Purpose |
-| --- | --- | --- |
-| Query and proof output | `query`, `query_base`, `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`, `get_provenance_path` | Compile strict queries, execute them, inspect proof graph output, and trace evidence. |
-| Multi-base routing | `list_bases`, `active_base`, `connect_base`, `switch_base` | Discover project/user bases, connect additional bases, and choose the active base. |
-| Retrieval | `search_lex`, `search_graph`, `search_semantic` | Search lexical, graph, and semantic indexes without treating retrieval as final truth. |
-| Atom writes and history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Add atoms, batch-write atoms, create superseding versions, create tombstones, and inspect recent operations. |
-| Claim correction | `supersede_claim`, `correct_claim`, `correct_relation` | Replace outdated or incorrect knowledge while keeping provenance and history. |
-| Sources and provenance | `register_source`, `list_sources`, `attach_atom_source` | Register source records and attach atoms to source/provenance paths. |
-| Predicate contracts | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Register immutable named predicate semantics and resolve their deterministic numeric IDs. |
-| Entities and relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Maintain structured entities, aliases, entity merges/splits, claims, and relations. |
-| Contexts and conflicts | `create_context`, `list_contexts`, `branch_context`, `list_conflicts` | Create contexts, branch assumptions, and inspect unresolved conflicts. |
-| Graph traversal | `graph_neighbors`, `graph_walk`, `extract_subgraph` | Traverse graph links and extract a local proof/reasoning subgraph. |
-
-Recommended agent workflow:
-
-1. Call `active_base` or `list_bases` first.
-2. Use `connect_base` if the needed project/user base is not connected.
-3. Use `compile_query_contract` for non-trivial questions.
-4. Use `query` or `query_base` with `base_ref` for answer assembly.
-5. Use `get_provenance_path`, `explain_answer_graph`, or `extract_subgraph`
-   before presenting factual claims to a user.
-6. Use write tools only when the user explicitly asks the agent to update the
-   knowledge base.
-
-## Storage Layout
-
-MemoryX keeps bases in explicit scoped roots:
-
-- Project scope: `<repo>/.memoryx/bases/<name>`
-- User scope: `<home>/.memoryx/bases/<name>`
-
-An explicit absolute project path is accepted independently of process CWD only
-when its physical shape is `<project>/.memoryx/bases/<name>`. Arbitrary absolute
-directories remain rejected.
-
-Each opened base contains a persistent `.memoryx.writer.lock` file. The file is
-not a stale-lock sentinel: the operating system lock is held only for the owner
-process lifetime and is released automatically on normal exit or process death.
-
-The user chooses the storage location with `--base-scope`:
-
-```bash
-# Store the base inside the current project folder
-cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
-
-# Store the base in the shared user-level MemoryX folder
-cargo +nightly run --release --bin memoryx -- --base-scope user init --base default
+```powershell
+& $exe --base-scope project verify-integrity --base default
+& $exe --base-scope project rebuild-index --base default
+& $exe --base-scope project repair --base default
 ```
 
-MCP uses the same choice:
+`verify-integrity` checks the stored data. `rebuild-index` rebuilds derived
+indexes. `repair` performs a safe repair sequence with a final integrity check.
+`compact --dry-run` can be used to inspect compaction before changing storage.
+Maintenance commands need exclusive write access to the physical base.
 
-```bash
-# MCP uses the project-local base
-cargo +nightly run --release --features mcp --bin memoryx -- --base-scope project serve --base default --stdio
+## Reproducible Benchmark
 
-# MCP uses the shared user-level base
-cargo +nightly run --release --features mcp --bin memoryx -- --base-scope user serve --base default --stdio
+The repository includes a presentation-ready comparison harness. It calculates
+metrics only from real recorded outputs and never fills missing scores with
+favorable values:
+
+- [`docs/BENCHMARK_RAG_COMPARISON.md`](docs/BENCHMARK_RAG_COMPARISON.md)
+- [`benchmarks/run_rag_comparison.ps1`](benchmarks/run_rag_comparison.ps1)
+- [`benchmarks/rag_comparison/cases.jsonl`](benchmarks/rag_comparison/cases.jsonl)
+- [`benchmarks/rag_comparison/corpus.jsonl`](benchmarks/rag_comparison/corpus.jsonl)
+
+Validate the frozen inputs and runner:
+
+```powershell
+pwsh -NoLogo -File benchmarks/run_rag_comparison.ps1 -Mode validate
+pwsh -NoLogo -File benchmarks/run_rag_comparison.ps1 -Mode selftest
 ```
 
-`memoryx init` creates a structure like:
-
-```text
-.memoryx/bases/default/
-  cas/
-  index/
-  graph/
-  meta/
-    history.log
-    sources.jsonl
-    atom_sources.jsonl
-    predicates.jsonl
-    entities.jsonl
-    relations.jsonl
-  inverted/
-```
-
-CLI and MCP open the same durable store layout. `update_atom` writes a new
-version and links it with `SUPERSEDES`; `delete_atom` creates a tombstone instead
-of physically erasing data. Successful write operations are appended to
-`meta/history.log`.
-
-```bash
-cargo +nightly run --release --bin memoryx -- history --base default --limit 20
-```
-
-## Repository Structure
-
-```text
-src/bin/memoryx.rs     CLI and MCP/federation server entry point
-src/store/             High-level store API
-src/cas/               Content-addressed atom storage
-src/query/             Contracts, retrieval, solver, answer assembly
-src/graph/             Graph store
-src/crdt/              CRDT metadata, WAL, snapshots
-src/federation/        Federation protocol
-docs/                  User and integration documentation
-examples/              CLI, MCP, native API examples
-tests/                 Regression tests
-benchmarks/            Honest RAG-comparison scaffold
-```
-
-## Documentation
-
-- Query contracts: `docs/QUERY_CONTRACT.md`
-- Answer packs: `docs/ANSWER_PACK.md`
-- Authoring API: `docs/AUTHORING_API.md`
-- LLM boundary: `docs/LLM_BOUNDARY.md`
-- Portable CPU builds: `docs/PORTABLE_CPU_BUILDS.md`
-- MemoryX vs RAG: `docs/MEMORYX_VS_RAG.md`
-- Benchmark scaffold: `docs/BENCHMARK_RAG_COMPARISON.md`
-- Contributing: `CONTRIBUTING.md`
-- Security policy: `SECURITY.md`
-
-## Status
-
-- Current crate version: `2.0.0`. This is a major version because the public
-  Rust query/provenance structures gained fields; existing on-disk bases and
-  MCP JSON remain backward-readable.
-- CLI, MCP, and persisted-base compatibility are maintained for the 1.0 release
-  line. Low-level Rust CAS structs are implementation-facing and may evolve;
-  consumers should prefer the high-level store API.
-- The codebase is store-backed and tested, but users should still validate
-  deployment behavior for their own workloads.
-- MCP is optional and requires the `mcp` feature.
-- Administrative base maintenance commands such as `import`, `export`,
-  `verify-integrity`, `rebuild-index`, and `repair` are CLI commands.
-
-## Maintainer And Development Assistance
-
-- Project creator and maintainer: Korino1.
-- Development assistance: OpenAI Codex was used for implementation, review,
-  documentation, testing, and release preparation.
+The harness prepares paired runs, records MemoryX and RAG adapter outputs,
+calculates Accuracy, Recall, Groundedness, end-to-end latency, closed-case
+rate, and functional scenario rates, then writes JSON and Markdown reports.
+The repository does not contain measured superiority results. Real adapters,
+raw outputs, reviewer decisions, and runtime configuration are required before
+presenting numbers.
 
 ## License
 
-MemoryX is licensed under `AGPL-3.0-or-later` for open-source use.
+MemoryX is available under `AGPL-3.0-or-later`. The full open-source license is
+in [`LICENSE.md`](LICENSE.md) and [`COPYING`](COPYING). A separate commercial
+license may be available by written agreement; see
+[`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md).
 
-Commercial licensing is available separately for organizations that cannot use
-AGPL software. See `LICENSE.md` and `COMMERCIAL_LICENSE.md`.
-
-Future external contributions require a CLA or equivalent agreement so the
-project can preserve dual licensing. See `CLA.md` and `CONTRIBUTING.md`.
+External contributions are covered by [`CLA.md`](CLA.md) and
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
-# MemoryX на русском
+# MemoryX: русская версия
 
-MemoryX - локальная база знаний для случаев, где обычного поиска по тексту или
-классического RAG недостаточно. Она хранит знания не большими текстовыми
-чанками, а небольшими проверяемыми атомами: с утверждениями, доказательствами,
-источниками, контекстами, связями графа и явной обработкой противоречий.
+MemoryX — локальная база знаний для информации, которую нужно проверять и
+сохранять во времени. Она хранит небольшие атомы знаний, а не считает один
+фрагмент документа или результат поиска окончательной истиной. В атомах могут
+храниться утверждения, подтверждения, сведения об источнике, контексты, связи
+графа, история и явные противоречия.
 
-Вместо ответа из "похожих фрагментов текста" MemoryX пытается собрать ответ из
-согласованного доказательного подграфа. Это полезно для памяти проекта,
-инженерных решений, исследовательских заметок, аудита, временных линий,
-конфликтующих источников и баз знаний, к которым подключается AI-ассистент.
+MemoryX подходит, если нужно:
 
-## Что Это Такое
+- хранить решения проекта и исследовательские заметки на своём компьютере;
+- видеть, какой источник подтверждает ответ;
+- сохранять противоречивые или устаревшие утверждения, а не незаметно смешивать их;
+- отличать текущие знания от заменённых предыдущих версий;
+- запрашивать несколько проектных или пользовательских баз;
+- проверять и восстанавливать постоянное локальное хранилище;
+- подключать базу к Codex или другому клиенту MCP.
 
-MemoryX - не облачный SaaS и не просто оболочка над vector database. Это
-Rust-движок базы знаний с:
+MemoryX, скорее всего, не нужна, если требуется только обычный поиск по тексту
+или смысловой поиск по фрагментам документов. Это не облачная служба и не
+замена модели: поиск предлагает кандидатов, а проверка и `FixedPointSolver`
+собирают структурированный ответ из сохранённых данных. Ответ может содержать
+`AnswerPack`, `AnswerGraph`, пути к подтверждениям, пробелы в данных и
+противоречия, а не неподтверждённый текст.
 
-- атомами знания с content-addressed identity;
-- утверждениями, evidence, статусом, confidence components и provenance;
-- контекстами и ветками для разных предположений или проектов;
-- явным хранением конфликтов вместо сглаживания противоречий;
-- lexical, semantic и graph retrieval;
-- solver-ом, который собирает структурированный `AnswerPack` и `AnswerGraph`;
-- локальным durable storage, историей операций, tombstones, repair и rebuild;
-- MCP-интерфейсом, чтобы ассистенты могли читать и вести базу;
-- примитивами federation для совместимых баз.
+## Возможности
 
-Если нужен только semantic search по чанкам документов, MemoryX, скорее всего,
-избыточен. Если нужны проверяемые ответы, видимые конфликты, контроль контекста
-и долговременная память проекта, это целевой сценарий.
+- Атомы знаний с идентичностью, вычисляемой по содержимому.
+- Утверждения, подтверждения, источники, контексты, ветви и учёт противоречий.
+- Поиск по словам, смыслу и связям графа.
+- Сборка ответа через `FixedPointSolver`.
+- Постоянное хранилище `CAS` с историей, метками удаления, проверкой целостности и восстановлением.
+- Служебные данные `CRDT`, журнал `WAL`, снимки состояния и перестраиваемые индексы.
+- Доступ через MCP: 42 инструмента для чтения, записи, источников, графа и нескольких баз.
+- Средства объединения совместимых баз.
+- Переносимая сборка по умолчанию и отдельные сборки под процессор только при явном обозначении.
 
-## MemoryX И Обычный RAG
+## MemoryX и обычный RAG
 
-| Аспект | Обычный RAG | MemoryX |
+MemoryX не является универсальной заменой RAG. Эти системы решают разные части
+задачи:
+
+| Потребность | Обычный RAG | MemoryX |
 | --- | --- | --- |
-| Единица хранения | Текстовые чанки | Атомы знания с claims и evidence |
-| Источник истины | Найденный текст плюс интерпретация модели | Атомы, утверждения, evidence, contexts и graph links |
-| Роль retrieval | Retrieval часто фактически ведёт к ответу | Retrieval предлагает candidates; validation и solver принимают решение |
-| Управление запросом | Prompt-инструкции и top-k настройки | Явный `QueryContract` с constraints и policies |
-| Ход рассуждения | Query -> retrieve chunks -> generate text | Backward gaps + forward candidates + fixed-point сборка ответа |
-| Выход | Обычно сгенерированный текст | Structured `AnswerPack` и proof-style `AnswerGraph` |
-| Противоречия | Часто скрываются, смешиваются или решаются моделью | Хранятся как conflicts, alternatives или branches |
-| Недостающие факты | Могут превратиться в галлюцинацию | Возвращаются как unknowns, limitations, gaps или insufficient evidence |
-| Контекст | Обычно неявный и общий | Явные contexts, branches, project/user scopes и policies |
-| Временные изменения | Старые chunks могут выдаваться как текущие | History, `SUPERSEDES`, tombstones, snapshots и temporal policy |
-| Объяснимость | "Найдено в документе X" | Claim/evidence/source provenance плюс supporting graph |
-| Воспроизводимость | Зависит от модели, prompt и retrieval state | Snapshot + query contract + structured answer state |
-| Несколько проектов | Обычно отдельные индексы или соглашения | Scoped bases плюс Multi-Base MCP routing |
-| Работа ассистента | Часто только query endpoint | MCP read/write/admin tools для ведения базы |
-| Федерация | Часто объединяет найденный текст | Совместимые claims/provenance/metadata между базами |
-| Надёжность хранения | Rebuild index зависит от внешнего document pipeline | CAS integrity, repair/rebuild, history и snapshots |
-| Лучший сценарий | FAQ и поиск по документации | Исследования, инженерия, аудит, timelines, память решений, agent memory |
+| Быстро найти подходящий фрагмент документа | Подходит | Поддерживается, но может быть избыточно |
+| Хранить проверяемую единицу знания | Обычно хранит фрагменты текста | Хранит атомы, утверждения, подтверждения и источники |
+| Обработать несогласные источники | Может смешать или ранжировать фрагменты | Сохраняет противоречие или разделяет контексты |
+| Отличить текущее решение от старого | Зависит от фильтрации документов | Хранит версии, связи замещения и историю |
+| Объяснить, почему ответ принят | Обычно указывает найденные фрагменты | Возвращает утверждения, источники, ограничения и граф ответа |
+| Сообщить, что данных недостаточно | Зависит от инструкции и модели | Имеет явные состояния недостатка подтверждений |
 
-Полное сравнение: `docs/MEMORYX_VS_RAG.md`.
+Обычный RAG удобен для прямого поиска по документам. MemoryX нужен, когда
+важны проверяемость, противоречия, история, управляемые контексты или постоянная
+память ассистента. См. [полное сравнение возможностей](docs/MEMORYX_VS_RAG.md)
+и [воспроизводимый бенчмарк](docs/BENCHMARK_RAG_COMPARISON.md).
 
-## Быстрый Старт
+## Установка готового EXE
 
-MemoryX сейчас собирается nightly Rust.
+MemoryX — программа командной строки, отдельная программа установки не нужна.
+Если у вас уже есть подготовленный `memoryx.exe`, положите его в постоянную
+папку, например `C:\Tools\MemoryX\memoryx.exe`, и проверьте:
 
-```bash
+```powershell
+$exe = "C:\Tools\MemoryX\memoryx.exe"
+& $exe --version
+& $exe --help
+```
+
+Для MCP нужен файл, собранный с признаком `mcp`. Наличие команды можно проверить
+через `& $exe serve --help`. Примеры ниже используют PowerShell; сами аргументы
+подходят и для других оболочек.
+
+## Сборка из исходников
+
+В репозитории используется ночная версия Rust (`nightly`). Установите её и соберите
+переносимый выпуск с поддержкой MCP:
+
+```powershell
 rustup toolchain install nightly
-cargo +nightly build --release
+cargo +nightly build --release --features mcp
 ```
 
-Создать базу:
+Готовый файл появится здесь:
 
-```bash
-cargo +nightly run --release --bin memoryx -- init --base default
+```text
+target/release/memoryx.exe
 ```
 
-Загрузить данные:
+Без `--features mcp` собираются функции командной строки для работы с базой,
+но сервер MCP не включается. Обычная сборка выпуска не привязана к процессору,
+на котором она создана. Для местной сборки под конкретный процессор см.
+[`docs/PORTABLE_CPU_BUILDS.md`](docs/PORTABLE_CPU_BUILDS.md); такой файл нельзя
+выдавать за общий выпуск.
 
-```bash
-cargo +nightly run --release --bin memoryx -- ingest --base default facts.json
+## Первые действия
+
+Создайте проектную базу, добавьте данные, выполните запрос и посмотрите
+статистику:
+
+```powershell
+$exe = ".\target\release\memoryx.exe"
+
+& $exe --base-scope project init --base default
+& $exe --base-scope project ingest --base default facts.json
+& $exe --base-scope project query --base default "Какие решения сохранены?"
+& $exe --base-scope project stats --base default
 ```
 
-Сделать запрос:
+Для личной базы, общей для разных проектов, замените `project` на `user`:
 
-```bash
-cargo +nightly run --release --bin memoryx -- query --base default "что известно про Rust ownership?"
+```powershell
+& $exe --base-scope user init --base default
+& $exe --base-scope user ingest --base default facts.json
 ```
 
-Получить статистику:
+Полный список параметров показывает `--help`. Для обслуживания есть команды
+`import`, `export`, `history`, `snapshot`, `compact`, `verify-integrity`,
+`rebuild-index` и `repair`.
 
-```bash
-cargo +nightly run --release --bin memoryx -- stats --base default
+## Проектные и пользовательские базы
+
+Область определяет физический корень базы:
+
+| Область | Физический путь |
+| --- | --- |
+| `project` | `<repo>/.memoryx/bases/<name>` |
+| `user` | `<home>/.memoryx/bases/<name>`; в Windows обычно `%USERPROFILE%\\.memoryx\\bases\\<name>` |
+
+Например, проектная база `default` хранится так:
+
+```text
+<repo>/.memoryx/bases/default/
+  cas/
+  index/
+  graph/
+  meta/
+    history.log
+    sources.jsonl
+    atom_sources.jsonl
+    predicates.jsonl
+    entities.jsonl
+    relations.jsonl
+  inverted/
 ```
 
-## CLI
+Командная строка и MCP открывают одно и то же постоянное хранилище.
+`update_atom` создаёт новую версию со связью `SUPERSEDES`, а `delete_atom`
+создаёт метку удаления вместо физического стирания старого атома. Успешные
+изменения записываются в `meta/history.log`.
 
-Основной бинарник - `memoryx`.
+В одной физической базе одновременно может быть только один процесс,
+удерживающий право записи. Не направляйте два независимых процесса записи в
+один каталог. Разные физические базы можно использовать параллельно. Если
+нескольким приложениям нужна одна живая логическая база, используйте один
+координирующий процесс или отдельные синхронизируемые копии.
 
-Справка:
+## Подключение MCP к Codex или среде разработки
 
-```bash
-cargo +nightly run --release --bin memoryx -- --help
+`memoryx serve --stdio` — штатный транспорт MCP. `memoryx serve` без `--stdio`
+запускает HTTP-сервер объединения баз, а не MCP. Вставьте блок `mcpServers` в
+настройки MCP Codex или вашей среды разработки. Точное расположение этого блока зависит от
+клиента.
+
+Для готового файла и проектной базы:
+
+```json
+{
+  "mcpServers": {
+    "memoryx-project": {
+      "command": "C:\\Tools\\MemoryX\\memoryx.exe",
+      "args": [
+        "--base-scope",
+        "project",
+        "serve",
+        "--base",
+        "default",
+        "--stdio"
+      ]
+    }
+  }
+}
 ```
 
-Примеры:
-
-```bash
-# Создать базу в папке проекта
-cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
-
-# Импортировать atoms из JSON
-cargo +nightly run --release --bin memoryx -- import --base default --format json atoms.json
-
-# Экспортировать atoms в CSV
-cargo +nightly run --release --bin memoryx -- export --base default --format csv --output atoms.csv
-
-# Проверить и восстановить базу
-cargo +nightly run --release --bin memoryx -- verify-integrity --base default
-cargo +nightly run --release --bin memoryx -- rebuild-index --base default
-cargo +nightly run --release --bin memoryx -- repair --base default
-```
-
-## MCP Для Ассистентов
-
-Production MCP запускается так:
-
-```bash
-cargo +nightly run --release --features mcp --bin memoryx -- serve --base default --stdio
-```
-
-`memoryx serve --stdio` открывает MCP surface базы. Сейчас доступно 42
-инструментов для query, ingestion, updates, provenance, entities, relations,
-contexts, conflicts, graph traversal, history и multi-base routing.
-
-Важно:
-
-- `memoryx serve --stdio` - production MCP transport.
-- `memoryx serve` без `--stdio` запускает HTTP federation server, это не MCP.
-- `examples/mcp_server_full.rs` - демонстрационный пример, не production entry point.
-
-### MCP Конфигурация Клиента
-
-Большинство IDE и AI-agent клиентов с MCP используют JSON вида `mcpServers`.
-Если запускается готовый `memoryx.exe`, замените `command` и `args` на путь к
-исполняемому файлу.
-
-Project-local base:
+Для пользовательской базы замените `project` на `user`. Если используется
+сборка из исходников, вместо готового файла укажите:
 
 ```json
 {
@@ -641,55 +545,50 @@ Project-local base:
 }
 ```
 
-User-level base:
+После подключения сначала попросите клиента вызвать `active_base` или
+`list_bases`. MCP сохраняет читаемое человеком поле `content` и также отдаёт
+`structuredContent`. Успешные изменения отмечаются как
+`durability: "committed"`.
 
-```json
-{
-  "mcpServers": {
-    "memoryx-user": {
-      "command": "cargo",
-      "args": [
-        "+nightly",
-        "run",
-        "--release",
-        "--features",
-        "mcp",
-        "--bin",
-        "memoryx",
-        "--",
-        "--base-scope",
-        "user",
-        "serve",
-        "--base",
-        "default",
-        "--stdio"
-      ]
-    }
-  }
-}
-```
+## Безопасная работа с 42 инструментами MCP
 
-Пример с готовым exe:
+Рекомендуемый порядок:
 
-```json
-{
-  "mcpServers": {
-    "memoryx": {
-      "command": "E:\\Memory bank\\memoryx.exe",
-      "args": [
-        "--base-scope",
-        "project",
-        "serve",
-        "--base",
-        "default",
-        "--stdio"
-      ]
-    }
-  }
-}
-```
+1. Перед чтением или записью вызовите `active_base` или `list_bases`.
+2. Для другой базы используйте `connect_base` и передавайте её `base_ref`, если
+   инструмент поддерживает это поле; `switch_base` применяйте только при
+   намеренной смене активной базы.
+3. Для сложного вопроса сначала вызовите `compile_query_contract`, затем
+   `validate_query_contract`, а потом `query` или `query_base`.
+4. Перед важным фактическим ответом проверьте `get_provenance_path`,
+   `explain_answer_graph` или `extract_subgraph`.
+5. Инструменты записи используйте только после явной просьбы изменить базу.
 
-Multi-base MCP workflow:
+Точные указатели работают по принципу отказа при сомнении: если объект не найден,
+возвращается `NoMatch`, а запрос не расширяется на всю базу. Обычный запрос
+использует текущие версии атомов. Для истории нужно явно установить
+`temporal_scope.require_current` в `false`. Ветки, созданные только для чтения,
+не сохраняются. Идентификатор для `register_predicate` нужно получать через
+`resolve_predicate`, а не придумывать. `attach_atom_source` сохраняет разные
+источники и повторное присоединение той же пары атом/источник безопасно.
+
+| Категория | Инструменты | Назначение |
+| --- | --- | --- |
+| Запрос и проверка ответа | `query`, `query_base`, `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`, `get_provenance_path` | Составить, проверить и разобрать ответ вместе с подтверждениями. |
+| Выбор базы | `list_bases`, `active_base`, `connect_base`, `switch_base` | Найти, подключить и выбрать базу. |
+| Поиск | `search_lex`, `search_graph`, `search_semantic` | Найти кандидатов, не считая один поиск окончательным ответом. |
+| Запись атомов и история | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Добавить, изменить, пометить удалённым и проверить изменения. |
+| Исправление утверждений | `supersede_claim`, `correct_claim`, `correct_relation` | Заменить неверные или устаревшие знания с сохранением истории. |
+| Источники | `register_source`, `list_sources`, `attach_atom_source` | Зарегистрировать источники и связать их с атомами. |
+| Описание типов связей | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Задать и получить устойчивые типы связей. |
+| Сущности и связи | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Вести сущности, псевдонимы, утверждения и связи. |
+| Контексты и противоречия | `create_context`, `list_contexts`, `branch_context`, `list_conflicts` | Разделять предположения и просматривать нерешённые противоречия. |
+| Обход графа | `graph_neighbors`, `graph_walk`, `extract_subgraph` | Просматривать связанные знания и локальные цепочки рассуждения. |
+
+## Несколько баз
+
+Один процесс MCP может подключить несколько совместимых баз. Типичная
+последовательность:
 
 ```json
 {"name":"list_bases","arguments":{}}
@@ -700,168 +599,70 @@ Multi-base MCP workflow:
 ```
 
 ```json
-{"name":"query_base","arguments":{"base_ref":"project:client-a","query_text":"What decisions mention persistence?","ctx_id":0}}
+{"name":"query_base","arguments":{"base_ref":"project:client-a","query_text":"Какие решения связаны с хранением?","ctx_id":0}}
 ```
 
 ```json
 {"name":"switch_base","arguments":{"base_ref":"project:client-a"}}
 ```
 
-Старые MCP tools используют active base по умолчанию. Большинство
-store-backed tools также могут принять `base_ref`, чтобы работать с
-подключённой базой без смены active base.
+Передавайте `base_ref`, чтобы обращаться к подключённой базе без смены активной,
+если выбранный инструмент поддерживает это поле.
 
-Регистрация managed predicates работает fail-closed. `register_predicate`
-вычисляет числовой ID из полного нормализованного контракта, поэтому порядок
-регистрации не влияет на ID. Повтор того же контракта идемпотентен; конфликт
-ключа/имени, hash collision, несогласованный inverse или cardinality отклоняется.
-Перед `add_claim` или `assert_relation` нужно вызвать `resolve_predicate`, а не
-придумывать числовой ID.
+## Резервная копия, снимок и восстановление
 
-`attach_atom_source` накапливает разные источники и идемпотентен для одной пары
-atom/source. На один atom допускается не более 256 прямых источников; следующая
-привязка возвращает явную ошибку и не удаляет существующий provenance. Размер
-query response отдельно ограничивается `output_contract.max_items`; усечение
-помечается `BudgetExhausted`.
+`snapshot` показывает логическую идентичность текущего состояния знаний. Это
+полезно для воспроизводимости, но это не копия файлов.
 
-Каждая proof-запись явно указывает представление provenance: `embedded`,
-`attached`, `derived`, `federated` или `legacy_unknown`, если старой
-serialized-записи недостаточно для точной классификации. Привязанные источники синхронизируются до
-успешного MCP-ответа, а все разные source ID видны после повторного открытия.
+Для резервной копии остановите все процессы, которые записывают в базу, затем
+скопируйте весь каталог базы вместе с `cas`, `index`, `graph`, `meta` и
+`inverted`. Не копируйте работающую базу во время записи.
 
-Точные targets в QueryContract работают fail-closed. Рекомендуются typed
-selectors: `{"atom_id":"<64 hex>"}`, `{"node_id":42}`,
-`{"entity_id":7}`, `{"term_id":3}`, `{"symbol_id":9}` или
-`{"stable_key":"project:depends_on"}`. Legacy-поле `id` поддерживает префиксы
-`atom:`, `node:`, `term:` и `sym:`. Неразрешённый точный selector возвращает
-`NoMatch` и не расширяет запрос на всю базу. Обычный запрос использует только
-текущие версии atoms; для явного исторического запроса задайте
-`temporal_scope.require_current: false`.
+Проверка и восстановление проектной базы:
 
-MCP сохраняет человекочитаемый `content` и одновременно возвращает
-`structuredContent`. Mutation-ответы содержат стабильное имя операции,
-затронутые ID и `durability: "committed"`. В `list_contexts` поле `selected`
-означает выбранный для запроса context, а `state` имеет значение `open` или
-`closed`: открытая ветка не обязательно является выбранной. Временные ветки,
-созданные read-query для проверки конфликтов, не сохраняются в базе.
-
-Разные физические базы могут параллельно использоваться разными MCP-клиентами.
-У одного физического корня базы одновременно может быть только один процесс,
-изменяющий данные: второй процесс получит явную ошибку writer lease до открытия
-изменяемых компонентов хранилища. Если нескольким приложениям нужна одна живая
-логическая база, они должны работать через один координирующий owner-сервис или
-через отдельные реплики с синхронизацией CRDT/federation. Нельзя направлять два
-независимых writer-процесса в одну папку.
-
-### Карта MCP Инструментов
-
-| Категория | Tools | Назначение |
-| --- | --- | --- |
-| Query и proof output | `query`, `query_base`, `compile_query_contract`, `validate_query_contract`, `explain_answer_graph`, `get_provenance_path` | Компилировать строгие запросы, выполнять их, смотреть answer graph и evidence. |
-| Multi-base routing | `list_bases`, `active_base`, `connect_base`, `switch_base` | Найти project/user базы, подключить дополнительные базы и выбрать active base. |
-| Retrieval | `search_lex`, `search_graph`, `search_semantic` | Искать по lexical, graph и semantic индексам без превращения retrieval в источник истины. |
-| Atom writes и history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Добавлять atoms, batch-write, создавать superseding versions, tombstones и смотреть историю. |
-| Claim correction | `supersede_claim`, `correct_claim`, `correct_relation` | Исправлять устаревшие или неверные знания с сохранением provenance/history. |
-| Sources и provenance | `register_source`, `list_sources`, `attach_atom_source` | Регистрировать источники и связывать atoms с source/provenance paths. |
-| Контракты предикатов | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Регистрировать неизменяемую семантику предикатов и получать их детерминированные числовые ID. |
-| Entities и relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Вести entities, aliases, merges/splits, claims и relations. |
-| Contexts и conflicts | `create_context`, `list_contexts`, `branch_context`, `list_conflicts` | Создавать contexts, ветвить assumptions и смотреть unresolved conflicts. |
-| Graph traversal | `graph_neighbors`, `graph_walk`, `extract_subgraph` | Обходить graph links и извлекать локальный proof/reasoning subgraph. |
-
-Рекомендуемый workflow для AI-агента:
-
-1. Сначала вызвать `active_base` или `list_bases`.
-2. Если нужная база не подключена, использовать `connect_base`.
-3. Для сложных вопросов использовать `compile_query_contract`.
-4. Для ответа использовать `query` или `query_base` с `base_ref`.
-5. Перед утверждениями пользователю проверять `get_provenance_path`,
-   `explain_answer_graph` или `extract_subgraph`.
-6. Write tools использовать только если пользователь явно попросил обновить
-   базу знаний.
-
-## Где Хранится База
-
-MemoryX хранит базы в явных scoped roots:
-
-- Project scope: `<repo>/.memoryx/bases/<name>`
-- User scope: `<home>/.memoryx/bases/<name>`
-
-Явный абсолютный project path принимается независимо от CWD только при
-физической структуре `<project>/.memoryx/bases/<name>`. Произвольные абсолютные
-папки по-прежнему отклоняются.
-
-В каждой открытой базе сохраняется файл `.memoryx.writer.lock`. Это не маркер
-устаревшей блокировки: операционная система удерживает lock только пока жив
-процесс-владелец и автоматически освобождает его при штатном завершении или
-аварийной остановке процесса.
-
-Пользователь выбирает место хранения через `--base-scope`:
-
-```bash
-# Хранить базу внутри текущей папки проекта
-cargo +nightly run --release --bin memoryx -- --base-scope project init --base default
-
-# Хранить базу в общей пользовательской папке MemoryX
-cargo +nightly run --release --bin memoryx -- --base-scope user init --base default
+```powershell
+& $exe --base-scope project verify-integrity --base default
+& $exe --base-scope project rebuild-index --base default
+& $exe --base-scope project repair --base default
 ```
 
-MCP использует тот же выбор:
+`verify-integrity` проверяет сохранённые данные. `rebuild-index` заново строит
+производные индексы. `repair` выполняет безопасную последовательность
+восстановления и завершается повторной проверкой целостности. Перед изменением
+хранилища можно выполнить `compact --dry-run`. Команды обслуживания требуют
+исключительного доступа к физической базе.
 
-```bash
-# MCP работает с базой внутри папки проекта
-cargo +nightly run --release --features mcp --bin memoryx -- --base-scope project serve --base default --stdio
+## Воспроизводимая проверка
 
-# MCP работает с общей пользовательской базой
-cargo +nightly run --release --features mcp --bin memoryx -- --base-scope user serve --base default --stdio
+В репозитории есть готовый к проведению и представлению сравнительный
+бенчмарк. Он вычисляет показатели только по действительно записанным ответам
+и не заменяет отсутствующие оценки выгодными значениями:
+
+- [`docs/BENCHMARK_RAG_COMPARISON.md`](docs/BENCHMARK_RAG_COMPARISON.md)
+- [`benchmarks/run_rag_comparison.ps1`](benchmarks/run_rag_comparison.ps1)
+- [`benchmarks/rag_comparison/cases.jsonl`](benchmarks/rag_comparison/cases.jsonl)
+- [`benchmarks/rag_comparison/corpus.jsonl`](benchmarks/rag_comparison/corpus.jsonl)
+
+Проверка неизменяемых входных данных и сценария:
+
+```powershell
+pwsh -NoLogo -File benchmarks/run_rag_comparison.ps1 -Mode validate
+pwsh -NoLogo -File benchmarks/run_rag_comparison.ps1 -Mode selftest
 ```
 
-После `memoryx init` структура выглядит так:
-
-```text
-.memoryx/bases/default/
-  cas/
-  index/
-  graph/
-  meta/
-    history.log
-    sources.jsonl
-    atom_sources.jsonl
-    predicates.jsonl
-    entities.jsonl
-    relations.jsonl
-  inverted/
-```
-
-CLI и MCP открывают одну и ту же durable store layout. `update_atom` создаёт
-новую версию и связь `SUPERSEDES`; `delete_atom` создаёт tombstone вместо
-физического удаления. Успешные write-операции пишутся в `meta/history.log`.
-
-## Статус
-
-- Текущая версия crate: `2.0.0`. Это major-версия, поскольку публичные Rust
-  структуры запросов и provenance получили новые поля; существующие базы на
-  диске и MCP JSON остаются обратно читаемыми.
-- Совместимость CLI, MCP и persisted bases поддерживается в release line 1.0.
-  Низкоуровневые Rust CAS structs являются implementation-facing; внешним
-  клиентам следует использовать high-level store API.
-- Кодовая база рабочая и покрыта тестами, но пользователям всё равно нужно
-  проверять поведение на своих workload-ах.
-- MCP опционален и требует feature `mcp`.
-- Административные операции обслуживания базы остаются CLI-командами.
-
-## Мейнтейнер И Участие В Разработке
-
-- Автор и мейнтейнер проекта: Korino1.
-- Помощь в разработке: OpenAI Codex использовался для реализации, review,
-  документации, тестирования и подготовки release.
+Сценарий подготавливает парный запуск, записывает ответы MemoryX и обычного
+RAG, вычисляет точность, полноту поиска, подтверждённость, полную задержку,
+долю закрытых случаев и результаты функциональных проверок, а затем создаёт
+отчёты JSON и Markdown. В репозитории нет заранее подготовленных результатов о
+превосходстве. Для представления чисел нужны настоящие адаптеры, исходные
+ответы, решения проверяющих и описание среды запуска.
 
 ## Лицензия
 
-MemoryX лицензируется как open source под `AGPL-3.0-or-later`.
+MemoryX распространяется по `AGPL-3.0-or-later`. Полный текст открытой лицензии:
+[`LICENSE.md`](LICENSE.md) и [`COPYING`](COPYING). Отдельная коммерческая
+лицензия может быть предоставлена по письменному соглашению; см.
+[`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md).
 
-Для компаний и продуктов, которым не подходит AGPL, возможна отдельная
-коммерческая лицензия по письменному соглашению. См. `LICENSE.md` и
-`COMMERCIAL_LICENSE.md`.
-
-Для будущих внешних вкладов потребуется CLA или аналогичное соглашение, чтобы
-сохранить возможность двойного лицензирования.
+Внешние вклады регулируются [`CLA.md`](CLA.md) и
+[`CONTRIBUTING.md`](CONTRIBUTING.md).

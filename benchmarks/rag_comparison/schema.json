@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MemoryX RAG comparison JSONL records",
+  "oneOf": [
+    { "$ref": "#/$defs/corpus" },
+    { "$ref": "#/$defs/case" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "stringArray": { "type": "array", "items": { "type": "string" } },
+    "limits": {
+      "type": "object",
+      "required": ["retrieval_limit", "answer_max_chars", "timeout_ms"],
+      "properties": {
+        "retrieval_limit": { "type": "integer", "minimum": 1 },
+        "answer_max_chars": { "type": "integer", "minimum": 1 },
+        "timeout_ms": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "required": ["id", "context", "provenance", "text"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "context": { "type": "string", "minLength": 1 },
+        "provenance": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    },
+    "case": {
+      "type": "object",
+      "required": ["id", "suite", "query", "required_evidence_ids", "functional_scenarios", "human_closure_expected", "limits"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "suite": { "type": "string", "minLength": 1 },
+        "query": { "type": "string", "minLength": 1 },
+        "required_evidence_ids": { "$ref": "#/$defs/stringArray" },
+        "functional_scenarios": { "$ref": "#/$defs/stringArray" },
+        "human_closure_expected": { "type": "boolean" },
+        "limits": { "$ref": "#/$defs/limits" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["schema_version", "run_id", "system", "case_id", "corpus_sha256", "cases_sha256", "limits", "status", "latency_ms"],
+      "properties": {
+        "schema_version": { "const": "memoryx-rag-benchmark-result-v1" },
+        "run_id": { "type": ["string", "null"], "minLength": 1 },
+        "system": { "enum": ["memoryx", "rag"] },
+        "case_id": { "type": "string", "minLength": 1 },
+        "corpus_sha256": { "type": ["string", "null"], "minLength": 1 },
+        "cases_sha256": { "type": ["string", "null"], "minLength": 1 },
+        "limits": { "oneOf": [{ "$ref": "#/$defs/limits" }, { "type": "null" }] },
+        "status": { "enum": ["answered", "closed", "insufficient_evidence", "conflicted", "policy_blocked", "error", "timeout", "unscored"] },
+        "latency_ms": { "type": "object", "required": ["end_to_end"], "properties": { "end_to_end": { "type": ["number", "null"], "minimum": 0 } } }
+      }
+    }
+  }
+}
