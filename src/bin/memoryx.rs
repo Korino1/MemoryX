@@ -391,6 +391,21 @@ enum Commands {
         stdio: bool,
     },
 
+    /// Call one MCP tool through the live owner of an already-open base
+    Client {
+        /// MemoryX base path or base name
+        #[arg(short, long)]
+        base: Option<PathBuf>,
+
+        /// MCP tool name exposed by the live owner
+        #[arg(long)]
+        tool: String,
+
+        /// JSON object passed as MCP tool arguments
+        #[arg(long, default_value = "{}")]
+        arguments: String,
+    },
+
     /// Initialize a new MemoryX base directory
     Init {
         /// MemoryX base path or base name
@@ -644,19 +659,6 @@ struct AtomMetadataExport {
     source_id: u32,
 }
 
-/// Statistics representation
-#[derive(Debug, Serialize)]
-struct StorageStats {
-    total_atoms: usize,
-    total_claims: usize,
-    atom_types: HashMap<String, usize>,
-    storage_size_bytes: u64,
-    index_size_bytes: u64,
-    graph_edges: usize,
-    contexts: usize,
-    conflicts: usize,
-}
-
 // ============================================================================
 // Error Handling
 // ============================================================================
@@ -666,6 +668,9 @@ struct StorageStats {
 enum CliError {
     Io(std::io::Error),
     Store(String),
+    BaseInUse { root: PathBuf },
+    ControlUnavailable { root: PathBuf, reason: String },
+    ControlProtocol(String),
     Config(String),
     Parse(String),
     Validation(String),
@@ -676,6 +681,20 @@ impl std::fmt::Display for CliError {
         match self {
             CliError::Io(e) => write!(f, "IO error: {}", e),
             CliError::Store(e) => write!(f, "Store error: {}", e),
+            CliError::BaseInUse { root } => write!(
+                f,
+                "Store error: store base is already open; exclusive writer lease is held: {}",
+                root.display()
+            ),
+            CliError::ControlUnavailable { root, reason } => write!(
+                f,
+                "Live-owner control endpoint is unavailable for '{}': {}",
+                root.display(),
+                reason
+            ),
+            CliError::ControlProtocol(error) => {
+                write!(f, "Live-owner control protocol error: {error}")
+            }
             CliError::Config(e) => write!(f, "Config error: {}", e),
             CliError::Parse(e) => write!(f, "Parse error: {}", e),
             CliError::Validation(e) => write!(f, "Validation error: {}", e),
@@ -711,7 +730,10 @@ impl From<csv::Error> for CliError {
 
 impl From<StoreError> for CliError {
     fn from(e: StoreError) -> Self {
-        CliError::Store(e.to_string())
+        match e {
+            StoreError::BaseInUse(root) => CliError::BaseInUse { root },
+            other => CliError::Store(other.to_string()),
+        }
     }
 }
 
@@ -722,6 +744,51 @@ impl From<walkdir::Error> for CliError {
 }
 
 type CliResult<T> = Result<T, CliError>;
+
+impl CliError {
+    fn code(&self) -> &'static str {
+        match self {
+            CliError::BaseInUse { .. } => "BASE_WRITER_LEASE_HELD",
+            CliError::ControlUnavailable { .. } => "LIVE_OWNER_CONTROL_UNAVAILABLE",
+            CliError::ControlProtocol(_) => "LIVE_OWNER_CONTROL_PROTOCOL_ERROR",
+            CliError::Io(_) => "IO_ERROR",
+            CliError::Store(_) => "STORE_ERROR",
+            CliError::Config(_) => "CONFIG_ERROR",
+            CliError::Parse(_) => "PARSE_ERROR",
+            CliError::Validation(_) => "VALIDATION_ERROR",
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        match self {
+            CliError::BaseInUse { .. } => 73,
+            CliError::ControlUnavailable { .. } | CliError::ControlProtocol(_) => 69,
+            _ => 1,
+        }
+    }
+
+    fn machine_diagnostic(&self) -> serde_json::Value {
+        let mut error = serde_json::json!({
+            "code": self.code(),
+            "message": self.to_string(),
+            "retryable": matches!(self, CliError::ControlUnavailable { .. }),
+        });
+        let root = match self {
+            CliError::BaseInUse { root } | CliError::ControlUnavailable { root, .. } => Some(root),
+            _ => None,
+        };
+        if let Some(root) = root {
+            error["base_path"] = serde_json::json!(root);
+            error["control_descriptor"] = serde_json::json!(control_descriptor_path(root));
+        }
+        serde_json::json!({
+            "schema": "memoryx.cli-error.v1",
+            "ok": false,
+            "exit_code": self.exit_code(),
+            "error": error,
+        })
+    }
+}
 
 // ============================================================================
 // Utility Functions
@@ -1825,6 +1892,134 @@ impl McpServerState {
         for base in self.bases.values_mut() {
             base.connected = base.connected || self.stores.contains_key(&base.base_ref);
             base.active = base.base_ref == self.active_base_ref;
+        }
+    }
+}
+
+#[cfg(feature = "mcp")]
+const CONTROL_DESCRIPTOR_FILE_NAME: &str = ".memoryx.control.json";
+#[cfg(feature = "mcp")]
+const CONTROL_SCHEMA: &str = "memoryx.control.v1";
+#[cfg(feature = "mcp")]
+const CONTROL_PROTOCOL_VERSION: u32 = 1;
+
+#[cfg(feature = "mcp")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ControlDescriptor {
+    schema: String,
+    protocol_version: u32,
+    address: String,
+    token: String,
+    pid: u32,
+    base_path: PathBuf,
+    started_at_unix_ns: u64,
+}
+
+#[cfg(feature = "mcp")]
+fn control_descriptor_path(base: &Path) -> PathBuf {
+    base.join(CONTROL_DESCRIPTOR_FILE_NAME)
+}
+
+#[cfg(not(feature = "mcp"))]
+fn control_descriptor_path(base: &Path) -> PathBuf {
+    base.join(".memoryx.control.json")
+}
+
+#[cfg(feature = "mcp")]
+fn generate_control_token() -> CliResult<String> {
+    let mut token = [0u8; 32];
+    getrandom::fill(&mut token)
+        .map_err(|error| CliError::ControlProtocol(format!("OS random source failed: {error}")))?;
+    Ok(hex::encode(token))
+}
+
+#[cfg(feature = "mcp")]
+fn validate_control_descriptor(base: &Path, descriptor: &ControlDescriptor) -> CliResult<()> {
+    if descriptor.schema != CONTROL_SCHEMA
+        || descriptor.protocol_version != CONTROL_PROTOCOL_VERSION
+        || descriptor.pid == 0
+        || descriptor.token.len() != 64
+        || !descriptor
+            .token
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || descriptor
+            .address
+            .parse::<std::net::SocketAddr>()
+            .map(|address| !address.ip().is_loopback())
+            .unwrap_or(true)
+    {
+        return Err(CliError::ControlProtocol(
+            "invalid live-owner control descriptor".to_owned(),
+        ));
+    }
+    let expected = canonical_base_identity(base)
+        .map_err(|error| CliError::ControlProtocol(error.to_string()))?;
+    let described = canonical_base_identity(&descriptor.base_path)
+        .map_err(|error| CliError::ControlProtocol(error.to_string()))?;
+    if expected != described {
+        return Err(CliError::ControlProtocol(format!(
+            "control descriptor targets '{}' instead of '{}'",
+            described.display(),
+            expected.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mcp")]
+fn read_control_descriptor(base: &Path) -> CliResult<ControlDescriptor> {
+    let path = control_descriptor_path(base);
+    let bytes = std::fs::read(&path).map_err(|error| CliError::ControlUnavailable {
+        root: base.to_path_buf(),
+        reason: format!("cannot read '{}': {error}", path.display()),
+    })?;
+    let descriptor: ControlDescriptor = serde_json::from_slice(&bytes)
+        .map_err(|error| CliError::ControlProtocol(format!("invalid descriptor JSON: {error}")))?;
+    validate_control_descriptor(base, &descriptor)?;
+    Ok(descriptor)
+}
+
+#[cfg(feature = "mcp")]
+fn write_control_descriptor(base: &Path, descriptor: &ControlDescriptor) -> CliResult<PathBuf> {
+    validate_control_descriptor(base, descriptor)?;
+    let path = control_descriptor_path(base);
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let encoded = serde_json::to_vec_pretty(descriptor)?;
+    {
+        use std::io::Write;
+        let mut file = File::create(&temporary)?;
+        file.write_all(&encoded)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))?;
+    }
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    std::fs::rename(&temporary, &path)?;
+    Ok(path)
+}
+
+#[cfg(feature = "mcp")]
+struct ControlDescriptorGuard {
+    path: PathBuf,
+    token: String,
+}
+
+#[cfg(feature = "mcp")]
+impl Drop for ControlDescriptorGuard {
+    fn drop(&mut self) {
+        let remove = std::fs::read(&self.path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<ControlDescriptor>(&bytes).ok())
+            .is_some_and(|descriptor| descriptor.token == self.token);
+        if remove {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -3180,7 +3375,12 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
     use memoryx::cas::io::{INDEX_EXTENSION, SEGMENT_EXTENSION, SEGMENT_PREFIX};
     use memoryx::graph::GraphStore;
 
-    print_info(&format!("Collecting statistics for '{}'", base.display()));
+    if matches!(format, OutputFormat::Table) {
+        print_info(&format!("Collecting statistics for '{}'", base.display()));
+    }
+    // Acquire the writer lease before inspecting files so a live base fails
+    // closed instead of producing a mixed-time filesystem snapshot.
+    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
 
     let cas_dir = base.join("cas");
     let graph_dir = base.join("graph");
@@ -3240,14 +3440,12 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
 
     // --- Graph stats ---
     let mut node_count: u64 = 0;
-    let mut edge_count: u64 = 0;
     let mut delta_layers: usize = 0;
 
     if graph_dir.exists()
         && let Ok(graph) = GraphStore::load(&graph_dir)
     {
         node_count = graph.node_count();
-        edge_count = graph.edge_count();
         delta_layers = graph.delta_count();
     }
 
@@ -3281,62 +3479,64 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
         }
     }
 
-    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))?;
-    let atom_ids = store.list_atom_ids();
-    let mut total_claims = 0usize;
-    let mut atom_types = HashMap::new();
-    for atom_id in &atom_ids {
-        let atom = store.get_atom(atom_id)?;
-        total_claims = total_claims.saturating_add(atom.claims.len());
-        *atom_types
-            .entry(format!("{:?}", atom.atom_type))
-            .or_insert(0usize) += 1;
-    }
-    let contexts = store.list_contexts();
-    let conflicts = contexts
-        .iter()
-        .map(|context| context.conflicts.len())
-        .sum::<usize>();
-    let stats = StorageStats {
-        total_atoms: atom_ids.len(),
-        total_claims,
-        atom_types,
-        storage_size_bytes: seg_total_size,
-        index_size_bytes: idx_total_size,
-        graph_edges: edge_count as usize,
-        contexts: contexts.len(),
-        conflicts,
-    };
+    let stats = store.statistics()?;
 
     // --- Output ---
     match format {
         OutputFormat::Json => {
             let json = serde_json::json!({
-                "total_atoms": stats.total_atoms,
-                "total_claims": stats.total_claims,
-                "atom_types": stats.atom_types,
+                "total_atoms": stats.cas_live_atom_count,
+                "total_claims": stats.cas_live_claim_count,
+                "atom_types": stats.cas_live_atom_types,
+                "cas_live_atom_count": stats.cas_live_atom_count,
+                "cas_live_claim_count": stats.cas_live_claim_count,
+                "current_atom_count": stats.current_atom_count,
+                "current_claim_count": stats.current_claim_count,
+                "active_relation_count": stats.active_relation_count,
+                "registered_entity_count": stats.registered_entity_count,
+                "registered_predicate_count": stats.registered_predicate_count,
+                "registered_source_count": stats.registered_source_count,
+                "context_count": stats.context_count,
+                "conflict_count": stats.conflict_count,
                 "cas_segments": seg_count,
                 "cas_size_bytes": seg_total_size,
                 "index_files": idx_count,
                 "index_size_bytes": idx_total_size,
                 "graph_nodes": node_count,
-                "graph_edges": stats.graph_edges,
+                "graph_edges": stats.physical_graph_edge_count,
                 "graph_delta_layers": delta_layers,
                 "meta_snapshots": snapshot_count,
                 "meta_wal_files": wal_count,
                 "total_dir_size_bytes": total_dir_size,
+                "metric_semantics": {
+                    "total_atoms": "compatibility alias for cas_live_atom_count",
+                    "total_claims": "compatibility alias for cas_live_claim_count",
+                    "cas_live": "non-tombstoned CAS records, including superseded history",
+                    "current": "non-tombstoned records not superseded by a newer atom",
+                    "physical_graph": "stored topology, including historical and superseded nodes and edges"
+                }
             });
             println!("{}", serde_json::to_string_pretty(&json)?);
         }
         OutputFormat::Yaml => {
             let yaml = serde_json::json!({
-                "total_atoms": stats.total_atoms,
-                "total_claims": stats.total_claims,
-                "atom_types": stats.atom_types,
+                "total_atoms": stats.cas_live_atom_count,
+                "total_claims": stats.cas_live_claim_count,
+                "atom_types": stats.cas_live_atom_types,
+                "cas_live_atom_count": stats.cas_live_atom_count,
+                "cas_live_claim_count": stats.cas_live_claim_count,
+                "current_atom_count": stats.current_atom_count,
+                "current_claim_count": stats.current_claim_count,
+                "active_relation_count": stats.active_relation_count,
+                "registered_entity_count": stats.registered_entity_count,
+                "registered_predicate_count": stats.registered_predicate_count,
+                "registered_source_count": stats.registered_source_count,
+                "context_count": stats.context_count,
+                "conflict_count": stats.conflict_count,
                 "cas_segments": seg_count,
                 "cas_size_bytes": seg_total_size,
                 "graph_nodes": node_count,
-                "graph_edges": stats.graph_edges,
+                "graph_edges": stats.physical_graph_edge_count,
                 "graph_delta_layers": delta_layers,
                 "meta_snapshots": snapshot_count,
                 "meta_wal_files": wal_count,
@@ -3358,14 +3558,17 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
                 format_bytes(idx_total_size)
             );
             println!("  Index Entries:   {}", total_records);
-            println!("  Live Atoms:      {}", stats.total_atoms);
-            println!("  Claims:          {}", stats.total_claims);
-            println!("  Contexts:        {}", stats.contexts);
-            println!("  Conflicts:       {}", stats.conflicts);
+            println!("  CAS Live Atoms:  {}", stats.cas_live_atom_count);
+            println!("  CAS Live Claims: {}", stats.cas_live_claim_count);
+            println!("  Current Atoms:   {}", stats.current_atom_count);
+            println!("  Current Claims:  {}", stats.current_claim_count);
+            println!("  Active Relations:{}", stats.active_relation_count);
+            println!("  Contexts:        {}", stats.context_count);
+            println!("  Conflicts:       {}", stats.conflict_count);
             println!("  Graph Nodes:     {}", node_count.to_string().green());
             println!(
                 "  Graph Edges:     {}",
-                stats.graph_edges.to_string().green()
+                stats.physical_graph_edge_count.to_string().green()
             );
             println!("  Delta Layers:    {}", delta_layers);
             println!("  Meta Snapshots:  {}", snapshot_count);
@@ -3647,6 +3850,343 @@ async fn read_bounded_mcp_line<R: tokio::io::AsyncBufRead + Unpin>(
 }
 
 #[cfg(feature = "mcp")]
+async fn write_protocol_line<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    bytes: &[u8],
+) -> CliResult<()> {
+    use tokio::io::AsyncWriteExt;
+
+    writer.write_all(bytes).await.map_err(CliError::Io)?;
+    writer.write_all(b"\n").await.map_err(CliError::Io)?;
+    writer.flush().await.map_err(CliError::Io)
+}
+
+#[cfg(feature = "mcp")]
+async fn handle_control_connection(
+    stream: tokio::net::TcpStream,
+    expected_token: String,
+    state: std::sync::Arc<tokio::sync::Mutex<McpServerState>>,
+) -> CliResult<()> {
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = tokio::io::BufReader::new(read_half);
+    let auth = match read_bounded_mcp_line(&mut reader).await? {
+        McpInputLine::Line(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|error| CliError::ControlProtocol(format!("invalid auth JSON: {error}")))?,
+        McpInputLine::TooLarge => {
+            return Err(CliError::ControlProtocol(
+                "control auth request exceeds MCP line limit".to_owned(),
+            ));
+        }
+        McpInputLine::Eof => {
+            return Err(CliError::ControlProtocol(
+                "control connection closed before authentication".to_owned(),
+            ));
+        }
+    };
+    let authenticated = auth.get("schema").and_then(serde_json::Value::as_str)
+        == Some("memoryx.control.auth.v1")
+        && auth
+            .get("protocol_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(u64::from(CONTROL_PROTOCOL_VERSION))
+        && auth.get("token").and_then(serde_json::Value::as_str) == Some(expected_token.as_str());
+    let acknowledgement = serde_json::json!({
+        "schema": "memoryx.control.auth-result.v1",
+        "ok": authenticated,
+        "protocol_version": CONTROL_PROTOCOL_VERSION,
+    });
+    write_protocol_line(&mut write_half, acknowledgement.to_string().as_bytes()).await?;
+    if !authenticated {
+        return Ok(());
+    }
+
+    loop {
+        let request = match read_bounded_mcp_line(&mut reader).await? {
+            McpInputLine::Eof => return Ok(()),
+            McpInputLine::TooLarge => {
+                let response = mcp_error(
+                    serde_json::Value::Null,
+                    -32700,
+                    format!("MCP request exceeds {MAX_MCP_REQUEST_LINE_BYTES} bytes"),
+                );
+                write_protocol_line(&mut write_half, response.to_string().as_bytes()).await?;
+                continue;
+            }
+            McpInputLine::Line(bytes) => match String::from_utf8(bytes) {
+                Ok(request) => request,
+                Err(error) => {
+                    let response = mcp_error(
+                        serde_json::Value::Null,
+                        -32700,
+                        format!("MCP request is not UTF-8: {error}"),
+                    );
+                    write_protocol_line(&mut write_half, response.to_string().as_bytes()).await?;
+                    continue;
+                }
+            },
+        };
+        let response = {
+            let mut state = state.lock().await;
+            process_mcp_request(&mut state, &request).await
+        };
+        if let Some(response) = response {
+            write_protocol_line(&mut write_half, response.as_bytes()).await?;
+        }
+    }
+}
+
+#[cfg(feature = "mcp")]
+async fn start_control_server(
+    base: &Path,
+    state: std::sync::Arc<tokio::sync::Mutex<McpServerState>>,
+) -> CliResult<(
+    ControlDescriptorGuard,
+    tokio::task::JoinHandle<()>,
+    ControlDescriptor,
+)> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .map_err(CliError::Io)?;
+    let address = listener.local_addr().map_err(CliError::Io)?;
+    let token = generate_control_token()?;
+    let canonical_base = canonical_base_identity(base)
+        .map_err(|error| CliError::ControlProtocol(error.to_string()))?;
+    let started_at_unix_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0);
+    let descriptor = ControlDescriptor {
+        schema: CONTROL_SCHEMA.to_owned(),
+        protocol_version: CONTROL_PROTOCOL_VERSION,
+        address: address.to_string(),
+        token: token.clone(),
+        pid: std::process::id(),
+        base_path: canonical_base,
+        started_at_unix_ns,
+    };
+    let path = write_control_descriptor(base, &descriptor)?;
+    let guard = ControlDescriptorGuard {
+        path,
+        token: token.clone(),
+    };
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((stream, peer)) = listener.accept().await else {
+                break;
+            };
+            if !peer.ip().is_loopback() {
+                continue;
+            }
+            let state = std::sync::Arc::clone(&state);
+            let token = token.clone();
+            tokio::spawn(async move {
+                if let Err(error) = handle_control_connection(stream, token, state).await {
+                    eprintln!("MemoryX control connection error: {error}");
+                }
+            });
+        }
+    });
+    Ok((guard, task, descriptor))
+}
+
+#[cfg(feature = "mcp")]
+async fn connect_control(
+    base: &Path,
+) -> CliResult<(
+    tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
+    tokio::net::tcp::OwnedWriteHalf,
+)> {
+    let descriptor = read_control_descriptor(base)?;
+    let address = descriptor
+        .address
+        .parse::<std::net::SocketAddr>()
+        .map_err(|error| {
+            CliError::ControlProtocol(format!("invalid control endpoint address: {error}"))
+        })?;
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::net::TcpStream::connect(address),
+    )
+    .await
+    .map_err(|_| CliError::ControlUnavailable {
+        root: base.to_path_buf(),
+        reason: "connection timed out".to_owned(),
+    })?
+    .map_err(|error| CliError::ControlUnavailable {
+        root: base.to_path_buf(),
+        reason: format!("connection to {} failed: {error}", descriptor.address),
+    })?;
+    stream.set_nodelay(true).map_err(CliError::Io)?;
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = tokio::io::BufReader::new(read_half);
+    let auth = serde_json::json!({
+        "schema": "memoryx.control.auth.v1",
+        "protocol_version": CONTROL_PROTOCOL_VERSION,
+        "token": descriptor.token,
+    });
+    write_protocol_line(&mut write_half, auth.to_string().as_bytes()).await?;
+    let acknowledgement = match read_bounded_mcp_line(&mut reader).await? {
+        McpInputLine::Line(bytes) => {
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| {
+                CliError::ControlProtocol(format!("invalid auth response: {error}"))
+            })?
+        }
+        McpInputLine::TooLarge => {
+            return Err(CliError::ControlProtocol(
+                "control auth response exceeds MCP line limit".to_owned(),
+            ));
+        }
+        McpInputLine::Eof => {
+            return Err(CliError::ControlUnavailable {
+                root: base.to_path_buf(),
+                reason: "owner closed connection during authentication".to_owned(),
+            });
+        }
+    };
+    if acknowledgement
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        != Some("memoryx.control.auth-result.v1")
+        || acknowledgement
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+        || acknowledgement
+            .get("protocol_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(u64::from(CONTROL_PROTOCOL_VERSION))
+    {
+        return Err(CliError::ControlProtocol(
+            "live owner rejected control authentication".to_owned(),
+        ));
+    }
+    Ok((reader, write_half))
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_request_expects_response(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .is_none_or(|request| {
+            !(request.get("id").is_none()
+                && request
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some())
+        })
+}
+
+#[cfg(feature = "mcp")]
+async fn run_stdio_control_proxy(base: &Path, diagnostic_sink: DiagnosticSink) -> CliResult<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut owner_reader, mut owner_writer) = connect_control(base).await?;
+    print_info_to(
+        diagnostic_sink,
+        "Attached to the live MemoryX owner through local control protocol",
+    );
+    let stdin = tokio::io::stdin();
+    let mut input = tokio::io::BufReader::new(stdin);
+    let mut stdout = tokio::io::stdout();
+    loop {
+        match read_bounded_mcp_line(&mut input).await? {
+            McpInputLine::Eof => return Ok(()),
+            McpInputLine::TooLarge => {
+                let response = mcp_error(
+                    serde_json::Value::Null,
+                    -32700,
+                    format!("MCP request exceeds {MAX_MCP_REQUEST_LINE_BYTES} bytes"),
+                );
+                write_protocol_line(&mut stdout, response.to_string().as_bytes()).await?;
+            }
+            McpInputLine::Line(bytes) => {
+                let expects_response = mcp_request_expects_response(&bytes);
+                write_protocol_line(&mut owner_writer, &bytes).await?;
+                if !expects_response {
+                    continue;
+                }
+                let response = match read_bounded_mcp_line(&mut owner_reader).await? {
+                    McpInputLine::Line(response) => response,
+                    McpInputLine::TooLarge => {
+                        return Err(CliError::ControlProtocol(
+                            "live-owner MCP response exceeds line limit".to_owned(),
+                        ));
+                    }
+                    McpInputLine::Eof => {
+                        return Err(CliError::ControlUnavailable {
+                            root: base.to_path_buf(),
+                            reason: "live owner closed the proxied MCP connection".to_owned(),
+                        });
+                    }
+                };
+                stdout.write_all(&response).await.map_err(CliError::Io)?;
+                stdout.write_all(b"\n").await.map_err(CliError::Io)?;
+                stdout.flush().await.map_err(CliError::Io)?;
+            }
+        }
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn cmd_client(base: &Path, tool: &str, arguments: &str, format: OutputFormat) -> CliResult<()> {
+    let arguments: serde_json::Value = serde_json::from_str(arguments)?;
+    if !arguments.is_object() {
+        return Err(CliError::Validation(
+            "--arguments must be a JSON object".to_owned(),
+        ));
+    }
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "memoryx-client",
+        "method": "tools/call",
+        "params": {
+            "name": tool,
+            "arguments": arguments,
+        }
+    });
+    let runtime = tokio::runtime::Runtime::new().map_err(CliError::Io)?;
+    let response = runtime.block_on(async {
+        let (mut reader, mut writer) = connect_control(base).await?;
+        write_protocol_line(&mut writer, request.to_string().as_bytes()).await?;
+        match read_bounded_mcp_line(&mut reader).await? {
+            McpInputLine::Line(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|error| CliError::ControlProtocol(error.to_string())),
+            McpInputLine::TooLarge => Err(CliError::ControlProtocol(
+                "MCP tool response exceeds line limit".to_owned(),
+            )),
+            McpInputLine::Eof => Err(CliError::ControlUnavailable {
+                root: base.to_path_buf(),
+                reason: "live owner closed before returning a tool response".to_owned(),
+            }),
+        }
+    })?;
+    if let Some(error) = response.get("error") {
+        return Err(CliError::ControlProtocol(format!(
+            "MCP tool '{tool}' failed: {error}"
+        )));
+    }
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+        OutputFormat::Yaml => println!("{}", serde_yaml::to_string(&response)?),
+        OutputFormat::Table => {
+            let text = response
+                .pointer("/result/content/0/text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("MCP tool completed without text content");
+            println!("{text}");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "mcp"))]
+fn cmd_client(_base: &Path, _tool: &str, _arguments: &str, _format: OutputFormat) -> CliResult<()> {
+    Err(CliError::Validation(
+        "live-owner client requires 'mcp' feature".to_owned(),
+    ))
+}
+
+#[cfg(feature = "mcp")]
 fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
@@ -3675,14 +4215,25 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
         print_info_to(diagnostic_sink, &format!("Listener: {}:{}", host, port));
     }
 
-    let store = MemoryX::new(StoreConfig::new(base.to_path_buf()))
-        .map_err(|e| CliError::Store(format!("Failed to open store: {}", e)))?;
-    let mut mcp_state = McpServerState::new(base.to_path_buf(), store)?;
-
     let rt = Runtime::new().map_err(CliError::Io)?;
+    let store = match MemoryX::new(StoreConfig::new(base.to_path_buf())) {
+        Ok(store) => store,
+        Err(StoreError::BaseInUse(root)) if stdio => {
+            print_info_to(
+                diagnostic_sink,
+                "Writer lease is held; attempting live-owner MCP attachment",
+            );
+            return rt.block_on(run_stdio_control_proxy(&root, diagnostic_sink));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut mcp_state = McpServerState::new(base.to_path_buf(), store)?;
 
     rt.block_on(async {
         if stdio {
+            let state = std::sync::Arc::new(tokio::sync::Mutex::new(mcp_state));
+            let (_control_guard, control_task, descriptor) =
+                start_control_server(base, std::sync::Arc::clone(&state)).await?;
             // Stdio MCP transport
             let stdin = tokio::io::stdin();
             let mut stdout = tokio::io::stdout();
@@ -3691,6 +4242,14 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
             print_info_to(
                 diagnostic_sink,
                 "Stdio MCP server running. Send JSON-RPC requests.",
+            );
+            print_info_to(
+                diagnostic_sink,
+                &format!(
+                    "Live-owner control: {} (descriptor {})",
+                    descriptor.address,
+                    control_descriptor_path(base).display()
+                ),
             );
 
             loop {
@@ -3713,7 +4272,11 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
                                 continue;
                             }
                         };
-                        if let Some(response) = process_mcp_request(&mut mcp_state, &line).await {
+                        let response = {
+                            let mut state = state.lock().await;
+                            process_mcp_request(&mut state, &line).await
+                        };
+                        if let Some(response) = response {
                             stdout
                                 .write_all(response.as_bytes())
                                 .await
@@ -3742,6 +4305,7 @@ fn cmd_serve(base: &Path, port: u16, host: &str, stdio: bool) -> CliResult<()> {
                     }
                 }
             }
+            control_task.abort();
         } else {
             // HTTP Federation server
             use memoryx::federation::{FederationConfig, FederationServer, Gateway};
@@ -3808,6 +4372,8 @@ const BASE_SELECTABLE_MCP_TOOLS: &[&str] = &[
     "correct_claim",
     "delete_atom",
     "history",
+    "get_stats",
+    "verify_integrity",
     "register_source",
     "list_sources",
     "attach_atom_source",
@@ -3823,6 +4389,7 @@ const BASE_SELECTABLE_MCP_TOOLS: &[&str] = &[
     "add_claim",
     "assert_relation",
     "correct_relation",
+    "transition_relation",
     "create_context",
     "list_contexts",
     "branch_context",
@@ -4664,6 +5231,28 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                         }
                                     },
                                     {
+                                        "name": "get_stats",
+                                        "description": "Return stable base statistics. CAS live counts include non-tombstoned superseded history; current counts exclude superseded atoms; physical graph counts include historical nodes and edges.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "verify_integrity",
+                                        "description": "Verify every non-tombstoned CAS atom through the process that already owns the base. Use this instead of starting another writer against a live base.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
                                         "name": "register_source",
                                         "description": "Register a durable provenance source such as a file, page, repository, commit, API response, message, table, measurement, human, or agent.",
                                         "inputSchema": {
@@ -4925,6 +5514,32 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                         }
                                     },
                                     {
+                                        "name": "transition_relation",
+                                        "description": "Replace one current relation value in a selected context while preserving the old relation as superseded history. The successor keeps the same subject and predicate, may accumulate registered source IDs, and becomes the only active value for that relation slot.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "old_relation_id": { "type": "integer" },
+                                                "new_object": { "type": "integer" },
+                                                "ctx_id": { "type": "integer" },
+                                                "source_ids": {
+                                                    "type": "array",
+                                                    "items": { "type": "integer" },
+                                                    "maxItems": 256
+                                                }
+                                            },
+                                            "required": ["old_relation_id", "new_object"],
+                                            "examples": [
+                                                {
+                                                    "old_relation_id": 1,
+                                                    "new_object": 3,
+                                                    "ctx_id": 0,
+                                                    "source_ids": [1, 2]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
                                         "name": "create_context",
                                         "description": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
                                         "inputSchema": {
@@ -5146,6 +5761,15 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                         "history" => {
                             mcp_with_selected_store(state, id, arguments, mcp_history_response)
                         }
+                        "get_stats" => {
+                            mcp_with_selected_store(state, id, arguments, mcp_get_stats_response)
+                        }
+                        "verify_integrity" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_verify_integrity_response,
+                        ),
                         "register_source" => mcp_with_selected_store(
                             state,
                             id,
@@ -5223,6 +5847,12 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                             id,
                             arguments,
                             mcp_correct_relation_response,
+                        ),
+                        "transition_relation" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_transition_relation_response,
                         ),
                         "create_context" => mcp_with_selected_store(
                             state,
@@ -6428,6 +7058,65 @@ fn mcp_history_response(
 }
 
 #[cfg(feature = "mcp")]
+fn mcp_get_stats_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.statistics() {
+        Ok(stats) => mcp_structured_result(
+            id,
+            format!(
+                "Base statistics\nCAS live atoms: {}\nCurrent atoms: {}\nCurrent claims: {}\nActive relations: {}\nPhysical graph: {} nodes, {} edges",
+                stats.cas_live_atom_count,
+                stats.current_atom_count,
+                stats.current_claim_count,
+                stats.active_relation_count,
+                stats.physical_graph_node_count,
+                stats.physical_graph_edge_count
+            ),
+            serde_json::json!({
+                "operation": "get_stats",
+                "statistics": stats,
+                "metric_semantics": {
+                    "cas_live": "non-tombstoned CAS records, including superseded history",
+                    "current": "non-tombstoned records not superseded by a newer atom",
+                    "active_relations": "non-deprecated relation records not superseded by another relation",
+                    "physical_graph": "stored graph topology, including historical and superseded nodes and edges"
+                }
+            }),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Statistics failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_verify_integrity_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.verify_integrity() {
+        Ok(summary) => mcp_structured_result(
+            id,
+            format!(
+                "Integrity verification\nValid: {}\nChecked: {}\nInvalid: {}\nMissing: {}",
+                summary.is_valid(),
+                summary.checked_atoms,
+                summary.invalid_atoms,
+                summary.missing_atoms
+            ),
+            serde_json::json!({
+                "operation": "verify_integrity",
+                "valid": summary.is_valid(),
+                "summary": summary
+            }),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Integrity verification failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
 fn mcp_register_source_response(
     store: &mut MemoryX,
     id: serde_json::Value,
@@ -7053,6 +7742,91 @@ fn mcp_correct_relation_response(
             }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Correct relation failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_transition_relation_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    const MAX_TRANSITION_SOURCES: usize = 256;
+
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(err) => return err,
+    };
+    let Some(old_relation_id) = args.get("old_relation_id").and_then(|value| value.as_u64()) else {
+        return mcp_error(
+            id,
+            -32602,
+            "Missing required integer field 'old_relation_id'",
+        );
+    };
+    let Some(new_object) = args.get("new_object").and_then(|value| value.as_u64()) else {
+        return mcp_error(id, -32602, "Missing required integer field 'new_object'");
+    };
+    let ctx_id = match mcp_selected_context(store, args, "ctx_id") {
+        Ok(ctx_id) => ctx_id,
+        Err(error) => return mcp_error(id, -32602, error),
+    };
+    let source_ids = match args.get("source_ids") {
+        None => Vec::new(),
+        Some(value) => {
+            let Some(values) = value.as_array() else {
+                return mcp_error(id, -32602, "'source_ids' must be an integer array");
+            };
+            if values.len() > MAX_TRANSITION_SOURCES {
+                return mcp_error(
+                    id,
+                    -32602,
+                    format!("'source_ids' exceeds the maximum of {MAX_TRANSITION_SOURCES} entries"),
+                );
+            }
+            let mut parsed = Vec::with_capacity(values.len());
+            for value in values {
+                let Some(source_id) = value
+                    .as_u64()
+                    .and_then(|value| SourceId::try_from(value).ok())
+                    .filter(|value| *value != 0)
+                else {
+                    return mcp_error(
+                        id,
+                        -32602,
+                        "'source_ids' must contain positive 32-bit integers",
+                    );
+                };
+                parsed.push(source_id);
+            }
+            parsed
+        }
+    };
+
+    match store.transition_relation(old_relation_id, new_object, ctx_id, Vec::new(), source_ids) {
+        Ok(result) => mcp_structured_result(
+            id,
+            format!(
+                "Transitioned relation\nPrevious relation ID: {}\nRelation ID: {}\nAtom ID: {}\nContext: {}\nSources: {}",
+                result.previous_relation_id,
+                result.relation_id,
+                hex::encode(result.atom_id),
+                result.ctx_id,
+                result.source_ids.len()
+            ),
+            serde_json::json!({
+                "operation": "transition_relation",
+                "previous_relation_id": result.previous_relation_id,
+                "previous_atom_id": hex::encode(result.previous_atom_id),
+                "relation_id": result.relation_id,
+                "atom_id": hex::encode(result.atom_id),
+                "ctx_id": result.ctx_id,
+                "source_ids": result.source_ids,
+                "history": "old relation and atom retained with supersedes lineage",
+                "durability": "committed"
+            }),
+        ),
+        Err(e) => mcp_error(id, -32603, format!("Relation transition failed: {}", e)),
     }
 }
 
@@ -7892,11 +8666,31 @@ fn main() {
             &config,
         )
         .and_then(|resolved| cmd_serve(&resolved, *port, host.as_str(), *stdio)),
+        Commands::Client {
+            base,
+            tool,
+            arguments,
+        } => resolve_base_path(
+            base.as_ref(),
+            cli.base_scope,
+            cli.base_name.as_deref(),
+            &config,
+        )
+        .and_then(|resolved| cmd_client(&resolved, tool, arguments, cli.format)),
     };
 
     if let Err(e) = result {
-        print_error(&e.to_string());
-        std::process::exit(1);
+        let machine_error = matches!(cli.format, OutputFormat::Json)
+            || matches!(
+                &cli.command,
+                Commands::Serve { stdio: true, .. } | Commands::Client { .. }
+            );
+        if machine_error {
+            eprintln!("{}", e.machine_diagnostic());
+        } else {
+            print_error(&e.to_string());
+        }
+        std::process::exit(e.exit_code());
     }
 }
 
@@ -8493,7 +9287,7 @@ mod tests {
             );
         }
 
-        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 36);
+        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 39);
         for name in BASE_SELECTABLE_MCP_TOOLS {
             let tool = tools
                 .iter()
@@ -8528,6 +9322,8 @@ mod tests {
         assert!(names.contains(&"correct_claim"));
         assert!(names.contains(&"delete_atom"));
         assert!(names.contains(&"history"));
+        assert!(names.contains(&"get_stats"));
+        assert!(names.contains(&"verify_integrity"));
         assert!(names.contains(&"register_source"));
         assert!(names.contains(&"list_sources"));
         assert!(names.contains(&"attach_atom_source"));
@@ -8543,6 +9339,7 @@ mod tests {
         assert!(names.contains(&"add_claim"));
         assert!(names.contains(&"assert_relation"));
         assert!(names.contains(&"correct_relation"));
+        assert!(names.contains(&"transition_relation"));
         assert!(names.contains(&"create_context"));
         assert!(names.contains(&"list_contexts"));
         assert!(names.contains(&"branch_context"));
@@ -8550,7 +9347,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 42);
+        assert_eq!(names.len(), 45);
     }
 
     #[cfg(feature = "mcp")]
@@ -9083,6 +9880,178 @@ mod tests {
         let list_response = process_mcp_request(&mut state, &list_request).await;
         assert!(list_response.contains("Total: 2"));
         assert!(list_response.contains("Branch reason: hypothesis"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn mcp_transition_stats_and_integrity_are_store_backed_after_reopen() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("transition");
+        let mut state = test_mcp_state(base.clone());
+        let (old_relation_id, old_atom_id, new_object, source_ids);
+        {
+            let store = test_mcp_active_store_mut(&mut state);
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(PredicateContract {
+                    stable_key: "has_session_state".to_owned(),
+                    canonical_name: "has session state".to_owned(),
+                    description: "Current session binding state.".to_owned(),
+                    direction: PredicateDirection::Directed,
+                    inverse_stable_key: None,
+                    cardinality: PredicateCardinality::ManyToOne,
+                })
+                .unwrap();
+            let module = store.create_entity("kpa-mod-520", "module").unwrap();
+            let initial = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let bound = store
+                .create_entity("019fb2a9-8464-75e0-ae57-7c633bdb791a", "codex_session")
+                .unwrap();
+            let source_a = store
+                .register_source(
+                    SourceKind::File,
+                    "session registry",
+                    SourceLocation {
+                        path: Some("SESSION_REGISTRY.md".to_owned()),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            let source_b = store
+                .register_source(
+                    SourceKind::File,
+                    "activation evidence",
+                    SourceLocation {
+                        path: Some("activation.json".to_owned()),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            let old = store
+                .assert_relation(
+                    module.entity_id,
+                    predicate.predicate_id,
+                    initial.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            old_relation_id = old.relation_id.unwrap();
+            old_atom_id = old.atom_id;
+            new_object = bound.entity_id;
+            source_ids = vec![source_a.source_id, source_b.source_id];
+        }
+
+        let transition = process_mcp_request(
+            &mut state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 200,
+                "method": "tools/call",
+                "params": {
+                    "name": "transition_relation",
+                    "arguments": {
+                        "old_relation_id": old_relation_id,
+                        "new_object": new_object,
+                        "ctx_id": 0,
+                        "source_ids": source_ids
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        let transition: serde_json::Value = serde_json::from_str(&transition).unwrap();
+        assert_eq!(
+            transition["result"]["structuredContent"]["operation"],
+            "transition_relation"
+        );
+        let new_atom_hex = transition["result"]["structuredContent"]["atom_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let new_atom_id = mcp_parse_atom_id(&new_atom_hex).unwrap();
+        assert_ne!(new_atom_id, old_atom_id);
+
+        let query = process_mcp_request(
+            &mut state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 204,
+                "method": "tools/call",
+                "params": {
+                    "name": "query",
+                    "arguments": {
+                        "query_text": "What exact has_session_state follows for kpa-mod-520 and why is it 019fb2a9-8464-75e0-ae57-7c633bdb791a?",
+                        "ctx_id": 0
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        let query: serde_json::Value = serde_json::from_str(mcp_text(&query).as_str()).unwrap();
+        assert_ne!(query["status"], "NoMatch");
+        assert!(
+            query["graph"]["nodes"]
+                .as_array()
+                .is_some_and(|nodes| nodes.iter().any(|node| {
+                    node["atom_id"].as_str() == Some(new_atom_hex.as_str())
+                        && node["source_link_count"].as_u64().unwrap_or(0) >= 2
+                })),
+            "query did not expose the transitioned sourced relation: {query}"
+        );
+
+        for (id, name) in [(201, "get_stats"), (202, "verify_integrity")] {
+            let response = process_mcp_request(
+                &mut state,
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": {}}
+                })
+                .to_string(),
+            )
+            .await;
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["result"]["structuredContent"]["operation"], name);
+        }
+
+        drop(state);
+        let mut reopened = test_mcp_state(base);
+        let stats = process_mcp_request(
+            &mut reopened,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 203,
+                "method": "tools/call",
+                "params": {"name": "get_stats", "arguments": {}}
+            })
+            .to_string(),
+        )
+        .await;
+        let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
+        assert_eq!(
+            stats["result"]["structuredContent"]["statistics"]["cas_live_atom_count"],
+            2
+        );
+        assert_eq!(
+            stats["result"]["structuredContent"]["statistics"]["current_atom_count"],
+            1
+        );
+        let provenance = test_mcp_active_store_mut(&mut reopened)
+            .get_provenance(&new_atom_id)
+            .unwrap();
+        let mut persisted_sources = provenance
+            .direct_evidence
+            .into_iter()
+            .filter_map(|link| link.source_id)
+            .collect::<Vec<_>>();
+        persisted_sources.sort_unstable();
+        assert_eq!(persisted_sources, source_ids);
     }
 
     #[cfg(feature = "mcp")]

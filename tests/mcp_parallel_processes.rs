@@ -392,7 +392,7 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
         .expect("Codex tools/list request failed after initialized notification");
     assert_success(&tools);
     assert_eq!(tools["id"], json!("codex-tools-list"));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(42));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(45));
     assert!(
         tools["result"]["tools"]
             .as_array()
@@ -480,6 +480,167 @@ fn stdio_eof_releases_lease_and_stats_report_logical_atoms_and_claims() {
     assert_eq!(stats["total_atoms"], 1);
     assert_eq!(stats["total_claims"], 1);
     assert_eq!(stats["atom_types"]["FACT"], 1);
+    assert_eq!(stats["cas_live_atom_count"], 1);
+    assert_eq!(stats["current_atom_count"], 1);
+    assert_eq!(
+        stats["metric_semantics"]["total_atoms"],
+        "compatibility alias for cas_live_atom_count"
+    );
+}
+
+#[test]
+fn second_stdio_and_cli_client_attach_to_live_owner_with_stable_diagnostics() {
+    let root = TempDir::new().expect("live-owner control temp root");
+    let base_name = "live-owner-control";
+    let base_relative = format!(".memoryx/bases/{base_name}");
+    let base_path = root.path().join(&base_relative);
+    let descriptor_path = base_path.join(".memoryx.control.json");
+    let mut owner = McpProcess::spawn(root.path(), base_name);
+    owner
+        .request(codex_initialize_request(1600))
+        .expect("initialize live owner");
+    assert!(
+        descriptor_path.exists(),
+        "live owner must publish its local control descriptor"
+    );
+
+    let mut attached = McpProcess::spawn(root.path(), base_name);
+    let initialized = attached
+        .request(codex_initialize_request(1601))
+        .expect("second stdio must attach to live owner");
+    assert_eq!(
+        initialized["result"]["protocolVersion"],
+        json!("2025-06-18")
+    );
+    attached
+        .send(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }))
+        .unwrap();
+    attached
+        .expect_no_response(Duration::from_millis(300))
+        .expect("proxied notification must remain silent");
+    let tools = attached
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": 1602,
+            "method": "tools/list",
+            "params": {}
+        }))
+        .expect("proxied tools/list");
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(45));
+
+    let ingest = attached
+        .request(tool_request(
+            1603,
+            "ingest",
+            json!({
+                "atom_type": "FACT",
+                "symbols": ["live_owner_control_fixture"],
+                "claims": [{
+                    "subj": 1,
+                    "pred": 2,
+                    "obj_tag": 3,
+                    "obj_val": 4,
+                    "qualifiers_mask": 0
+                }]
+            }),
+        ))
+        .expect("proxied ingest");
+    assert_success(&ingest);
+    for (id, tool) in [(1604, "get_stats"), (1605, "verify_integrity")] {
+        let response = attached
+            .request(tool_request(id, tool, json!({})))
+            .unwrap_or_else(|error| panic!("proxied {tool} failed: {error}"));
+        assert_success(&response);
+        assert_eq!(
+            response["result"]["structuredContent"]["operation"],
+            json!(tool)
+        );
+    }
+
+    let client = Command::new(env!("CARGO_BIN_EXE_memoryx"))
+        .current_dir(root.path())
+        .args([
+            "--format",
+            "json",
+            "client",
+            "--base",
+            &base_relative,
+            "--tool",
+            "get_stats",
+            "--arguments",
+            "{}",
+        ])
+        .output()
+        .expect("run live-owner CLI client");
+    assert!(
+        client.status.success(),
+        "live-owner client failed: {}",
+        String::from_utf8_lossy(&client.stderr)
+    );
+    let client_response: Value = serde_json::from_slice(&client.stdout).unwrap();
+    assert_eq!(
+        client_response["result"]["structuredContent"]["statistics"]["cas_live_atom_count"],
+        1
+    );
+
+    let direct_stats = Command::new(env!("CARGO_BIN_EXE_memoryx"))
+        .current_dir(root.path())
+        .args(["--format", "json", "stats", "--base", &base_relative])
+        .output()
+        .expect("run direct stats while owner is live");
+    assert_eq!(direct_stats.status.code(), Some(73));
+    let lease_error = String::from_utf8_lossy(&direct_stats.stderr);
+    let lease_error: Value = lease_error
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .expect("machine-readable lease diagnostic");
+    assert_eq!(lease_error["schema"], "memoryx.cli-error.v1");
+    assert_eq!(lease_error["error"]["code"], "BASE_WRITER_LEASE_HELD");
+
+    let attached_report = attached.finish();
+    assert!(
+        attached_report.status.success() && !attached_report.timed_out,
+        "attached stdio did not exit cleanly: {}",
+        attached_report.stderr
+    );
+    let still_alive = owner
+        .request(tool_request(1606, "get_stats", json!({})))
+        .expect("owner must remain callable after proxy exits");
+    assert_success(&still_alive);
+
+    std::fs::remove_file(&descriptor_path).expect("remove descriptor for diagnostic probe");
+    let unavailable = Command::new(env!("CARGO_BIN_EXE_memoryx"))
+        .current_dir(root.path())
+        .args(["serve", "--base", &base_relative, "--stdio"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run attach probe without descriptor");
+    assert_eq!(unavailable.status.code(), Some(69));
+    let unavailable_error = String::from_utf8_lossy(&unavailable.stderr);
+    let unavailable_error: Value = unavailable_error
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .expect("machine-readable live-owner control diagnostic");
+    assert_eq!(
+        unavailable_error["error"]["code"],
+        "LIVE_OWNER_CONTROL_UNAVAILABLE"
+    );
+    assert_eq!(unavailable_error["error"]["retryable"], true);
+
+    let owner_report = owner.finish();
+    assert!(
+        owner_report.status.success() && !owner_report.timed_out,
+        "owner did not exit cleanly: {}",
+        owner_report.stderr
+    );
 }
 
 #[test]

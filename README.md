@@ -31,7 +31,7 @@ conflicts rather than unsupported text.
 - Fixed-point answer assembly through `FixedPointSolver`.
 - Durable `CAS` storage with history, tombstones, integrity checks, and repair.
 - `CRDT` metadata, `WAL`, snapshots, and rebuildable indexes.
-- MCP access with 42 tools for reading, writing, provenance, graph work, and
+- MCP access with 45 tools for reading, writing, provenance, graph work, and
   multiple bases.
 - Federation primitives for compatible bases.
 - Portable release builds by default, with explicit CPU-specific builds only
@@ -150,10 +150,15 @@ tombstone instead of physically erasing the old atom. Successful mutations are
 recorded in `meta/history.log`.
 
 One physical base may have only one process holding the write lease at a time.
-Do not point two independent writer processes at the same directory. Different
-physical bases may be used in parallel. If several applications need one live
-logical base, use one coordinating owner service or separate synchronized
-replicas.
+Do not point two independent writers at the same directory. A running
+`memoryx serve --stdio` publishes a loopback-only local control endpoint. A
+second `serve --stdio` for the same base transparently becomes an MCP proxy to
+the live owner instead of opening another writer. Scripts can call the owner
+directly with
+`memoryx --format json client --base <path> --tool get_stats --arguments '{}'`
+or use `verify_integrity` in the same way. Different physical bases may still
+be owned and used in parallel. See
+[`docs/LIVE_OWNER_CONTROL.md`](docs/LIVE_OWNER_CONTROL.md).
 
 ## Connect MCP To Codex Or An IDE
 
@@ -215,7 +220,7 @@ After connecting, ask the client to call `active_base` or `list_bases` first.
 The MCP server preserves human-readable `content` and also returns
 `structuredContent`. Successful mutations report `durability: "committed"`.
 
-## Safe Use Of The 42 MCP Tools
+## Safe Use Of The 45 MCP Tools
 
 Use the tools in this order:
 
@@ -244,7 +249,8 @@ The complete tool surface is grouped below. The names are exact MCP tool names.
 | Base selection | `list_bases`, `active_base`, `connect_base`, `switch_base` | Find, connect, and select bases. |
 | Search | `search_lex`, `search_graph`, `search_semantic` | Search candidate knowledge without treating search alone as the final answer. |
 | Atom writes and history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Add, revise, remove through tombstones, and review changes. |
-| Claim correction | `supersede_claim`, `correct_claim`, `correct_relation` | Replace incorrect or outdated claims while keeping history. |
+| State and claim correction | `supersede_claim`, `correct_claim`, `correct_relation`, `transition_relation` | Replace outdated knowledge while keeping history; use `transition_relation` for one current relation value. |
+| Validation and metrics | `get_stats`, `verify_integrity` | Inspect unambiguous logical/physical counts and verify the live base through its owner. |
 | Sources | `register_source`, `list_sources`, `attach_atom_source` | Register sources and attach them to atoms. |
 | Predicate contracts | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Define and resolve stable relation types. |
 | Entities and relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Maintain entities, aliases, claims, and relations. |
@@ -366,7 +372,7 @@ MemoryX, скорее всего, не нужна, если требуется �
 - Сборка ответа через `FixedPointSolver`.
 - Постоянное хранилище `CAS` с историей, метками удаления, проверкой целостности и восстановлением.
 - Служебные данные `CRDT`, журнал `WAL`, снимки состояния и перестраиваемые индексы.
-- Доступ через MCP: 42 инструмента для чтения, записи, источников, графа и нескольких баз.
+- Доступ через MCP: 45 инструментов для чтения, записи, источников, графа и нескольких баз.
 - Средства объединения совместимых баз.
 - Переносимая сборка по умолчанию и отдельные сборки под процессор только при явном обозначении.
 
@@ -485,9 +491,15 @@ $exe = ".\target\release\memoryx.exe"
 
 В одной физической базе одновременно может быть только один процесс,
 удерживающий право записи. Не направляйте два независимых процесса записи в
-один каталог. Разные физические базы можно использовать параллельно. Если
-нескольким приложениям нужна одна живая логическая база, используйте один
-координирующий процесс или отдельные синхронизируемые копии.
+один каталог. Запущенный `memoryx serve --stdio` создаёт локальный управляющий
+канал, доступный только через обратную петлю компьютера. Второй
+`memoryx serve --stdio` для той же базы не становится писателем, а прозрачно
+передаёт запросы уже работающему владельцу. Скрипт может обратиться к владельцу
+командой
+`memoryx --format json client --base <путь> --tool get_stats --arguments '{}'`;
+вместо `get_stats` можно указать `verify_integrity`. Разные физические базы
+по-прежнему можно использовать параллельно. Подробный договор описан в
+[`docs/LIVE_OWNER_CONTROL.md`](docs/LIVE_OWNER_CONTROL.md).
 
 ## Подключение MCP к Codex или среде разработки
 
@@ -550,7 +562,7 @@ $exe = ".\target\release\memoryx.exe"
 `structuredContent`. Успешные изменения отмечаются как
 `durability: "committed"`.
 
-## Безопасная работа с 42 инструментами MCP
+## Безопасная работа с 45 инструментами MCP
 
 Рекомендуемый порядок:
 
@@ -578,7 +590,8 @@ $exe = ".\target\release\memoryx.exe"
 | Выбор базы | `list_bases`, `active_base`, `connect_base`, `switch_base` | Найти, подключить и выбрать базу. |
 | Поиск | `search_lex`, `search_graph`, `search_semantic` | Найти кандидатов, не считая один поиск окончательным ответом. |
 | Запись атомов и история | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Добавить, изменить, пометить удалённым и проверить изменения. |
-| Исправление утверждений | `supersede_claim`, `correct_claim`, `correct_relation` | Заменить неверные или устаревшие знания с сохранением истории. |
+| Изменение состояния и исправление утверждений | `supersede_claim`, `correct_claim`, `correct_relation`, `transition_relation` | Заменить устаревшие знания с сохранением истории; для единственного текущего значения связи использовать `transition_relation`. |
+| Проверка и счётчики | `get_stats`, `verify_integrity` | Получить однозначные логические и физические счётчики и проверить живую базу через её владельца. |
 | Источники | `register_source`, `list_sources`, `attach_atom_source` | Зарегистрировать источники и связать их с атомами. |
 | Описание типов связей | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Задать и получить устойчивые типы связей. |
 | Сущности и связи | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Вести сущности, псевдонимы, утверждения и связи. |
