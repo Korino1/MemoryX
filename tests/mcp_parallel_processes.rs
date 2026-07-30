@@ -425,6 +425,64 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
 }
 
 #[test]
+fn stdio_eof_releases_lease_and_stats_report_logical_atoms_and_claims() {
+    let root = TempDir::new().expect("stats lifecycle temp root");
+    let base_name = "stats-eof";
+    let mut process = McpProcess::spawn(root.path(), base_name);
+    process
+        .request(codex_initialize_request(1500))
+        .expect("initialize stats fixture");
+    let ingest = process
+        .request(tool_request(
+            1501,
+            "ingest",
+            json!({
+                "atom_type": "FACT",
+                "symbols": ["stats_fixture"],
+                "claims": [{
+                    "subj": 1,
+                    "pred": 2,
+                    "obj_tag": 3,
+                    "obj_val": 4,
+                    "qualifiers_mask": 0
+                }]
+            }),
+        ))
+        .expect("ingest stats fixture");
+    assert_success(&ingest);
+    let report = process.finish();
+    assert!(
+        !report.timed_out && report.status.success(),
+        "stdio EOF did not release the server: {}",
+        report.stderr
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_memoryx"))
+        .current_dir(root.path())
+        .args([
+            "stats",
+            "--base",
+            &format!(".memoryx/bases/{base_name}"),
+            "--format",
+            "json",
+            "--no-color",
+        ])
+        .output()
+        .expect("run stats after stdio EOF");
+    assert!(
+        output.status.success(),
+        "stats could not acquire released lease: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json_start = stdout.find('{').expect("stats JSON object");
+    let stats: Value = serde_json::from_str(&stdout[json_start..]).unwrap();
+    assert_eq!(stats["total_atoms"], 1);
+    assert_eq!(stats["total_claims"], 1);
+    assert_eq!(stats["atom_types"]["FACT"], 1);
+}
+
+#[test]
 fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
     let root = TempDir::new().expect("MCP reopen temp root");
     let base_name = "mx01-reopen";
@@ -671,7 +729,7 @@ fn source_projection_and_context_lineage_survive_mcp_process_reopen() {
     let contexts = response_text(&contexts);
     assert!(contexts.contains("Total: 2"), "{contexts}");
     assert!(
-        contexts.contains("ID: 1, Status: active, Parent: 0"),
+        contexts.contains("ID: 1, State: open, Selected: false, Parent: 0"),
         "{contexts}"
     );
     assert!(contexts.contains("Branch reason: hypothesis"), "{contexts}");

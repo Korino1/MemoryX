@@ -139,6 +139,7 @@ fn apply_explicit_term_targets(normalized: &str, contract: &mut QueryContract) {
                 entity_type: Some("term_id".to_owned()),
                 aliases: Vec::new(),
                 domain_mask: None,
+                ..EntityPattern::default()
             });
         }
     }
@@ -157,6 +158,7 @@ fn apply_broad_lookup_compat_target(contract: &mut QueryContract) {
             entity_type: Some("compatibility_term_seed".to_owned()),
             aliases: Vec::new(),
             domain_mask: None,
+            ..EntityPattern::default()
         });
     }
 }

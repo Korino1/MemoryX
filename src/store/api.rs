@@ -68,6 +68,26 @@ fn current_unix_ns() -> u64 {
         .unwrap_or(0)
 }
 
+fn normalized_lexical_terms(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut terms = Vec::new();
+    for value in values {
+        let normalized = value.nfkc().collect::<String>().trim().to_lowercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        terms.push(normalized.clone());
+        terms.extend(
+            normalized
+                .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+                .filter(|term| !term.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
 const MAX_NEW_JOURNAL_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_SOURCES_PER_ATOM: usize = 256;
 
@@ -174,8 +194,13 @@ fn claim_record_from_data(
 fn build_authoring_payload(
     atom_type: AtomType,
     claims: &[ClaimData],
+    symbols: &[String],
 ) -> Result<Vec<u8>, StoreError> {
-    let symbols_bytes = SymbolsSection::new().to_bytes();
+    let mut symbols_section = SymbolsSection::new();
+    for symbol in symbols {
+        symbols_section.intern(symbol.clone());
+    }
+    let symbols_bytes = symbols_section.to_bytes();
     let refs_bytes = Vec::new();
 
     let mut claims_section = ClaimsSection::new();
@@ -812,6 +837,9 @@ pub struct EvidenceLink {
     pub source_id: Option<SourceId>,
     /// Durable location metadata for the registered source.
     pub source_location: Option<SourceLocation>,
+    /// Whether the evidence was embedded in the atom, attached externally, or derived.
+    #[serde(default)]
+    pub origin: ProvenanceOrigin,
     /// Evidence kind/type
     pub evidence_kind: EvidenceKind,
     /// Confidence value (0.0 - 1.0)
@@ -834,6 +862,23 @@ pub struct EvidenceLink {
     pub timestamp_ns: u64,
 }
 
+/// Durable provenance representation used by both direct links and AnswerGraph records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceOrigin {
+    /// Legacy serialized evidence did not record enough information to classify origin.
+    #[default]
+    LegacyUnknown,
+    /// Evidence encoded directly in the immutable atom payload.
+    Embedded,
+    /// A registered external source attached through the source journal.
+    Attached,
+    /// Evidence reached through a derivation edge.
+    Derived,
+    /// Evidence projected from a federated base.
+    Federated,
+}
+
 impl EvidenceLink {
     /// Create a new evidence link
     #[inline]
@@ -851,6 +896,11 @@ impl EvidenceLink {
             source_atom_id,
             source_id: None,
             source_location: None,
+            origin: if evidence_kind == EvidenceKind::DERIVED {
+                ProvenanceOrigin::Derived
+            } else {
+                ProvenanceOrigin::Embedded
+            },
             evidence_kind,
             confidence: confidence.clamp(0.0, 1.0),
             trust,
@@ -881,6 +931,7 @@ impl EvidenceLink {
             // source. The traversed atom's own attachment is resolved separately.
             source_id: None,
             source_location: None,
+            origin: ProvenanceOrigin::Derived,
             evidence_kind: EvidenceKind::DERIVED,
             confidence: propagated_confidence.clamp(0.0, 1.0),
             trust: propagated_trust,
@@ -920,6 +971,7 @@ impl EvidenceLink {
     pub fn with_source(mut self, source: &SourceRecord) -> Self {
         self.source_id = Some(source.source_id);
         self.source_location = Some(source.location.clone());
+        self.origin = ProvenanceOrigin::Attached;
         self
     }
 
@@ -1408,6 +1460,8 @@ pub struct EvidenceRecord {
     pub legacy_ref: EvidenceRef,
     pub source_id: Option<SourceId>,
     pub source_location: Option<SourceLocation>,
+    #[serde(default)]
+    pub origin: ProvenanceOrigin,
     pub extracted_span: EvidenceSpan,
     pub observed_at_unix_ns: u64,
     pub extractor: String,
@@ -1429,6 +1483,7 @@ impl EvidenceRecord {
             legacy_ref: evidence,
             source_id: None,
             source_location: None,
+            origin: ProvenanceOrigin::Embedded,
             // Legacy EvidenceRef has no durable observation timestamp. Zero is
             // an explicit unknown value; response time is not proof metadata.
             observed_at_unix_ns: 0,
@@ -1440,6 +1495,7 @@ impl EvidenceRecord {
     pub fn with_source(mut self, source: &SourceRecord) -> Self {
         self.source_id = Some(source.source_id);
         self.source_location = Some(source.location.clone());
+        self.origin = ProvenanceOrigin::Attached;
         self.observed_at_unix_ns = source
             .location
             .timestamp_unix_ns
@@ -5933,20 +5989,24 @@ impl MemoryX {
                 "atom source attachment limit {MAX_SOURCES_PER_ATOM} reached"
             )));
         }
-        if metadata.source_id == 0 {
-            metadata.source_id = source_id;
-            self.meta.put_meta(atom_id, metadata);
-            self.flush()?;
-            return Ok(());
-        }
-
         let link = AtomSourceLink {
             atom_id,
             source_id,
             attached_at_unix_ns: current_unix_ns(),
         };
+        // The synced attachment journal is the source of truth for every new
+        // attachment, including the first. Legacy metadata is only a rebuildable
+        // compatibility projection, so a crash cannot leave an acknowledged
+        // attachment present in one representation but absent from the journal.
         self.append_atom_source_link(&link)?;
         self.source_links.entry(atom_id).or_default().push(link);
+        if metadata.source_id == 0 {
+            metadata.source_id = source_id;
+            self.meta.put_meta(atom_id, metadata);
+            // Failure here cannot invalidate the committed journal record.
+            // Reopen reconciliation reconstructs this legacy projection.
+            let _ = self.meta.save();
+        }
         Ok(())
     }
 
@@ -6527,6 +6587,188 @@ impl MemoryX {
         Ok(())
     }
 
+    fn authoring_symbols(
+        &self,
+        subject: EntityId,
+        predicate: SymId,
+        object: Option<EntityId>,
+    ) -> Result<Vec<String>, StoreError> {
+        let mut symbols = Vec::new();
+        if let Some(entity) = self.get_entity(subject)? {
+            symbols.push(entity.canonical_name);
+            symbols.push(entity.entity_type);
+            symbols.extend(entity.aliases);
+        }
+        if let Some(predicate) = self.get_predicate(predicate)? {
+            symbols.push(predicate.contract.stable_key);
+            symbols.push(predicate.contract.canonical_name);
+        }
+        if let Some(object) = object
+            && let Some(entity) = self.get_entity(object)?
+        {
+            symbols.push(entity.canonical_name);
+            symbols.push(entity.entity_type);
+            symbols.extend(entity.aliases);
+        }
+        symbols.retain(|symbol| !symbol.trim().is_empty());
+        symbols.sort();
+        symbols.dedup();
+        Ok(symbols)
+    }
+
+    fn metadata_atoms_for_terms(
+        &self,
+        query_terms: &[String],
+        include_superseded: bool,
+    ) -> Result<Vec<AtomId>, StoreError> {
+        if query_terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let entities = self.list_entities()?;
+        let matching_entities = entities
+            .iter()
+            .filter(|entity| {
+                let terms = normalized_lexical_terms(
+                    [entity.canonical_name.clone(), entity.entity_type.clone()]
+                        .into_iter()
+                        .chain(entity.aliases.clone()),
+                );
+                query_terms.iter().all(|query| terms.contains(query))
+            })
+            .map(|entity| entity.entity_id)
+            .collect::<HashSet<_>>();
+        let predicates = self.list_predicates()?;
+        let matching_predicates = predicates
+            .iter()
+            .filter(|predicate| {
+                let terms = normalized_lexical_terms([
+                    predicate.contract.stable_key.clone(),
+                    predicate.contract.canonical_name.clone(),
+                ]);
+                query_terms.iter().all(|query| terms.contains(query))
+            })
+            .map(|predicate| predicate.predicate_id)
+            .collect::<HashSet<_>>();
+
+        let mut atom_ids = entities
+            .iter()
+            .filter(|entity| matching_entities.contains(&entity.entity_id))
+            .flat_map(|entity| entity.claims.iter().copied())
+            .collect::<Vec<_>>();
+        let relations = self.read_relations()?;
+        let relation_superseded: HashSet<_> = relations
+            .iter()
+            .filter_map(|relation| relation.supersedes)
+            .collect();
+        atom_ids.extend(
+            relations
+                .iter()
+                .filter(|relation| {
+                    (include_superseded
+                        || (!relation.deprecated
+                            && !relation_superseded.contains(&relation.relation_id)))
+                        && (matching_entities.contains(&relation.subject)
+                            || matching_entities.contains(&relation.object)
+                            || matching_predicates.contains(&relation.predicate))
+                })
+                .map(|relation| relation.atom_id),
+        );
+        if !include_superseded {
+            let superseded = self.superseded_atom_ids();
+            atom_ids.retain(|atom_id| !superseded.contains(atom_id));
+        }
+        atom_ids.sort_unstable();
+        atom_ids.dedup();
+        Ok(atom_ids)
+    }
+
+    fn superseded_atom_ids(&self) -> HashSet<AtomId> {
+        let mut superseded = HashSet::new();
+        for &node_num in self.meta.node_to_atom.keys() {
+            for (old_node, _) in self.graph.neighbors(node_num, EdgeType::SUPERSEDES) {
+                if let Some(atom_id) = self.meta.get_atom_by_node(old_node) {
+                    superseded.insert(*atom_id);
+                }
+            }
+        }
+        superseded
+    }
+
+    fn resolve_structured_target_atoms(
+        &self,
+        target: &crate::query::EntityPattern,
+        include_superseded: bool,
+    ) -> Result<Vec<AtomId>, StoreError> {
+        let mut atom_ids = Vec::new();
+        let entities = self.list_entities()?;
+        let relations = self.read_relations()?;
+        let relation_superseded: HashSet<_> = relations
+            .iter()
+            .filter_map(|relation| relation.supersedes)
+            .collect();
+
+        let entity_atoms = |entity_id: EntityId| {
+            let mut resolved = Vec::new();
+            if let Some(entity) = entities.iter().find(|entity| entity.entity_id == entity_id) {
+                resolved.extend(entity.claims.iter().copied());
+            }
+            resolved.extend(
+                relations
+                    .iter()
+                    .filter(|relation| {
+                        (include_superseded
+                            || (!relation.deprecated
+                                && !relation_superseded.contains(&relation.relation_id)))
+                            && (relation.subject == entity_id || relation.object == entity_id)
+                    })
+                    .map(|relation| relation.atom_id),
+            );
+            resolved
+        };
+
+        if let Some(entity_id) = target.entity_id {
+            atom_ids.extend(entity_atoms(entity_id));
+        }
+        if let Some(stable_key) = target.stable_key.as_deref() {
+            let normalized = Self::normalize_predicate_key(stable_key);
+            if let Some(predicate) = self.resolve_predicate(&normalized)? {
+                atom_ids.extend(
+                    relations
+                        .iter()
+                        .filter(|relation| {
+                            relation.predicate == predicate.predicate_id
+                                && (include_superseded
+                                    || (!relation.deprecated
+                                        && !relation_superseded.contains(&relation.relation_id)))
+                        })
+                        .map(|relation| relation.atom_id),
+                );
+            }
+            let entity_ids = entities
+                .iter()
+                .filter(|entity| {
+                    Self::normalize_predicate_key(&entity.canonical_name) == normalized
+                        || entity
+                            .aliases
+                            .iter()
+                            .any(|alias| Self::normalize_predicate_key(alias) == normalized)
+                })
+                .map(|entity| entity.entity_id)
+                .collect::<Vec<_>>();
+            for entity_id in entity_ids {
+                atom_ids.extend(entity_atoms(entity_id));
+            }
+        }
+
+        if !include_superseded {
+            let superseded = self.superseded_atom_ids();
+            atom_ids.retain(|atom_id| !superseded.contains(atom_id));
+        }
+        atom_ids.sort_unstable();
+        atom_ids.dedup();
+        Ok(atom_ids)
+    }
+
     fn read_entities(&self) -> Result<Vec<EntityRecord>, StoreError> {
         let path = self.config.entities_path();
         if !path.exists() {
@@ -6739,7 +6981,10 @@ impl MemoryX {
             obj_val: object_value,
             qualifiers_mask: 0,
         };
-        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
+        let object_entity = (object_tag == ObjTag::NODENUM).then_some(object_value);
+        let symbols = self.authoring_symbols(entity_id, predicate, object_entity)?;
+        let payload =
+            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
         let atom_id = self.ingest(
             &payload,
             AtomType::FACT,
@@ -6786,7 +7031,9 @@ impl MemoryX {
             obj_val: object,
             qualifiers_mask: 0,
         };
-        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
+        let symbols = self.authoring_symbols(subject, predicate, Some(object))?;
+        let payload =
+            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
         let atom_id = compute_atom_id_from_payload(&payload)?;
         let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id)?;
         let relation_id = self
@@ -6852,7 +7099,9 @@ impl MemoryX {
             obj_val: object,
             qualifiers_mask: 0,
         };
-        let payload = build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim))?;
+        let symbols = self.authoring_symbols(subject, predicate, Some(object))?;
+        let payload =
+            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
         let atom_id = compute_atom_id_from_payload(&payload)?;
         let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id)?;
         let relation_id = self
@@ -7199,6 +7448,7 @@ impl MemoryX {
         contract: QueryContract,
         ctx_policy: CtxPolicyId,
     ) -> Result<AnswerPack, StoreError> {
+        let query_started = std::time::Instant::now();
         const QUERY_STOP_WORDS: &[&str] = &[
             "about", "after", "and", "before", "does", "find", "follows", "from", "how", "into",
             "is", "of", "or", "please", "the", "what", "when", "where", "which", "who", "why",
@@ -7206,6 +7456,12 @@ impl MemoryX {
         ];
         let explicit_selector = contract.targets.iter().any(|target| {
             target.id.is_some()
+                || target.entity_id.is_some()
+                || target.atom_id.is_some()
+                || target.node_id.is_some()
+                || target.term_id.is_some()
+                || target.symbol_id.is_some()
+                || target.stable_key.is_some()
                 || target
                     .label
                     .as_deref()
@@ -7214,7 +7470,15 @@ impl MemoryX {
         let lexical_targets = contract
             .targets
             .iter()
-            .filter(|target| target.id.is_none())
+            .filter(|target| {
+                target.id.is_none()
+                    && target.entity_id.is_none()
+                    && target.atom_id.is_none()
+                    && target.node_id.is_none()
+                    && target.term_id.is_none()
+                    && target.symbol_id.is_none()
+                    && target.stable_key.is_none()
+            })
             .flat_map(|target| {
                 target
                     .label
@@ -7225,6 +7489,7 @@ impl MemoryX {
             .filter(|target| !target.contains(':'))
             .collect::<Vec<_>>();
         let mut resolved_terms = Vec::new();
+        let mut lexical_query_terms = Vec::new();
         for target in &lexical_targets {
             for term in target
                 .split(|character: char| !(character.is_alphanumeric() || character == '_'))
@@ -7240,10 +7505,19 @@ impl MemoryX {
                 {
                     resolved_terms.push(term_id);
                 }
+                if !lexical_query_terms.contains(&term) {
+                    lexical_query_terms.push(term);
+                }
             }
+        }
+        let lexical_terms_fully_resolved =
+            lexical_query_terms.len() == resolved_terms.len() && !lexical_query_terms.is_empty();
+        if !lexical_terms_fully_resolved {
+            resolved_terms.clear();
         }
 
         let budgets = contract.budgets.clone();
+        let include_superseded = !contract.temporal_scope.require_current;
         let mut goal = contract
             .to_goal_spec()
             .map_err(|e| StoreError::Query(e.to_string()))?
@@ -7262,11 +7536,64 @@ impl MemoryX {
                     goal.entities.push(entity);
                 }
             }
+            for target in &contract.targets {
+                for atom_id in self.resolve_structured_target_atoms(target, include_superseded)? {
+                    let entity = EntityRef::Atom(atom_id);
+                    if !goal.entities.contains(&entity) {
+                        goal.entities.push(entity);
+                    }
+                }
+            }
+            if lexical_terms_fully_resolved {
+                for atom_id in
+                    self.metadata_atoms_for_terms(&lexical_query_terms, include_superseded)?
+                {
+                    let entity = EntityRef::Atom(atom_id);
+                    if !goal.entities.contains(&entity) {
+                        goal.entities.push(entity);
+                    }
+                }
+            }
         }
 
-        let mut pack = self.solve_goal(goal, ctx_policy, &budgets)?;
+        let mut pack = self.solve_goal(
+            goal,
+            ctx_policy,
+            &budgets,
+            include_superseded,
+            query_started,
+        )?;
+        if Self::query_deadline_exceeded(query_started, &budgets) {
+            return Ok(Self::query_deadline_pack(
+                ctx_policy,
+                "query deadline was exhausted before output limiting",
+            ));
+        }
         Self::apply_output_limit(&mut pack, &contract.output_contract);
+        if Self::query_deadline_exceeded(query_started, &budgets) {
+            return Ok(Self::query_deadline_pack(
+                ctx_policy,
+                "query deadline was exhausted during output limiting",
+            ));
+        }
         Ok(pack)
+    }
+
+    fn query_deadline_exceeded(
+        query_started: std::time::Instant,
+        budgets: &crate::query::QueryBudgets,
+    ) -> bool {
+        query_started.elapsed().as_millis() >= u128::from(budgets.max_time_ms)
+    }
+
+    fn query_deadline_pack(ctx_id: CtxId, phase: &str) -> AnswerPack {
+        let mut pack = AnswerPack::new(ctx_id);
+        pack.status = AnswerStatus::BudgetExhausted;
+        pack.limitations.push(Limitation::warning(
+            LimitationCode::BudgetExhausted,
+            phase.to_owned(),
+        ));
+        pack
     }
 
     fn solve_goal(
@@ -7274,9 +7601,11 @@ impl MemoryX {
         goal: GoalSpec,
         ctx_policy: CtxPolicyId,
         budgets: &crate::query::QueryBudgets,
+        include_superseded: bool,
+        query_started: std::time::Instant,
     ) -> Result<AnswerPack, StoreError> {
         // Create router populated with current store data
-        let router = self.create_router();
+        let router = self.create_router_with_history(include_superseded);
 
         // Get current timestamp for age calculations
         let now_ns = std::time::SystemTime::now()
@@ -7297,21 +7626,45 @@ impl MemoryX {
         solver.config.max_edges = budgets.max_edges;
         solver.config.max_time_ms = budgets.max_time_ms;
         solver.config.max_federated_calls = budgets.max_federated_calls;
+        solver.config.max_context_branches = budgets.max_context_branches;
 
-        let contexts_before_solve = self.ctx_manager.lock().clone();
-        let mut pack = match solver.solve(goal, ctx_policy) {
-            Ok(pack) => pack,
-            Err(error) => {
-                *self.ctx_manager.lock() = contexts_before_solve;
-                return Err(StoreError::Query(error.to_string()));
-            }
-        };
-        if let Err(error) = self.persist_contexts() {
-            *self.ctx_manager.lock() = contexts_before_solve;
-            return Err(error);
+        // Query evaluation may explore conflict branches, but a read query must
+        // never mutate or persist the authoritative context manager.
+        let query_contexts = Arc::new(Mutex::new(self.ctx_manager.lock().clone()));
+        solver = solver.with_ctx_manager(query_contexts);
+        let elapsed_ms = query_started.elapsed().as_millis();
+        if Self::query_deadline_exceeded(query_started, budgets) {
+            return Ok(Self::query_deadline_pack(
+                ctx_policy,
+                "query deadline was exhausted during contract resolution/router construction",
+            ));
+        }
+        solver.config.max_time_ms = budgets
+            .max_time_ms
+            .saturating_sub(u64::try_from(elapsed_ms).unwrap_or(u64::MAX));
+        let mut pack = solver
+            .solve(goal, ctx_policy)
+            .map_err(|error| StoreError::Query(error.to_string()))?;
+        if Self::query_deadline_exceeded(query_started, budgets) {
+            return Ok(Self::query_deadline_pack(
+                ctx_policy,
+                "query deadline was exhausted during fixed-point solving",
+            ));
         }
         pack.snapshot = self.knowledge_snapshot(pack.selected_ctx)?;
+        if Self::query_deadline_exceeded(query_started, budgets) {
+            return Ok(Self::query_deadline_pack(
+                ctx_policy,
+                "query deadline was exhausted during snapshot assembly",
+            ));
+        }
         self.enrich_answer_sources(&mut pack)?;
+        if Self::query_deadline_exceeded(query_started, budgets) {
+            return Ok(Self::query_deadline_pack(
+                ctx_policy,
+                "query deadline was exhausted during provenance enrichment",
+            ));
+        }
         Ok(pack)
     }
 
@@ -7339,6 +7692,10 @@ impl MemoryX {
     /// # Returns
     /// - `QueryRouter`: Fully populated router connected to store data
     pub fn create_router(&self) -> crate::query::QueryRouter {
+        self.create_router_with_history(false)
+    }
+
+    fn create_router_with_history(&self, include_superseded: bool) -> crate::query::QueryRouter {
         use crate::query::QueryRouter;
         use std::sync::Arc;
 
@@ -7348,8 +7705,16 @@ impl MemoryX {
         let mut router =
             QueryRouter::new().with_inverted_index(Arc::new(self.term_index.as_index().clone()));
 
+        let superseded = (!include_superseded).then(|| self.superseded_atom_ids());
+
         // Populate CAS backend from meta.node_to_atom mappings
         for (&node_num, &atom_id) in &self.meta.node_to_atom {
+            if superseded
+                .as_ref()
+                .is_some_and(|atom_ids| atom_ids.contains(&atom_id))
+            {
+                continue;
+            }
             if let Some(metadata) = self.meta.get_meta(&atom_id) {
                 // Skip deleted atoms (trust_level = 0)
                 if metadata.trust_level == 0 {
@@ -7381,6 +7746,12 @@ impl MemoryX {
 
         // Populate graph backend node mappings
         for (&node_num, &atom_id) in &self.meta.node_to_atom {
+            if superseded
+                .as_ref()
+                .is_some_and(|atom_ids| atom_ids.contains(&atom_id))
+            {
+                continue;
+            }
             if let Some(metadata) = self.meta.get_meta(&atom_id)
                 && metadata.trust_level > 0
                 && let Some(location) = self.get_atom_location(&atom_id, node_num)
@@ -7395,6 +7766,12 @@ impl MemoryX {
             .ann
             .with_embedding_index(Arc::new(self.embedding_index.clone()));
         for (&node_num, &atom_id) in &self.meta.node_to_atom {
+            if superseded
+                .as_ref()
+                .is_some_and(|atom_ids| atom_ids.contains(&atom_id))
+            {
+                continue;
+            }
             if let Some(metadata) = self.meta.get_meta(&atom_id)
                 && metadata.trust_level > 0
                 && let Some(location) = self.get_atom_location(&atom_id, node_num)
@@ -7927,7 +8304,26 @@ impl MemoryX {
                 }
             }
         }
+        let query_terms = normalized_lexical_terms(
+            query
+                .split_whitespace()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+        );
+        if let Ok(atom_ids) = self.metadata_atoms_for_terms(&query_terms, false) {
+            results.extend(
+                atom_ids
+                    .iter()
+                    .filter_map(|atom_id| self.loc_index.get_node_num(atom_id)),
+            );
+        }
 
+        let superseded = self.superseded_atom_ids();
+        results.retain(|node_num| {
+            self.meta
+                .get_atom_by_node(*node_num)
+                .is_some_and(|atom_id| !superseded.contains(atom_id))
+        });
         results.sort();
         results.dedup();
         results
@@ -11925,7 +12321,7 @@ mod tests {
             qualifiers_mask: 0,
         };
         let payload =
-            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim)).unwrap();
+            build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &[]).unwrap();
         store
             .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
             .unwrap();
@@ -12230,6 +12626,7 @@ mod tests {
             max_io_bytes: 1024 * 1024,
             max_time_ms: 30_000,
             max_federated_calls: 0,
+            max_context_branches: 0,
         };
         let answer = store.answer_contract(bounded.clone(), 0).unwrap();
         assert!(answer.graph.nodes.len() <= 1);
@@ -12312,5 +12709,248 @@ mod tests {
         writeln!(file, "{duplicate}").unwrap();
         file.sync_all().unwrap();
         assert!(MemoryX::new(config).is_err());
+    }
+
+    #[test]
+    fn multi_source_provenance_is_durable_and_origin_is_explicit() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("multi-source-origin"));
+        let atom_id;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let payload = build_full_test_payload(AtomType::DECISION);
+            atom_id = store
+                .ingest(&payload, AtomType::DECISION, &[], &[])
+                .unwrap();
+            for (label, path) in [("plan", "PLAN.md"), ("tracker", "TRACKING.md")] {
+                let source = store
+                    .register_source(
+                        SourceKind::File,
+                        label,
+                        SourceLocation {
+                            path: Some(path.to_owned()),
+                            ..SourceLocation::default()
+                        },
+                    )
+                    .unwrap();
+                store.set_atom_source(atom_id, source.source_id).unwrap();
+            }
+        }
+
+        let reopened = MemoryX::new(config).unwrap();
+        assert_eq!(reopened.list_atom_source_ids(&atom_id).unwrap(), vec![1, 2]);
+        let provenance = reopened.get_provenance(&atom_id).unwrap();
+        assert_eq!(provenance.direct_evidence.len(), 2);
+        assert!(provenance.direct_evidence.iter().all(|link| {
+            link.origin == ProvenanceOrigin::Attached
+                && link.source_id.is_some()
+                && link.source_location.is_some()
+        }));
+        let records = reopened
+            .evidence_records_for_ref(
+                &MemoryX::attached_source_evidence_ref(
+                    atom_id,
+                    reopened.meta.get_meta(&atom_id).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .all(|record| record.origin == ProvenanceOrigin::Attached)
+        );
+
+        let derived = EvidenceLink::new(
+            atom_id,
+            EvidenceKind::DERIVED,
+            0.5,
+            5000,
+            SectionKind::EVIDENCE,
+            0,
+            0,
+        );
+        assert_eq!(derived.origin, ProvenanceOrigin::Derived);
+        let mut legacy = serde_json::to_value(&derived).unwrap();
+        legacy.as_object_mut().unwrap().remove("origin");
+        legacy["source_id"] = serde_json::json!(1);
+        let legacy: EvidenceLink = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.origin, ProvenanceOrigin::LegacyUnknown);
+    }
+
+    #[test]
+    fn query_is_read_only_and_context_branch_budget_is_bounded() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut store =
+            MemoryX::new(StoreConfig::new(temp.path().join("read-only-query"))).unwrap();
+        let root = store.create_context(0).unwrap();
+        store
+            .branch_ctx(root, BranchReason::Hypothesis, 0)
+            .unwrap()
+            .unwrap();
+        for seed in 1..=12u64 {
+            let claim = ClaimData {
+                subj: seed,
+                pred: 91,
+                obj_tag: ObjTag::U64.to_u8(),
+                obj_val: seed,
+                qualifiers_mask: 0,
+            };
+            let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+            store
+                .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+                .unwrap();
+        }
+        let before = serde_json::to_value(store.list_contexts()).unwrap();
+        let mut contract = QueryContract::new(crate::query::ContractIntent::Lookup)
+            .with_target(crate::query::EntityPattern::label("test_entity"));
+        contract.budgets.max_context_branches = 1;
+        contract.budgets.max_time_ms = 5_000;
+        let _ = store.answer_contract(contract, 0).unwrap();
+        assert_eq!(serde_json::to_value(store.list_contexts()).unwrap(), before);
+    }
+
+    #[test]
+    fn superseded_atoms_are_current_filtered_but_explicitly_historical() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut store = MemoryX::new(StoreConfig::new(temp.path().join("supersession"))).unwrap();
+        let claim = ClaimData {
+            subj: 1,
+            pred: 2,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 3,
+            qualifiers_mask: 0,
+        };
+        let old_payload = build_authoring_payload(
+            AtomType::FACT,
+            std::slice::from_ref(&claim),
+            &["mx_old_marker".to_owned()],
+        )
+        .unwrap();
+        let old_atom = store
+            .ingest(
+                &old_payload,
+                AtomType::FACT,
+                std::slice::from_ref(&claim),
+                &[],
+            )
+            .unwrap();
+        let new_payload = build_authoring_payload(
+            AtomType::FACT,
+            std::slice::from_ref(&claim),
+            &["mx_new_marker".to_owned()],
+        )
+        .unwrap();
+        let updated = store
+            .update_atom(old_atom, new_payload, AtomType::FACT, vec![claim], vec![])
+            .unwrap();
+
+        assert!(store.search_lex("mx_old_marker", None).is_empty());
+        assert_eq!(store.search_lex("mx_new_marker", None).len(), 1);
+
+        let target = crate::query::EntityPattern {
+            atom_id: Some(crate::cas::hex_encode(&old_atom)),
+            ..crate::query::EntityPattern::default()
+        };
+        let current = store
+            .answer_contract(
+                QueryContract::new(crate::query::ContractIntent::Lookup)
+                    .with_target(target.clone()),
+                0,
+            )
+            .unwrap();
+        assert_eq!(current.status, AnswerStatus::NoMatch);
+
+        let mut historical =
+            QueryContract::new(crate::query::ContractIntent::Lookup).with_target(target);
+        historical.temporal_scope.require_current = false;
+        let historical = store.answer_contract(historical, 0).unwrap();
+        assert_ne!(historical.status, AnswerStatus::NoMatch);
+        assert!(
+            historical
+                .graph
+                .nodes
+                .iter()
+                .any(|node| node.atom_ref.atom_id == old_atom)
+        );
+        assert_ne!(updated.new_atom_id, old_atom);
+    }
+
+    #[test]
+    fn authoring_metadata_and_typed_targets_resolve_after_reopen() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("structured-targets"));
+        let (subject_id, relation_atom, predicate_id);
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(PredicateContract {
+                    stable_key: "depends_on_project".to_owned(),
+                    canonical_name: "Depends On Project".to_owned(),
+                    description: "Directed dependency".to_owned(),
+                    direction: PredicateDirection::Directed,
+                    inverse_stable_key: None,
+                    cardinality: PredicateCardinality::ManyToMany,
+                })
+                .unwrap();
+            predicate_id = predicate.predicate_id;
+            let subject = store.create_entity("Compiler Core", "component").unwrap();
+            let object = store.create_entity("Memory Layer", "component").unwrap();
+            subject_id = subject.entity_id;
+            relation_atom = store
+                .assert_relation(subject.entity_id, predicate_id, object.entity_id, 0, vec![])
+                .unwrap()
+                .atom_id;
+        }
+
+        let store = MemoryX::new(config).unwrap();
+        assert_eq!(store.search_lex("compiler", None).len(), 1);
+        assert_eq!(store.search_lex("depends_on_project", None).len(), 1);
+        for target in [
+            crate::query::EntityPattern {
+                entity_id: Some(subject_id),
+                ..crate::query::EntityPattern::default()
+            },
+            crate::query::EntityPattern {
+                stable_key: Some("depends_on_project".to_owned()),
+                ..crate::query::EntityPattern::default()
+            },
+        ] {
+            let answer = store
+                .answer_contract(
+                    QueryContract::new(crate::query::ContractIntent::Lookup).with_target(target),
+                    0,
+                )
+                .unwrap();
+            assert!(
+                answer
+                    .graph
+                    .nodes
+                    .iter()
+                    .any(|node| node.atom_ref.atom_id == relation_atom)
+            );
+        }
+        let missing = store
+            .answer_contract(
+                QueryContract::new(crate::query::ContractIntent::Lookup).with_target(
+                    crate::query::EntityPattern {
+                        entity_id: Some(u64::MAX),
+                        ..crate::query::EntityPattern::default()
+                    },
+                ),
+                0,
+            )
+            .unwrap();
+        assert_eq!(missing.status, AnswerStatus::NoMatch);
+
+        let common_token = store
+            .answer_contract(
+                QueryContract::new(crate::query::ContractIntent::Lookup)
+                    .with_target(crate::query::EntityPattern::label("unrelated component")),
+                0,
+            )
+            .unwrap();
+        assert_eq!(common_token.status, AnswerStatus::NoMatch);
     }
 }

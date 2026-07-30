@@ -162,6 +162,29 @@ impl QueryContract {
                 "contract collection size",
             ));
         }
+        for target in &self.targets {
+            let selector_count = usize::from(target.id.is_some())
+                + usize::from(target.entity_id.is_some())
+                + usize::from(target.atom_id.is_some())
+                + usize::from(target.node_id.is_some())
+                + usize::from(target.term_id.is_some())
+                + usize::from(target.symbol_id.is_some())
+                + usize::from(target.stable_key.is_some());
+            if selector_count > 1 {
+                return Err(QueryContractError::InvalidEntityReference(
+                    "a target may contain only one exact selector".to_owned(),
+                ));
+            }
+            if target
+                .stable_key
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err(QueryContractError::InvalidEntityReference(
+                    "stable_key must not be empty".to_owned(),
+                ));
+            }
+        }
 
         if self.budgets.max_atoms == 0 || self.budgets.max_atoms > 65_536 {
             return Err(QueryContractError::InvalidBudget("max_atoms"));
@@ -181,6 +204,9 @@ impl QueryContract {
         }
         if self.budgets.max_federated_calls > 128 {
             return Err(QueryContractError::InvalidBudget("max_federated_calls"));
+        }
+        if self.budgets.max_context_branches > 65_536 {
+            return Err(QueryContractError::InvalidBudget("max_context_branches"));
         }
         if self.output_contract.max_items == 0 || self.output_contract.max_items > 4096 {
             return Err(QueryContractError::InvalidBudget(
@@ -276,7 +302,20 @@ impl From<ContractIntent> for Intent {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EntityPattern {
+    /// Legacy prefixed identifier (`term:`, `sym:`, `node:`, or `atom:`).
     pub id: Option<String>,
+    /// Durable authoring entity identifier, resolved by the owning store.
+    pub entity_id: Option<u64>,
+    /// Exact CAS atom identifier as 64 hexadecimal characters.
+    pub atom_id: Option<String>,
+    /// Exact graph node identifier.
+    pub node_id: Option<u64>,
+    /// Exact inverted-index term identifier.
+    pub term_id: Option<u32>,
+    /// Exact symbol identifier.
+    pub symbol_id: Option<u32>,
+    /// Durable predicate key or entity canonical name/alias.
+    pub stable_key: Option<String>,
     pub label: Option<String>,
     pub entity_type: Option<String>,
     pub aliases: Vec<String>,
@@ -287,6 +326,12 @@ impl EntityPattern {
     pub fn label(label: impl Into<String>) -> Self {
         Self {
             id: None,
+            entity_id: None,
+            atom_id: None,
+            node_id: None,
+            term_id: None,
+            symbol_id: None,
+            stable_key: None,
             label: Some(label.into()),
             entity_type: None,
             aliases: Vec::new(),
@@ -295,6 +340,22 @@ impl EntityPattern {
     }
 
     fn explicit_entity_ref(&self) -> Option<Result<EntityRef, QueryContractError>> {
+        if let Some(atom_id) = self.atom_id.as_deref() {
+            return Some(
+                hex_decode(atom_id)
+                    .map(EntityRef::Atom)
+                    .map_err(|_| QueryContractError::InvalidEntityReference(atom_id.to_owned())),
+            );
+        }
+        if let Some(node_id) = self.node_id {
+            return Some(Ok(EntityRef::Node(node_id)));
+        }
+        if let Some(term_id) = self.term_id {
+            return Some(Ok(EntityRef::Term(term_id)));
+        }
+        if let Some(symbol_id) = self.symbol_id {
+            return Some(Ok(EntityRef::Sym(symbol_id)));
+        }
         self.id.as_deref().map(parse_entity_ref).or_else(|| {
             self.label
                 .as_deref()
@@ -536,7 +597,7 @@ pub enum Quantifier {
     Exactly(u32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemporalScope {
     pub time_range: Option<TimeRangeSpec>,
     #[serde(default)]
@@ -549,7 +610,26 @@ pub struct TemporalScope {
     pub observed_at_unix_ns: Option<u64>,
     #[serde(default)]
     pub latest_count: Option<u32>,
+    #[serde(default = "default_require_current")]
     pub require_current: bool,
+}
+
+const fn default_require_current() -> bool {
+    true
+}
+
+impl Default for TemporalScope {
+    fn default() -> Self {
+        Self {
+            time_range: None,
+            before_unix_ns: None,
+            after_unix_ns: None,
+            valid_at_unix_ns: None,
+            observed_at_unix_ns: None,
+            latest_count: None,
+            require_current: true,
+        }
+    }
 }
 
 impl TemporalScope {
@@ -843,6 +923,8 @@ pub struct QueryBudgets {
     pub max_io_bytes: u64,
     pub max_time_ms: u64,
     pub max_federated_calls: u32,
+    /// Maximum transient context branches a read query may create.
+    pub max_context_branches: u32,
 }
 
 impl Default for QueryBudgets {
@@ -854,6 +936,7 @@ impl Default for QueryBudgets {
             max_io_bytes: 64 * 1024 * 1024,
             max_time_ms: 30_000,
             max_federated_calls: 16,
+            max_context_branches: 128,
         }
     }
 }
