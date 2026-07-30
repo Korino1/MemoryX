@@ -11,6 +11,7 @@
 /restore_tmp/
 /test_*/
 /benchmarks/results/
+/benchmarks/rag_comparison/runs/
 
 *.7z
 *.log
