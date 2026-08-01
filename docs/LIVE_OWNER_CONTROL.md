@@ -45,6 +45,56 @@ memoryx --format json client `
   --arguments '{}'
 ```
 
+Audit the projection from current relation journal records into context
+`active_claims` without changing the base:
+
+```powershell
+memoryx --format json client `
+  --base E:\project\.memoryx\bases\project `
+  --tool audit_relation_contexts `
+  --arguments '{}'
+```
+
+If every reported issue is explicitly marked `repairable: true`, reconcile
+the durable relation atoms through the same live owner:
+
+```powershell
+memoryx --format json client `
+  --base E:\project\.memoryx\bases\project `
+  --tool repair_relation_contexts `
+  --arguments '{}'
+```
+
+The repair is idempotent. It replaces an equivalent active claim's atom
+identity with the current relation journal atom and records a normal `repair`
+history entry. A distinct equivalent single-claim atom is linked as superseded:
+it remains readable in CAS/history with all source attachments, but is excluded
+from the current view and normal retrieval. The structured result lists it in
+`retired_parallel_atom_ids`. The repair does not rewrite relation records or
+detach sources. Missing relation atoms, multi-claim parallel atoms, atom/claim
+mismatches, unavailable non-default contexts, and conflicting active values
+fail closed.
+
+### Relation/Context Non-Regression Contract
+
+The audit and repair restore the existing invariant that every current,
+non-deprecated relation journal record has its canonical relation atom in the
+declared context's `active_claims`. They do not introduce a new relation model.
+
+- Existing base formats and relation/context semantics remain readable. Audit
+  is read-only; no migration or repair is performed implicitly on open.
+- Repair is an additive, explicit operator action. It is idempotent,
+  provenance/history preserving, and fail-closed on missing, ambiguous,
+  conflicting, multi-claim, or mismatched data.
+- Solver, QueryContract, AnswerGraph, federation, CAS/Merkle, CRDT,
+  replication, scoped storage, and live-owner rules are not redefined by this
+  repair.
+- N5 operation crash atomicity remains open. This repair does not claim atomic
+  pre-state/post-state behavior across all persistence boundaries.
+- A future change that requires different relation or context semantics must
+  be proposed and accepted as a concept change; it must not be hidden inside
+  audit, repair, migration, or orchestration work.
+
 Any base-selectable MCP tool can be called. `--arguments` must be one JSON
 object. The command returns the complete MCP JSON-RPC response.
 
@@ -54,6 +104,8 @@ object. The command returns the complete MCP JSON-RPC response.
 - `current_*`: non-tombstoned atoms not superseded by a newer atom;
 - `active_relation_count`: non-deprecated relations not superseded by another
   relation;
+- `relation_context_audit`: the independent cross-projection check, including
+  the count of current relation atoms actually active in their contexts;
 - `physical_graph_*`: stored topology, including historical nodes and edges.
 
 `verify_integrity` verifies every non-tombstoned CAS atom through the process

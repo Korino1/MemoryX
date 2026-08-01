@@ -3480,6 +3480,7 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
     }
 
     let stats = store.statistics()?;
+    let relation_context_audit = store.audit_relation_contexts()?;
 
     // --- Output ---
     match format {
@@ -3493,6 +3494,9 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
                 "current_atom_count": stats.current_atom_count,
                 "current_claim_count": stats.current_claim_count,
                 "active_relation_count": stats.active_relation_count,
+                "active_relation_claim_count": relation_context_audit.active_relation_claim_count,
+                "relation_context_issue_count": relation_context_audit.issues.len(),
+                "relation_context_consistent": relation_context_audit.is_consistent(),
                 "registered_entity_count": stats.registered_entity_count,
                 "registered_predicate_count": stats.registered_predicate_count,
                 "registered_source_count": stats.registered_source_count,
@@ -3513,6 +3517,8 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
                     "total_claims": "compatibility alias for cas_live_claim_count",
                     "cas_live": "non-tombstoned CAS records, including superseded history",
                     "current": "non-tombstoned records not superseded by a newer atom",
+                    "active_relations": "non-deprecated relation journal records not superseded by another relation",
+                    "active_relation_claims": "current relation journal records canonically present in their declared context active_claims",
                     "physical_graph": "stored topology, including historical and superseded nodes and edges"
                 }
             });
@@ -3528,6 +3534,9 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
                 "current_atom_count": stats.current_atom_count,
                 "current_claim_count": stats.current_claim_count,
                 "active_relation_count": stats.active_relation_count,
+                "active_relation_claim_count": relation_context_audit.active_relation_claim_count,
+                "relation_context_issue_count": relation_context_audit.issues.len(),
+                "relation_context_consistent": relation_context_audit.is_consistent(),
                 "registered_entity_count": stats.registered_entity_count,
                 "registered_predicate_count": stats.registered_predicate_count,
                 "registered_source_count": stats.registered_source_count,
@@ -3563,6 +3572,19 @@ fn cmd_stats(base: &Path, detailed: bool, format: OutputFormat) -> CliResult<()>
             println!("  Current Atoms:   {}", stats.current_atom_count);
             println!("  Current Claims:  {}", stats.current_claim_count);
             println!("  Active Relations:{}", stats.active_relation_count);
+            println!(
+                "  Projected Relations:{}",
+                relation_context_audit.active_relation_claim_count
+            );
+            println!(
+                "  Relation/Context: {} ({} issues)",
+                if relation_context_audit.is_consistent() {
+                    "consistent"
+                } else {
+                    "inconsistent"
+                },
+                relation_context_audit.issues.len()
+            );
             println!("  Contexts:        {}", stats.context_count);
             println!("  Conflicts:       {}", stats.conflict_count);
             println!("  Graph Nodes:     {}", node_count.to_string().green());
@@ -4390,6 +4412,8 @@ const BASE_SELECTABLE_MCP_TOOLS: &[&str] = &[
     "assert_relation",
     "correct_relation",
     "transition_relation",
+    "audit_relation_contexts",
+    "repair_relation_contexts",
     "create_context",
     "list_contexts",
     "branch_context",
@@ -5540,6 +5564,28 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                         }
                                     },
                                     {
+                                        "name": "audit_relation_contexts",
+                                        "description": "Audit the durable projection from every current relation journal record to its declared context active_claims. This read-only check reports missing contexts, missing relation atoms, atom/claim mismatches, non-canonical equivalent claims, and conflicting active values without changing the base.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "repair_relation_contexts",
+                                        "description": "Safely and idempotently restore current relation atoms missing from context active_claims. A distinct equivalent single-claim atom is preserved as superseded history and reported in retired_parallel_atom_ids, so it no longer remains a parallel current claim. Multi-claim, ambiguous, missing-atom, claim-mismatch, and conflicting-value cases fail closed. CAS atoms, source attachments, and relation history are preserved.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
+                                            "examples": [
+                                                {}
+                                            ]
+                                        }
+                                    },
+                                    {
                                         "name": "create_context",
                                         "description": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
                                         "inputSchema": {
@@ -5853,6 +5899,18 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                             id,
                             arguments,
                             mcp_transition_relation_response,
+                        ),
+                        "audit_relation_contexts" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_audit_relation_contexts_response,
+                        ),
+                        "repair_relation_contexts" => mcp_with_selected_store(
+                            state,
+                            id,
+                            arguments,
+                            mcp_repair_relation_contexts_response,
                         ),
                         "create_context" => mcp_with_selected_store(
                             state,
@@ -7063,21 +7121,24 @@ fn mcp_get_stats_response(
     id: serde_json::Value,
     _arguments: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    match store.statistics() {
-        Ok(stats) => mcp_structured_result(
+    match (store.statistics(), store.audit_relation_contexts()) {
+        (Ok(stats), Ok(relation_context_audit)) => mcp_structured_result(
             id,
             format!(
-                "Base statistics\nCAS live atoms: {}\nCurrent atoms: {}\nCurrent claims: {}\nActive relations: {}\nPhysical graph: {} nodes, {} edges",
+                "Base statistics\nCAS live atoms: {}\nCurrent atoms: {}\nCurrent claims: {}\nActive relations: {}\nProjected relation claims: {}\nRelation/context consistent: {}\nPhysical graph: {} nodes, {} edges",
                 stats.cas_live_atom_count,
                 stats.current_atom_count,
                 stats.current_claim_count,
                 stats.active_relation_count,
+                relation_context_audit.active_relation_claim_count,
+                relation_context_audit.is_consistent(),
                 stats.physical_graph_node_count,
                 stats.physical_graph_edge_count
             ),
             serde_json::json!({
                 "operation": "get_stats",
                 "statistics": stats,
+                "relation_context_audit": relation_context_audit_json(&relation_context_audit),
                 "metric_semantics": {
                     "cas_live": "non-tombstoned CAS records, including superseded history",
                     "current": "non-tombstoned records not superseded by a newer atom",
@@ -7086,7 +7147,9 @@ fn mcp_get_stats_response(
                 }
             }),
         ),
-        Err(e) => mcp_error(id, -32603, format!("Statistics failed: {}", e)),
+        (Err(error), _) | (_, Err(error)) => {
+            mcp_error(id, -32603, format!("Statistics failed: {error}"))
+        }
     }
 }
 
@@ -7827,6 +7890,100 @@ fn mcp_transition_relation_response(
             }),
         ),
         Err(e) => mcp_error(id, -32603, format!("Relation transition failed: {}", e)),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn relation_context_audit_json(
+    report: &memoryx::store::api::RelationContextAuditReport,
+) -> serde_json::Value {
+    let issues = report
+        .issues
+        .iter()
+        .map(|issue| {
+            serde_json::json!({
+                "relation_id": issue.relation_id,
+                "atom_id": hex::encode(issue.atom_id),
+                "ctx_id": issue.context,
+                "kind": issue.kind,
+                "repairable": issue.repairable,
+                "detail": issue.detail
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "current_relation_count": report.current_relation_count,
+        "active_relation_claim_count": report.active_relation_claim_count,
+        "issue_count": issues.len(),
+        "consistent": report.is_consistent(),
+        "issues": issues
+    })
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_audit_relation_contexts_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.audit_relation_contexts() {
+        Ok(report) => mcp_structured_result(
+            id,
+            format!(
+                "Relation context audit\nCurrent relations: {}\nActive relation claims: {}\nIssues: {}\nConsistent: {}",
+                report.current_relation_count,
+                report.active_relation_claim_count,
+                report.issues.len(),
+                report.is_consistent()
+            ),
+            serde_json::json!({
+                "operation": "audit_relation_contexts",
+                "audit": relation_context_audit_json(&report),
+                "mutated": false
+            }),
+        ),
+        Err(error) => mcp_error(
+            id,
+            -32603,
+            format!("Relation context audit failed: {error}"),
+        ),
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn mcp_repair_relation_contexts_response(
+    store: &mut MemoryX,
+    id: serde_json::Value,
+    _arguments: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    match store.repair_relation_contexts() {
+        Ok(report) => mcp_structured_result(
+            id,
+            format!(
+                "Relation context repair\nIssues before: {}\nRepaired relations: {}\nRetired parallel atoms: {}\nIssues after: {}",
+                report.before.issues.len(),
+                report.repaired_relation_ids.len(),
+                report.retired_parallel_atom_ids.len(),
+                report.after.issues.len()
+            ),
+            serde_json::json!({
+                "operation": "repair_relation_contexts",
+                "before": relation_context_audit_json(&report.before),
+                "repaired_relation_ids": report.repaired_relation_ids,
+                "retired_parallel_atom_ids": report.retired_parallel_atom_ids
+                    .iter()
+                    .map(hex::encode)
+                    .collect::<Vec<_>>(),
+                "after": relation_context_audit_json(&report.after),
+                "preserved": ["cas_atoms", "relation_journal", "source_attachments", "history"],
+                "durability": "committed"
+            }),
+        ),
+        Err(error) => mcp_error(
+            id,
+            -32603,
+            format!("Relation context repair failed: {error}"),
+        ),
     }
 }
 
@@ -9287,7 +9444,7 @@ mod tests {
             );
         }
 
-        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 39);
+        assert_eq!(BASE_SELECTABLE_MCP_TOOLS.len(), 41);
         for name in BASE_SELECTABLE_MCP_TOOLS {
             let tool = tools
                 .iter()
@@ -9340,6 +9497,8 @@ mod tests {
         assert!(names.contains(&"assert_relation"));
         assert!(names.contains(&"correct_relation"));
         assert!(names.contains(&"transition_relation"));
+        assert!(names.contains(&"audit_relation_contexts"));
+        assert!(names.contains(&"repair_relation_contexts"));
         assert!(names.contains(&"create_context"));
         assert!(names.contains(&"list_contexts"));
         assert!(names.contains(&"branch_context"));
@@ -9347,7 +9506,7 @@ mod tests {
         assert!(names.contains(&"graph_neighbors"));
         assert!(names.contains(&"graph_walk"));
         assert!(names.contains(&"extract_subgraph"));
-        assert_eq!(names.len(), 45);
+        assert_eq!(names.len(), 47);
     }
 
     #[cfg(feature = "mcp")]
@@ -9880,6 +10039,142 @@ mod tests {
         let list_response = process_mcp_request(&mut state, &list_request).await;
         assert!(list_response.contains("Total: 2"));
         assert!(list_response.contains("Branch reason: hypothesis"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn mcp_relation_context_audit_and_repair_survive_reopen() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("relation-context-repair");
+        let mut state = test_mcp_state(base.clone());
+        let relation_id;
+        let relation_atom;
+        {
+            let store = test_mcp_active_store_mut(&mut state);
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(PredicateContract {
+                    stable_key: "has_session_state".to_owned(),
+                    canonical_name: "has session state".to_owned(),
+                    description: "Current module session state.".to_owned(),
+                    direction: PredicateDirection::Directed,
+                    inverse_stable_key: None,
+                    cardinality: PredicateCardinality::ManyToOne,
+                })
+                .unwrap();
+            let module = store.create_entity("kpa-mod-700", "module").unwrap();
+            let initial = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let relation = store
+                .assert_relation(
+                    module.entity_id,
+                    predicate.predicate_id,
+                    initial.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = relation.relation_id.unwrap();
+            relation_atom = relation.atom_id;
+        }
+        drop(state);
+
+        // Reproduce the legacy split-brain fixture: the current relation and
+        // CAS atom remain durable while contexts.json loses only its projection.
+        let contexts_path = StoreConfig::new(base.clone()).contexts_path();
+        let mut contexts: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&contexts_path).unwrap()).unwrap();
+        contexts["contexts"][0]["active_claims"] = serde_json::json!({});
+        std::fs::write(&contexts_path, serde_json::to_vec(&contexts).unwrap()).unwrap();
+
+        let mut state = test_mcp_state(base.clone());
+        let stats_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 69,
+            "method": "tools/call",
+            "params": {
+                "name": "get_stats",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let stats_response = process_mcp_request(&mut state, &stats_request).await;
+        let stats: serde_json::Value = serde_json::from_str(&stats_response).unwrap();
+        assert_eq!(
+            stats["result"]["structuredContent"]["statistics"]["active_relation_count"],
+            1
+        );
+        assert_eq!(
+            stats["result"]["structuredContent"]["relation_context_audit"]["active_relation_claim_count"],
+            0
+        );
+        assert_eq!(
+            stats["result"]["structuredContent"]["relation_context_audit"]["consistent"],
+            false
+        );
+        let audit_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 70,
+            "method": "tools/call",
+            "params": {
+                "name": "audit_relation_contexts",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let audit_response = process_mcp_request(&mut state, &audit_request).await;
+        let audit: serde_json::Value = serde_json::from_str(&audit_response).unwrap();
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["issue_count"],
+            1
+        );
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["issues"][0]["kind"],
+            "missing_active_claim"
+        );
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["issues"][0]["atom_id"],
+            hex::encode(relation_atom)
+        );
+
+        let repair_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 71,
+            "method": "tools/call",
+            "params": {
+                "name": "repair_relation_contexts",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let repair_response = process_mcp_request(&mut state, &repair_request).await;
+        let repair: serde_json::Value = serde_json::from_str(&repair_response).unwrap();
+        assert_eq!(
+            repair["result"]["structuredContent"]["repaired_relation_ids"],
+            serde_json::json!([relation_id])
+        );
+        assert_eq!(
+            repair["result"]["structuredContent"]["retired_parallel_atom_ids"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            repair["result"]["structuredContent"]["after"]["consistent"],
+            true
+        );
+        drop(state);
+
+        let mut reopened = test_mcp_state(base);
+        let reopened_response = process_mcp_request(&mut reopened, &audit_request).await;
+        let reopened_audit: serde_json::Value = serde_json::from_str(&reopened_response).unwrap();
+        assert_eq!(
+            reopened_audit["result"]["structuredContent"]["audit"]["issue_count"],
+            0
+        );
+        assert_eq!(
+            reopened_audit["result"]["structuredContent"]["audit"]["active_relation_claim_count"],
+            1
+        );
     }
 
     #[cfg(feature = "mcp")]

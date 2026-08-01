@@ -31,7 +31,7 @@ conflicts rather than unsupported text.
 - Fixed-point answer assembly through `FixedPointSolver`.
 - Durable `CAS` storage with history, tombstones, integrity checks, and repair.
 - `CRDT` metadata, `WAL`, snapshots, and rebuildable indexes.
-- MCP access with 45 tools for reading, writing, provenance, graph work, and
+- MCP access with 47 tools for reading, writing, provenance, graph work, and
   multiple bases.
 - Federation primitives for compatible bases.
 - Portable release builds by default, with explicit CPU-specific builds only
@@ -160,6 +160,17 @@ or use `verify_integrity` in the same way. Different physical bases may still
 be owned and used in parallel. See
 [`docs/LIVE_OWNER_CONTROL.md`](docs/LIVE_OWNER_CONTROL.md).
 
+`get_stats.active_relation_count` counts current records in the durable
+relation journal. It does not by itself prove that each relation atom is also
+present in its context's `active_claims` projection. Use the read-only
+`audit_relation_contexts` tool for that cross-check. If it reports only
+repairable missing/equivalent projections, `repair_relation_contexts` restores
+the journal atom identity idempotently while preserving CAS atoms, sources,
+relation records, and history. A single-claim equivalent atom is retained as
+superseded history, so it no longer appears as a parallel current claim. An
+equivalent atom with additional claims, a missing atom, a claim mismatch, or a
+conflicting active value fails closed instead of being guessed or overwritten.
+
 ## Connect MCP To Codex Or An IDE
 
 `memoryx serve --stdio` is the production MCP transport. `memoryx serve` without
@@ -220,7 +231,7 @@ After connecting, ask the client to call `active_base` or `list_bases` first.
 The MCP server preserves human-readable `content` and also returns
 `structuredContent`. Successful mutations report `durability: "committed"`.
 
-## Safe Use Of The 45 MCP Tools
+## Safe Use Of The 47 MCP Tools
 
 Use the tools in this order:
 
@@ -249,8 +260,8 @@ The complete tool surface is grouped below. The names are exact MCP tool names.
 | Base selection | `list_bases`, `active_base`, `connect_base`, `switch_base` | Find, connect, and select bases. |
 | Search | `search_lex`, `search_graph`, `search_semantic` | Search candidate knowledge without treating search alone as the final answer. |
 | Atom writes and history | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Add, revise, remove through tombstones, and review changes. |
-| State and claim correction | `supersede_claim`, `correct_claim`, `correct_relation`, `transition_relation` | Replace outdated knowledge while keeping history; use `transition_relation` for one current relation value. |
-| Validation and metrics | `get_stats`, `verify_integrity` | Inspect unambiguous logical/physical counts and verify the live base through its owner. |
+| State and claim correction | `supersede_claim`, `correct_claim`, `correct_relation`, `transition_relation`, `repair_relation_contexts` | Replace outdated knowledge while keeping history; repair only unambiguous current-relation projections. |
+| Validation and metrics | `get_stats`, `verify_integrity`, `audit_relation_contexts` | Inspect labelled counts, verify storage, and audit relation-to-context consistency through the live owner. |
 | Sources | `register_source`, `list_sources`, `attach_atom_source` | Register sources and attach them to atoms. |
 | Predicate contracts | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Define and resolve stable relation types. |
 | Entities and relations | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Maintain entities, aliases, claims, and relations. |
@@ -301,6 +312,17 @@ Check and repair a project base with:
 indexes. `repair` performs a safe repair sequence with a final integrity check.
 `compact --dry-run` can be used to inspect compaction before changing storage.
 Maintenance commands need exclusive write access to the physical base.
+
+For a base already owned by MCP, audit and repair relation context projections
+through that owner:
+
+```json
+{"name":"audit_relation_contexts","arguments":{}}
+```
+
+```json
+{"name":"repair_relation_contexts","arguments":{}}
+```
 
 ## Reproducible Benchmark
 
@@ -372,7 +394,7 @@ MemoryX, скорее всего, не нужна, если требуется �
 - Сборка ответа через `FixedPointSolver`.
 - Постоянное хранилище `CAS` с историей, метками удаления, проверкой целостности и восстановлением.
 - Служебные данные `CRDT`, журнал `WAL`, снимки состояния и перестраиваемые индексы.
-- Доступ через MCP: 45 инструментов для чтения, записи, источников, графа и нескольких баз.
+- Доступ через MCP: 47 инструментов для чтения, записи, источников, графа и нескольких баз.
 - Средства объединения совместимых баз.
 - Переносимая сборка по умолчанию и отдельные сборки под процессор только при явном обозначении.
 
@@ -501,6 +523,19 @@ $exe = ".\target\release\memoryx.exe"
 по-прежнему можно использовать параллельно. Подробный договор описан в
 [`docs/LIVE_OWNER_CONTROL.md`](docs/LIVE_OWNER_CONTROL.md).
 
+Поле `get_stats.active_relation_count` считает текущие записи в постоянном
+журнале связей. Само по себе оно не доказывает, что атом каждой связи также
+присутствует среди активных утверждений её контекста. Для такой сверки служит
+неизменяющий базу инструмент `audit_relation_contexts`. Если он находит только
+однозначно восстанавливаемую потерю проекции или то же утверждение от другого
+атома, `repair_relation_contexts` возвращает в контекст атом из журнала связи.
+Эквивалентный атом с одним утверждением остаётся в истории, но помечается как
+замещённый и больше не считается параллельным текущим знанием. Атомы, их
+источники, записи связей и история сохраняются. Если эквивалентный атом содержит
+другие утверждения, атом отсутствует, утверждение не совпадает или активно
+другое значение, операция завершается ошибкой и ничего не выбирает за
+пользователя.
+
 ## Подключение MCP к Codex или среде разработки
 
 `memoryx serve --stdio` — штатный транспорт MCP. `memoryx serve` без `--stdio`
@@ -562,7 +597,7 @@ $exe = ".\target\release\memoryx.exe"
 `structuredContent`. Успешные изменения отмечаются как
 `durability: "committed"`.
 
-## Безопасная работа с 45 инструментами MCP
+## Безопасная работа с 47 инструментами MCP
 
 Рекомендуемый порядок:
 
@@ -590,8 +625,8 @@ $exe = ".\target\release\memoryx.exe"
 | Выбор базы | `list_bases`, `active_base`, `connect_base`, `switch_base` | Найти, подключить и выбрать базу. |
 | Поиск | `search_lex`, `search_graph`, `search_semantic` | Найти кандидатов, не считая один поиск окончательным ответом. |
 | Запись атомов и история | `ingest`, `batch_ingest`, `update_atom`, `delete_atom`, `history` | Добавить, изменить, пометить удалённым и проверить изменения. |
-| Изменение состояния и исправление утверждений | `supersede_claim`, `correct_claim`, `correct_relation`, `transition_relation` | Заменить устаревшие знания с сохранением истории; для единственного текущего значения связи использовать `transition_relation`. |
-| Проверка и счётчики | `get_stats`, `verify_integrity` | Получить однозначные логические и физические счётчики и проверить живую базу через её владельца. |
+| Изменение состояния и исправление утверждений | `supersede_claim`, `correct_claim`, `correct_relation`, `transition_relation`, `repair_relation_contexts` | Заменить устаревшие знания с сохранением истории и восстановить только однозначную проекцию текущей связи. |
+| Проверка и счётчики | `get_stats`, `verify_integrity`, `audit_relation_contexts` | Получить подписанные по смыслу счётчики, проверить хранилище и согласованность связей с контекстами через владельца базы. |
 | Источники | `register_source`, `list_sources`, `attach_atom_source` | Зарегистрировать источники и связать их с атомами. |
 | Описание типов связей | `register_predicate`, `list_predicates`, `get_predicate`, `resolve_predicate` | Задать и получить устойчивые типы связей. |
 | Сущности и связи | `create_entity`, `list_entities`, `alias_entity`, `merge_entities`, `split_entity`, `add_claim`, `assert_relation` | Вести сущности, псевдонимы, утверждения и связи. |
@@ -644,6 +679,17 @@ $exe = ".\target\release\memoryx.exe"
 восстановления и завершается повторной проверкой целостности. Перед изменением
 хранилища можно выполнить `compact --dry-run`. Команды обслуживания требуют
 исключительного доступа к физической базе.
+
+Если база уже открыта владельцем MCP, сверяйте и восстанавливайте проекцию
+связей через него:
+
+```json
+{"name":"audit_relation_contexts","arguments":{}}
+```
+
+```json
+{"name":"repair_relation_contexts","arguments":{}}
+```
 
 ## Воспроизводимая проверка
 

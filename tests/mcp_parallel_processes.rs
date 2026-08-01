@@ -392,7 +392,7 @@ fn codex_lifecycle_ignores_initialized_notification_before_tools_list() {
         .expect("Codex tools/list request failed after initialized notification");
     assert_success(&tools);
     assert_eq!(tools["id"], json!("codex-tools-list"));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(45));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(47));
     assert!(
         tools["result"]["tools"]
             .as_array()
@@ -530,7 +530,7 @@ fn second_stdio_and_cli_client_attach_to_live_owner_with_stable_diagnostics() {
             "params": {}
         }))
         .expect("proxied tools/list");
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(45));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(47));
 
     let ingest = attached
         .request(tool_request(

@@ -16,6 +16,7 @@
 *.7z
 *.log
 *.tmp
+/*.txt
 
 /check_warnings.txt
 /test_warnings.txt

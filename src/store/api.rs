@@ -1820,6 +1820,62 @@ pub struct RelationTransitionResult {
     pub source_ids: Vec<SourceId>,
 }
 
+/// Durable relation-to-context projection defect detected by an audit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationContextIssueKind {
+    MissingContext,
+    RelationAtomUnavailable,
+    RelationAtomClaimMismatch,
+    MissingActiveClaim,
+    ActiveClaimAtomMismatch,
+    NonCanonicalActiveClaim,
+    ConflictingActiveClaim,
+}
+
+/// One current relation that is not represented canonically in its context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationContextIssue {
+    pub relation_id: u64,
+    pub atom_id: AtomId,
+    pub context: CtxId,
+    pub kind: RelationContextIssueKind,
+    pub repairable: bool,
+    pub detail: String,
+}
+
+/// Cross-projection consistency report for current relation records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationContextAuditReport {
+    pub current_relation_count: usize,
+    pub active_relation_claim_count: usize,
+    pub issues: Vec<RelationContextIssue>,
+}
+
+impl RelationContextAuditReport {
+    #[inline]
+    pub fn is_consistent(&self) -> bool {
+        self.issues.is_empty()
+    }
+}
+
+/// Result of an explicit relation-to-context projection repair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationContextRepairReport {
+    pub before: RelationContextAuditReport,
+    pub repaired_relation_ids: Vec<u64>,
+    /// Equivalent non-canonical atoms retained in CAS/history but excluded
+    /// from the current knowledge view through durable `SUPERSEDES` edges.
+    pub retired_parallel_atom_ids: Vec<AtomId>,
+    pub after: RelationContextAuditReport,
+}
+
+#[derive(Debug, Default)]
+struct RelationReconciliationResult {
+    repaired_relation_ids: Vec<u64>,
+    retired_parallel_atom_ids: Vec<AtomId>,
+}
+
 // ============================================================================
 // Claim View
 // ============================================================================
@@ -3010,6 +3066,15 @@ impl CtxManager {
         crate::vm::CtxIndex::claim_pattern_hash(claim)
     }
 
+    #[inline]
+    fn claims_equal(left: &ClaimData, right: &ClaimData) -> bool {
+        left.subj == right.subj
+            && left.pred == right.pred
+            && left.obj_tag == right.obj_tag
+            && left.obj_val == right.obj_val
+            && left.qualifiers_mask == right.qualifiers_mask
+    }
+
     /// CTX_PROBE: Check if claim conflicts with active claims in context
     ///
     /// **SKF-1.1 Contract:**
@@ -3084,6 +3149,10 @@ impl CtxManager {
         claim: &ClaimData,
         atom_id: AtomId,
     ) -> Result<CtxId, StoreError> {
+        if self.get_ctx(ctx_id).is_none() {
+            return Err(StoreError::ContextNotFound);
+        }
+
         // 1. CTX_PROBE - check for conflicts using proper AtomIds
         if let Some(conflict) = self.probe_conflict_with_atoms(ctx_id, claim, atom_id) {
             let ctx = self.get_ctx(ctx_id).ok_or(StoreError::ContextNotFound)?;
@@ -3134,6 +3203,60 @@ impl CtxManager {
         }
 
         Ok(ctx_id)
+    }
+
+    /// Canonicalize one exact durable claim projection without branching.
+    ///
+    /// This is restricted to recovery of an already-current relation record.
+    /// It replaces an equivalent claim from another atom, but fails closed if
+    /// another value for the same subject/predicate pattern is active.
+    fn reconcile_claim_with_atom_id(
+        &mut self,
+        ctx_id: CtxId,
+        claim: &ClaimData,
+        atom_id: AtomId,
+    ) -> Result<bool, StoreError> {
+        let expected_signature = Self::compute_claim_id(claim);
+        let expected_pattern = Self::compute_pattern_hash(claim);
+        let ctx = self
+            .get_ctx_mut(ctx_id)
+            .ok_or(StoreError::ContextNotFound)?;
+
+        if ctx.active_claims.iter().any(|(claim_id, active)| {
+            *claim_id == expected_signature
+                && active.atom_id == atom_id
+                && Self::claims_equal(&active.claim, claim)
+        }) {
+            return Ok(false);
+        }
+
+        if ctx.active_claims.values().any(|active| {
+            Self::compute_claim_id(&active.claim) == expected_signature
+                && !Self::claims_equal(&active.claim, claim)
+        }) {
+            return Err(StoreError::ClaimRejected(
+                "relation context repair encountered a claim-signature collision".to_owned(),
+            ));
+        }
+
+        if ctx.active_claims.values().any(|active| {
+            Self::compute_pattern_hash(&active.claim) == expected_pattern
+                && Self::compute_claim_id(&active.claim) != expected_signature
+        }) {
+            return Err(StoreError::ClaimRejected(
+                "relation context repair conflicts with another active claim".to_owned(),
+            ));
+        }
+
+        // Remove equivalent non-canonical projections before installing the
+        // relation journal's durable atom identity under the canonical key.
+        ctx.active_claims.retain(|claim_id, active| {
+            *claim_id != expected_signature
+                && Self::compute_claim_id(&active.claim) != expected_signature
+        });
+        ctx.active_claims
+            .insert(expected_signature, ActiveClaim::new(atom_id, claim.clone()));
+        Ok(true)
     }
 
     /// Replace one explicitly identified active claim in the same context.
@@ -7005,6 +7128,465 @@ impl MemoryX {
         preview.assert_claim_with_atom_id(ctx_id, claim, atom_id)
     }
 
+    fn ensure_authoring_context(&mut self, ctx_id: CtxId) -> Result<(), StoreError> {
+        let (exists, empty) = {
+            let manager = self.ctx_manager.lock();
+            (
+                manager.get_ctx(ctx_id).is_some(),
+                manager.list_contexts().is_empty(),
+            )
+        };
+        if exists {
+            return Ok(());
+        }
+        if ctx_id != 0 || !empty {
+            return Err(StoreError::ContextNotFound);
+        }
+        let created = self.create_context(0)?;
+        if created != 0 {
+            return Err(StoreError::Context(
+                "default authoring context did not allocate context 0".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn relation_claim(relation: &RelationRecord) -> ClaimData {
+        ClaimData {
+            subj: relation.subject,
+            pred: u64::from(relation.predicate),
+            obj_tag: ObjTag::NODENUM.to_u8(),
+            obj_val: relation.object,
+            qualifiers_mask: 0,
+        }
+    }
+
+    fn claims_match(left: &ClaimData, right: &ClaimData) -> bool {
+        CtxManager::claims_equal(left, right)
+    }
+
+    fn current_relation_records(&self) -> Result<Vec<RelationRecord>, StoreError> {
+        let relations = self.read_relations()?;
+        let superseded = relations
+            .iter()
+            .filter_map(|relation| relation.supersedes)
+            .collect::<HashSet<_>>();
+        let mut current = relations
+            .into_iter()
+            .filter(|relation| !relation.deprecated && !superseded.contains(&relation.relation_id))
+            .collect::<Vec<_>>();
+        current.sort_by_key(|relation| relation.relation_id);
+        Ok(current)
+    }
+
+    fn relation_context_issue(
+        manager: &CtxManager,
+        relation: &RelationRecord,
+        claim: &ClaimData,
+    ) -> Option<RelationContextIssue> {
+        let Some(context) = manager.get_ctx(relation.context) else {
+            let can_create_default = relation.context == 0 && manager.list_contexts().is_empty();
+            return Some(RelationContextIssue {
+                relation_id: relation.relation_id,
+                atom_id: relation.atom_id,
+                context: relation.context,
+                kind: RelationContextIssueKind::MissingContext,
+                repairable: can_create_default,
+                detail: if can_create_default {
+                    "legacy relation targets the absent default context; context 0 can be restored"
+                        .to_owned()
+                } else {
+                    "relation targets a context that cannot be reconstructed unambiguously"
+                        .to_owned()
+                },
+            });
+        };
+
+        let signature = CtxManager::compute_claim_id(claim);
+        let pattern = CtxManager::compute_pattern_hash(claim);
+        if let Some(active) = context.active_claims.get(&signature)
+            && active.atom_id == relation.atom_id
+            && Self::claims_match(&active.claim, claim)
+        {
+            return None;
+        }
+
+        if context.active_claims.values().any(|active| {
+            CtxManager::compute_claim_id(&active.claim) == signature
+                && !Self::claims_match(&active.claim, claim)
+        }) {
+            return Some(RelationContextIssue {
+                relation_id: relation.relation_id,
+                atom_id: relation.atom_id,
+                context: relation.context,
+                kind: RelationContextIssueKind::ConflictingActiveClaim,
+                repairable: false,
+                detail: "active context contains a claim-signature collision".to_owned(),
+            });
+        }
+
+        if context.active_claims.values().any(|active| {
+            CtxManager::compute_pattern_hash(&active.claim) == pattern
+                && CtxManager::compute_claim_id(&active.claim) != signature
+        }) {
+            return Some(RelationContextIssue {
+                relation_id: relation.relation_id,
+                atom_id: relation.atom_id,
+                context: relation.context,
+                kind: RelationContextIssueKind::ConflictingActiveClaim,
+                repairable: false,
+                detail: "another value for the same subject/predicate pattern is active".to_owned(),
+            });
+        }
+
+        let exact_projection = context
+            .active_claims
+            .iter()
+            .find(|(_, active)| Self::claims_match(&active.claim, claim));
+        let (kind, detail) = match exact_projection {
+            Some((_claim_id, active)) if active.atom_id != relation.atom_id => (
+                RelationContextIssueKind::ActiveClaimAtomMismatch,
+                "the exact logical claim is active through a different atom identity",
+            ),
+            Some((claim_id, _)) if *claim_id != signature => (
+                RelationContextIssueKind::NonCanonicalActiveClaim,
+                "the relation claim is stored under a non-canonical context key",
+            ),
+            _ => (
+                RelationContextIssueKind::MissingActiveClaim,
+                "the current relation atom is absent from context active_claims",
+            ),
+        };
+        Some(RelationContextIssue {
+            relation_id: relation.relation_id,
+            atom_id: relation.atom_id,
+            context: relation.context,
+            kind,
+            repairable: true,
+            detail: detail.to_owned(),
+        })
+    }
+
+    fn validate_relation_atom_claim(
+        &self,
+        relation: &RelationRecord,
+        claim: &ClaimData,
+    ) -> Result<(), RelationContextIssue> {
+        let atom = self
+            .get_atom(&relation.atom_id)
+            .map_err(|error| RelationContextIssue {
+                relation_id: relation.relation_id,
+                atom_id: relation.atom_id,
+                context: relation.context,
+                kind: RelationContextIssueKind::RelationAtomUnavailable,
+                repairable: false,
+                detail: format!("relation atom is unavailable: {error}"),
+            })?;
+        if atom
+            .claims
+            .iter()
+            .any(|stored| Self::claims_match(stored, claim))
+        {
+            Ok(())
+        } else {
+            Err(RelationContextIssue {
+                relation_id: relation.relation_id,
+                atom_id: relation.atom_id,
+                context: relation.context,
+                kind: RelationContextIssueKind::RelationAtomClaimMismatch,
+                repairable: false,
+                detail: "relation atom does not contain the journal record's exact claim"
+                    .to_owned(),
+            })
+        }
+    }
+
+    fn validate_parallel_relation_projection(
+        &self,
+        manager: &CtxManager,
+        relation: &RelationRecord,
+        claim: &ClaimData,
+        current_relation_atoms: &HashSet<AtomId>,
+    ) -> Result<Option<AtomId>, String> {
+        let parallel_atom = manager
+            .get_ctx(relation.context)
+            .and_then(|context| {
+                context.active_claims.values().find(|active| {
+                    active.atom_id != relation.atom_id && Self::claims_match(&active.claim, claim)
+                })
+            })
+            .map(|active| active.atom_id);
+        let Some(atom_id) = parallel_atom else {
+            return Ok(None);
+        };
+        if current_relation_atoms.contains(&atom_id) {
+            return Err(format!(
+                "the equivalent atom {} belongs to another current relation",
+                crate::cas::hex_encode(&atom_id)
+            ));
+        }
+        let atom = self
+            .get_atom(&atom_id)
+            .map_err(|error| format!("the equivalent atom is unavailable: {error}"))?;
+        if atom.claims.len() != 1 || !Self::claims_match(&atom.claims[0], claim) {
+            return Err(
+                "the equivalent projection uses a multi-claim or non-equivalent atom; automatic retirement is unsafe"
+                    .to_owned(),
+            );
+        }
+        Ok(Some(atom_id))
+    }
+
+    /// Audit whether every current relation journal record is active through
+    /// its durable atom identity in the relation's declared context.
+    pub fn audit_relation_contexts(&self) -> Result<RelationContextAuditReport, StoreError> {
+        let relations = self.current_relation_records()?;
+        let current_relation_atoms = relations
+            .iter()
+            .map(|relation| relation.atom_id)
+            .collect::<HashSet<_>>();
+        let manager = self.ctx_manager.lock();
+        let mut issues = Vec::new();
+        let mut active_relation_claim_count = 0usize;
+
+        for relation in &relations {
+            let claim = Self::relation_claim(relation);
+            if let Err(issue) = self.validate_relation_atom_claim(relation, &claim) {
+                issues.push(issue);
+                continue;
+            }
+            if let Some(mut issue) = Self::relation_context_issue(&manager, relation, &claim) {
+                if issue.repairable
+                    && let Err(detail) = self.validate_parallel_relation_projection(
+                        &manager,
+                        relation,
+                        &claim,
+                        &current_relation_atoms,
+                    )
+                {
+                    issue.repairable = false;
+                    issue.detail = detail;
+                }
+                issues.push(issue);
+            } else {
+                active_relation_claim_count = active_relation_claim_count.saturating_add(1);
+            }
+        }
+
+        Ok(RelationContextAuditReport {
+            current_relation_count: relations.len(),
+            active_relation_claim_count,
+            issues,
+        })
+    }
+
+    fn rollback_relation_reconciliation(
+        &mut self,
+        previous_contexts: &CtxManager,
+        added_supersedes_edges: &[(u64, u64)],
+    ) -> Result<(), StoreError> {
+        let graph_result: Result<(), StoreError> = (|| {
+            for (canonical_node, parallel_node) in added_supersedes_edges {
+                self.graph
+                    .delete_edge(*canonical_node, *parallel_node, EdgeType::SUPERSEDES)
+                    .map_err(|error| StoreError::Io(error.to_string()))?;
+            }
+            if !added_supersedes_edges.is_empty() {
+                self.graph
+                    .save()
+                    .map_err(|error| StoreError::Io(error.to_string()))?;
+            }
+            Ok(())
+        })();
+        let context_result = self.mutate_contexts(|manager| {
+            *manager = previous_contexts.clone();
+            Ok(())
+        });
+
+        match (graph_result, context_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (graph, contexts) => Err(StoreError::Context(format!(
+                "relation reconciliation rollback was incomplete: graph={graph:?}, contexts={contexts:?}"
+            ))),
+        }
+    }
+
+    fn reconcile_relation_records(
+        &mut self,
+        relations: &[RelationRecord],
+        trigger: &str,
+    ) -> Result<RelationReconciliationResult, StoreError> {
+        let manager = self.ctx_manager.lock().clone();
+        let current_relation_atoms = self
+            .current_relation_records()?
+            .iter()
+            .map(|relation| relation.atom_id)
+            .collect::<HashSet<_>>();
+        let already_superseded = self.superseded_atom_ids();
+        let mut planned = Vec::new();
+        for relation in relations {
+            let claim = Self::relation_claim(relation);
+            self.validate_relation_atom_claim(relation, &claim)
+                .map_err(|issue| StoreError::Context(issue.detail))?;
+            if let Some(issue) = Self::relation_context_issue(&manager, relation, &claim) {
+                if !issue.repairable {
+                    return Err(StoreError::Context(format!(
+                        "relation {} cannot be reconciled: {}",
+                        relation.relation_id, issue.detail
+                    )));
+                }
+                let parallel_atom = self
+                    .validate_parallel_relation_projection(
+                        &manager,
+                        relation,
+                        &claim,
+                        &current_relation_atoms,
+                    )
+                    .map_err(|detail| {
+                        StoreError::Context(format!(
+                            "relation {} cannot be reconciled: {detail}",
+                            relation.relation_id
+                        ))
+                    })?;
+                planned.push((relation.clone(), claim, parallel_atom));
+            }
+        }
+        if planned.is_empty() {
+            return Ok(RelationReconciliationResult::default());
+        }
+
+        self.mutate_contexts(|manager| {
+            for (relation, claim, _) in &planned {
+                if manager.get_ctx(relation.context).is_none() {
+                    if relation.context != 0 || !manager.list_contexts().is_empty() {
+                        return Err(StoreError::Context(format!(
+                            "relation {} targets unavailable context {}",
+                            relation.relation_id, relation.context
+                        )));
+                    }
+                    let restored = manager.create_context(0);
+                    if restored != 0 {
+                        return Err(StoreError::Context(
+                            "default context recovery did not allocate context 0".to_owned(),
+                        ));
+                    }
+                }
+                manager.reconcile_claim_with_atom_id(relation.context, claim, relation.atom_id)?;
+            }
+            Ok(())
+        })?;
+
+        let repaired_relation_ids = planned
+            .iter()
+            .map(|(relation, _, _)| relation.relation_id)
+            .collect::<Vec<_>>();
+        let mut retired_parallel_atom_ids = planned
+            .iter()
+            .filter_map(|(_, _, atom_id)| *atom_id)
+            .collect::<Vec<_>>();
+        retired_parallel_atom_ids.sort_unstable();
+        retired_parallel_atom_ids.dedup();
+
+        let mut added_supersedes_edges = Vec::new();
+        for (relation, _, parallel_atom) in &planned {
+            let Some(parallel_atom) = parallel_atom else {
+                continue;
+            };
+            if already_superseded.contains(parallel_atom) {
+                continue;
+            }
+            let canonical_node = self
+                .loc_index
+                .get_node_num(&relation.atom_id)
+                .ok_or(StoreError::AtomNotFound(relation.atom_id))?;
+            let parallel_node = self
+                .loc_index
+                .get_node_num(parallel_atom)
+                .ok_or(StoreError::AtomNotFound(*parallel_atom))?;
+            if !self
+                .graph
+                .has_edge(canonical_node, parallel_node, EdgeType::SUPERSEDES)
+            {
+                self.graph
+                    .add_edge(canonical_node, parallel_node, EdgeType::SUPERSEDES, 10000);
+                added_supersedes_edges.push((canonical_node, parallel_node));
+            }
+        }
+        if !added_supersedes_edges.is_empty()
+            && let Err(error) = self.graph.save()
+        {
+            let original = StoreError::Io(error.to_string());
+            return match self.rollback_relation_reconciliation(&manager, &added_supersedes_edges) {
+                Ok(()) => Err(original),
+                Err(rollback) => Err(StoreError::Context(format!(
+                    "relation reconciliation failed: {original}; {rollback}"
+                ))),
+            };
+        }
+
+        let mut details = HashMap::new();
+        details.insert(
+            "repair_kind".to_owned(),
+            "relation_context_reconciliation".to_owned(),
+        );
+        details.insert("trigger".to_owned(), trigger.to_owned());
+        details.insert(
+            "relation_ids".to_owned(),
+            repaired_relation_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        details.insert(
+            "retired_parallel_atom_ids".to_owned(),
+            retired_parallel_atom_ids
+                .iter()
+                .map(crate::cas::hex_encode)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        let affected_atoms = planned
+            .iter()
+            .flat_map(|(relation, _, parallel)| {
+                std::iter::once(relation.atom_id).chain(parallel.iter().copied())
+            })
+            .map(|atom_id| crate::cas::hex_encode(&atom_id))
+            .collect();
+        if let Err(error) = self.record_history(HistoryOperation::Repair, affected_atoms, details) {
+            return match self.rollback_relation_reconciliation(&manager, &added_supersedes_edges) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(StoreError::Context(format!(
+                    "relation reconciliation history write failed: {error}; {rollback}"
+                ))),
+            };
+        }
+        Ok(RelationReconciliationResult {
+            repaired_relation_ids,
+            retired_parallel_atom_ids,
+        })
+    }
+
+    /// Safely restore current relation atoms missing from their context
+    /// projection. The operation is idempotent and fails closed on ambiguity.
+    pub fn repair_relation_contexts(&mut self) -> Result<RelationContextRepairReport, StoreError> {
+        let before = self.audit_relation_contexts()?;
+        let relations = self.current_relation_records()?;
+        let repaired = self.reconcile_relation_records(&relations, "explicit_repair")?;
+        let after = self.audit_relation_contexts()?;
+        if !after.is_consistent() {
+            return Err(StoreError::Context(
+                "relation context repair completed with unresolved issues".to_owned(),
+            ));
+        }
+        Ok(RelationContextRepairReport {
+            before,
+            repaired_relation_ids: repaired.repaired_relation_ids,
+            retired_parallel_atom_ids: repaired.retired_parallel_atom_ids,
+            after,
+        })
+    }
+
     /// Create a high-level entity record.
     pub fn create_entity(
         &mut self,
@@ -7134,6 +7716,7 @@ impl MemoryX {
             return Err(StoreError::Io(format!("entity {} not found", entity_id)));
         }
         self.require_managed_predicate(predicate)?;
+        self.ensure_authoring_context(ctx_id)?;
 
         let claim = ClaimData {
             subj: entity_id,
@@ -7184,6 +7767,7 @@ impl MemoryX {
             return Err(StoreError::Io(format!("entity {} not found", object)));
         }
         self.validate_relation_contract(subject, predicate, object, None)?;
+        self.ensure_authoring_context(ctx_id)?;
 
         let claim = ClaimData {
             subj: subject,
@@ -7252,6 +7836,7 @@ impl MemoryX {
             .find(|relation| relation.relation_id == old_relation_id)
             .ok_or_else(|| StoreError::Io(format!("relation {} not found", old_relation_id)))?;
         self.validate_relation_contract(subject, predicate, object, Some(old_relation_id))?;
+        self.ensure_authoring_context(ctx_id)?;
 
         let claim = ClaimData {
             subj: subject,
@@ -7364,6 +7949,7 @@ impl MemoryX {
                 return Err(StoreError::Io(format!("source {} not found", source_id)));
             }
         }
+        self.ensure_authoring_context(ctx_id)?;
 
         let claim = ClaimData {
             subj: old_relation.subject,
@@ -7380,6 +7966,12 @@ impl MemoryX {
         let payload =
             build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
         let atom_id = compute_atom_id_from_payload(&payload)?;
+        if ctx_id == old_relation.context {
+            self.reconcile_relation_records(
+                std::slice::from_ref(&old_relation),
+                "transition_relation_preflight",
+            )?;
+        }
         let mut context_preview = self.ctx_manager.lock().clone();
         context_preview
             .replace_claim_with_atom_id(ctx_id, old_relation.atom_id, &claim, atom_id)
@@ -8234,6 +8826,7 @@ impl MemoryX {
         claim: &ClaimData,
         atom_id: AtomId,
     ) -> Result<CtxId, StoreError> {
+        self.ensure_authoring_context(ctx_id)?;
         self.mutate_contexts(|manager| manager.assert_claim_with_atom_id(ctx_id, claim, atom_id))
     }
 
@@ -13564,6 +14157,543 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|entry| entry.operation == HistoryOperation::TransitionRelation)
+        );
+    }
+
+    #[test]
+    fn relation_assertion_creates_only_default_context_and_rejects_other_missing_ids() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("missing-context"));
+        let mut store = MemoryX::new(config).unwrap();
+        let predicate = store
+            .register_predicate(managed_contract(
+                "has_session_state",
+                PredicateCardinality::ManyToOne,
+            ))
+            .unwrap();
+        let module = store.create_entity("module", "component").unwrap();
+        let initial = store
+            .create_entity("NOT_ACTIVATED", "session_state")
+            .unwrap();
+
+        let error = store
+            .assert_relation(
+                module.entity_id,
+                predicate.predicate_id,
+                initial.entity_id,
+                7,
+                Vec::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(error, StoreError::ContextNotFound));
+        assert!(store.read_relations().unwrap().is_empty());
+        assert!(store.list_atom_ids().is_empty());
+        assert!(store.list_contexts().is_empty());
+
+        let relation = store
+            .assert_relation(
+                module.entity_id,
+                predicate.predicate_id,
+                initial.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(relation.ctx_id, 0);
+        let contexts = store.list_contexts();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].ctx_id, 0);
+        assert!(
+            contexts[0]
+                .active_claims
+                .values()
+                .any(|active| active.atom_id == relation.atom_id)
+        );
+    }
+
+    #[test]
+    fn relation_context_repair_restores_journal_atom_and_preserves_history_and_sources() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("relation-repair"));
+        let relation_id;
+        let relation_atom;
+        let parallel_atom;
+        let source_id;
+
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let module = store.create_entity("module", "component").unwrap();
+            let initial = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let source = store
+                .register_source(
+                    SourceKind::File,
+                    "bootstrap registry",
+                    SourceLocation {
+                        path: Some("MODULE_SESSION_BINDINGS.md".to_owned()),
+                        line_range: Some((1, 8)),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            source_id = source.source_id;
+            let authored = store
+                .assert_relation(
+                    module.entity_id,
+                    predicate.predicate_id,
+                    initial.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            store.set_atom_source(relation_atom, source_id).unwrap();
+
+            let relation = store
+                .read_relations()
+                .unwrap()
+                .into_iter()
+                .find(|relation| relation.relation_id == relation_id)
+                .unwrap();
+            let claim = MemoryX::relation_claim(&relation);
+            let payload = build_authoring_payload(
+                AtomType::FACT,
+                std::slice::from_ref(&claim),
+                &["legacy-parallel-bootstrap".to_owned()],
+            )
+            .unwrap();
+            parallel_atom = store
+                .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+                .unwrap();
+            assert_ne!(parallel_atom, relation_atom);
+            store.set_atom_source(parallel_atom, source_id).unwrap();
+            store
+                .mutate_contexts(|manager| {
+                    let claim_id = CtxManager::compute_claim_id(&claim);
+                    manager
+                        .get_ctx_mut(0)
+                        .ok_or(StoreError::ContextNotFound)?
+                        .active_claims
+                        .insert(claim_id, ActiveClaim::new(parallel_atom, claim.clone()));
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        let before = reopened.audit_relation_contexts().unwrap();
+        assert_eq!(before.current_relation_count, 1);
+        assert_eq!(before.active_relation_claim_count, 0);
+        assert_eq!(before.issues.len(), 1);
+        assert_eq!(
+            before.issues[0].kind,
+            RelationContextIssueKind::ActiveClaimAtomMismatch
+        );
+        assert!(before.issues[0].repairable);
+        let stats = reopened.statistics().unwrap();
+        assert_eq!(stats.active_relation_count, 1);
+        assert_eq!(stats.current_atom_count, 2);
+        assert_eq!(stats.current_claim_count, 2);
+
+        let repaired = reopened.repair_relation_contexts().unwrap();
+        assert_eq!(repaired.repaired_relation_ids, vec![relation_id]);
+        assert_eq!(repaired.retired_parallel_atom_ids, vec![parallel_atom]);
+        assert!(repaired.after.is_consistent());
+        let context = reopened
+            .list_contexts()
+            .into_iter()
+            .find(|context| context.ctx_id == 0)
+            .unwrap();
+        assert!(
+            context
+                .active_claims
+                .values()
+                .any(|active| active.atom_id == relation_atom)
+        );
+        assert!(
+            context
+                .active_claims
+                .values()
+                .all(|active| active.atom_id != parallel_atom)
+        );
+        assert_eq!(
+            reopened.list_atom_source_ids(&relation_atom).unwrap(),
+            vec![source_id]
+        );
+        assert_eq!(
+            reopened.list_atom_source_ids(&parallel_atom).unwrap(),
+            vec![source_id]
+        );
+        assert!(reopened.get_atom(&parallel_atom).is_ok());
+        assert!(reopened.superseded_atom_ids().contains(&parallel_atom));
+        let current_stats = reopened.statistics().unwrap();
+        assert_eq!(current_stats.current_atom_count, 1);
+        assert_eq!(current_stats.current_claim_count, 1);
+        assert!(reopened.history(20).unwrap().iter().any(|entry| {
+            entry.operation == HistoryOperation::Repair
+                && entry.details.get("repair_kind").map(String::as_str)
+                    == Some("relation_context_reconciliation")
+        }));
+
+        let idempotent = reopened.repair_relation_contexts().unwrap();
+        assert!(idempotent.repaired_relation_ids.is_empty());
+        assert!(idempotent.retired_parallel_atom_ids.is_empty());
+        assert!(idempotent.before.is_consistent());
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        assert!(
+            reopened_again
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+        assert_eq!(
+            reopened_again.list_atom_source_ids(&relation_atom).unwrap(),
+            vec![source_id]
+        );
+        assert_eq!(
+            reopened_again.list_atom_source_ids(&parallel_atom).unwrap(),
+            vec![source_id]
+        );
+        assert!(
+            reopened_again
+                .superseded_atom_ids()
+                .contains(&parallel_atom)
+        );
+    }
+
+    #[test]
+    fn relation_context_repair_restores_absent_legacy_default_context() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("legacy-default-context"));
+        let relation_atom;
+
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let module = store.create_entity("module", "component").unwrap();
+            let initial = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let relation = RelationRecord {
+                relation_id: 1,
+                subject: module.entity_id,
+                predicate: predicate.predicate_id,
+                object: initial.entity_id,
+                atom_id: [0u8; 32],
+                evidence: Vec::new(),
+                valid_time: None,
+                context: 0,
+                confidence: 5000,
+                supersedes: None,
+                deprecated: false,
+                updated_at_unix_ns: current_unix_ns(),
+            };
+            let claim = MemoryX::relation_claim(&relation);
+            let symbols = store
+                .authoring_symbols(relation.subject, relation.predicate, Some(relation.object))
+                .unwrap();
+            let payload =
+                build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)
+                    .unwrap();
+            relation_atom = store
+                .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+                .unwrap();
+            let relation = RelationRecord {
+                atom_id: relation_atom,
+                ..relation
+            };
+            store.append_relation(&relation).unwrap();
+            assert!(store.list_contexts().is_empty());
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        let audit = reopened.audit_relation_contexts().unwrap();
+        assert_eq!(audit.issues.len(), 1);
+        assert_eq!(
+            audit.issues[0].kind,
+            RelationContextIssueKind::MissingContext
+        );
+        assert!(audit.issues[0].repairable);
+        let report = reopened.repair_relation_contexts().unwrap();
+        assert_eq!(report.repaired_relation_ids, vec![1]);
+        let contexts = reopened.list_contexts();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].ctx_id, 0);
+        assert!(
+            contexts[0]
+                .active_claims
+                .values()
+                .any(|active| active.atom_id == relation_atom)
+        );
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        assert!(
+            reopened_again
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+    }
+
+    #[test]
+    fn relation_transition_repairs_missing_current_projection_before_replacement() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("transition-repair"));
+        let relation_id;
+        let old_atom;
+        let bound_id;
+
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let module = store.create_entity("module", "component").unwrap();
+            let initial = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let bound = store
+                .create_entity("session-uuid", "session_state")
+                .unwrap();
+            bound_id = bound.entity_id;
+            let relation = store
+                .assert_relation(
+                    module.entity_id,
+                    predicate.predicate_id,
+                    initial.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = relation.relation_id.unwrap();
+            old_atom = relation.atom_id;
+            store
+                .mutate_contexts(|manager| {
+                    manager
+                        .get_ctx_mut(0)
+                        .ok_or(StoreError::ContextNotFound)?
+                        .active_claims
+                        .retain(|_, active| active.atom_id != old_atom);
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        assert_eq!(reopened.audit_relation_contexts().unwrap().issues.len(), 1);
+        let transitioned = reopened
+            .transition_relation(relation_id, bound_id, 0, Vec::new(), Vec::new())
+            .unwrap();
+        assert_ne!(transitioned.atom_id, old_atom);
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        assert!(reopened.history(20).unwrap().iter().any(|entry| {
+            entry.operation == HistoryOperation::Repair
+                && entry.details.get("trigger").map(String::as_str)
+                    == Some("transition_relation_preflight")
+        }));
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        let context = reopened_again
+            .list_contexts()
+            .into_iter()
+            .find(|context| context.ctx_id == 0)
+            .unwrap();
+        assert!(
+            context
+                .active_claims
+                .values()
+                .all(|active| active.atom_id != old_atom)
+        );
+        assert!(
+            context
+                .active_claims
+                .values()
+                .any(|active| active.atom_id == transitioned.atom_id)
+        );
+    }
+
+    #[test]
+    fn relation_context_repair_fails_closed_on_conflicting_active_value() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("conflicting-repair"));
+        let mut store = MemoryX::new(config).unwrap();
+        assert_eq!(store.create_context(0).unwrap(), 0);
+        let predicate = store
+            .register_predicate(managed_contract(
+                "has_session_state",
+                PredicateCardinality::ManyToOne,
+            ))
+            .unwrap();
+        let module = store.create_entity("module", "component").unwrap();
+        let initial = store
+            .create_entity("NOT_ACTIVATED", "session_state")
+            .unwrap();
+        let other = store.create_entity("OTHER", "session_state").unwrap();
+        let relation = store
+            .assert_relation(
+                module.entity_id,
+                predicate.predicate_id,
+                initial.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        let conflicting_claim = ClaimData {
+            subj: module.entity_id,
+            pred: u64::from(predicate.predicate_id),
+            obj_tag: ObjTag::NODENUM.to_u8(),
+            obj_val: other.entity_id,
+            qualifiers_mask: 0,
+        };
+        let payload = build_authoring_payload(
+            AtomType::FACT,
+            std::slice::from_ref(&conflicting_claim),
+            &["conflicting-session-state".to_owned()],
+        )
+        .unwrap();
+        let conflicting_atom = store
+            .ingest(
+                &payload,
+                AtomType::FACT,
+                std::slice::from_ref(&conflicting_claim),
+                &[],
+            )
+            .unwrap();
+        store
+            .mutate_contexts(|manager| {
+                let context = manager.get_ctx_mut(0).ok_or(StoreError::ContextNotFound)?;
+                context
+                    .active_claims
+                    .retain(|_, active| active.atom_id != relation.atom_id);
+                context.active_claims.insert(
+                    CtxManager::compute_claim_id(&conflicting_claim),
+                    ActiveClaim::new(conflicting_atom, conflicting_claim.clone()),
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        let audit = store.audit_relation_contexts().unwrap();
+        assert_eq!(audit.issues.len(), 1);
+        assert_eq!(
+            audit.issues[0].kind,
+            RelationContextIssueKind::ConflictingActiveClaim
+        );
+        assert!(!audit.issues[0].repairable);
+        assert!(store.repair_relation_contexts().is_err());
+        let context = store.list_contexts().into_iter().next().unwrap();
+        assert!(
+            context
+                .active_claims
+                .values()
+                .any(|active| active.atom_id == conflicting_atom)
+        );
+        assert!(
+            context
+                .active_claims
+                .values()
+                .all(|active| active.atom_id != relation.atom_id)
+        );
+    }
+
+    #[test]
+    fn relation_context_repair_does_not_retire_a_multi_claim_parallel_atom() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("multi-claim-parallel-repair"));
+        let mut store = MemoryX::new(config).unwrap();
+        assert_eq!(store.create_context(0).unwrap(), 0);
+        let predicate = store
+            .register_predicate(managed_contract(
+                "has_session_state",
+                PredicateCardinality::ManyToOne,
+            ))
+            .unwrap();
+        let module = store.create_entity("module", "component").unwrap();
+        let initial = store
+            .create_entity("NOT_ACTIVATED", "session_state")
+            .unwrap();
+        let authored = store
+            .assert_relation(
+                module.entity_id,
+                predicate.predicate_id,
+                initial.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        let relation = store
+            .current_relation_records()
+            .unwrap()
+            .into_iter()
+            .find(|relation| relation.relation_id == authored.relation_id.unwrap())
+            .unwrap();
+        let relation_claim = MemoryX::relation_claim(&relation);
+        let additional_claim = ClaimData {
+            subj: 9001,
+            pred: 9002,
+            obj_tag: ObjTag::NODENUM.to_u8(),
+            obj_val: 9003,
+            qualifiers_mask: 0,
+        };
+        let claims = vec![relation_claim.clone(), additional_claim];
+        let payload = build_authoring_payload(
+            AtomType::FACT,
+            &claims,
+            &["unsafe-multi-claim-parallel".to_owned()],
+        )
+        .unwrap();
+        let parallel_atom = store
+            .ingest(&payload, AtomType::FACT, &claims, &[])
+            .unwrap();
+        store
+            .mutate_contexts(|manager| {
+                let context = manager.get_ctx_mut(0).ok_or(StoreError::ContextNotFound)?;
+                context
+                    .active_claims
+                    .retain(|_, active| active.atom_id != relation.atom_id);
+                context.active_claims.insert(
+                    CtxManager::compute_claim_id(&relation_claim),
+                    ActiveClaim::new(parallel_atom, relation_claim.clone()),
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        let audit = store.audit_relation_contexts().unwrap();
+        assert_eq!(audit.issues.len(), 1);
+        assert!(!audit.issues[0].repairable);
+        assert!(audit.issues[0].detail.contains("multi-claim"));
+        let error = store.repair_relation_contexts().unwrap_err().to_string();
+        assert!(error.contains("multi-claim"));
+        assert!(!store.superseded_atom_ids().contains(&parallel_atom));
+        let context = store.list_contexts().into_iter().next().unwrap();
+        assert!(
+            context
+                .active_claims
+                .values()
+                .any(|active| active.atom_id == parallel_atom)
         );
     }
 
