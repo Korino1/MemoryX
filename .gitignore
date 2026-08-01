@@ -4,6 +4,7 @@
 /.memoryx/
 /.codegraph/
 /.cabal/
+/ORCHESTRATION_SYSTEM/
 /build/
 /data/
 /memoryx_data/
@@ -16,6 +17,7 @@
 *.7z
 *.log
 *.tmp
+/*.txt
 
 /check_warnings.txt
 /test_warnings.txt
