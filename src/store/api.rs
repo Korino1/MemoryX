@@ -97,6 +97,7 @@ fn normalized_lexical_terms(values: impl IntoIterator<Item = String>) -> Vec<Str
 const MAX_NEW_JOURNAL_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_SOURCES_PER_ATOM: usize = 256;
 pub const MAX_RELATION_CONTEXT_REPAIR_SELECTION: usize = 4096;
+const RELATION_TOMBSTONE_RESOLUTION_VERSION: u16 = 1;
 
 fn read_recovering_jsonl<T: DeserializeOwned>(
     path: &std::path::Path,
@@ -183,6 +184,100 @@ fn ensure_bounded_journal_record(label: &str, encoded: &[u8]) -> Result<(), Stor
         return Err(StoreError::Io(format!(
             "new {label} journal record exceeds {MAX_NEW_JOURNAL_RECORD_BYTES} bytes"
         )));
+    }
+    Ok(())
+}
+
+fn write_synced_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), StoreError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(StoreError::from)?;
+    }
+    let temp_path = path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("bin")
+    ));
+    let backup_path = path.with_extension(format!(
+        "{}.bak",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("bin")
+    ));
+    // Recover the only gap an older temp/backup writer could leave. The new
+    // publication below never removes the live target before replacement.
+    if !path.exists() && backup_path.exists() {
+        fs::rename(&backup_path, path).map_err(StoreError::from)?;
+    }
+    {
+        let mut file = File::create(&temp_path).map_err(StoreError::from)?;
+        file.write_all(bytes).map_err(StoreError::from)?;
+        file.flush().map_err(StoreError::from)?;
+        file.sync_all().map_err(StoreError::from)?;
+    }
+    if backup_path.exists() {
+        fs::remove_file(&backup_path).map_err(StoreError::from)?;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_WRITE_THROUGH, MoveFileExW, REPLACEFILE_WRITE_THROUGH, ReplaceFileW,
+        };
+
+        let wide = |value: &std::path::Path| {
+            value
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>()
+        };
+        let target = wide(path);
+        let replacement = wide(&temp_path);
+        let backup = wide(&backup_path);
+        // Safety: each path is NUL-terminated UTF-16 and remains alive for the
+        // call. ReplaceFileW atomically swaps an existing live target; the
+        // target-absent case publishes the synced temp with write-through.
+        let result = unsafe {
+            if path.exists() {
+                ReplaceFileW(
+                    target.as_ptr(),
+                    replacement.as_ptr(),
+                    backup.as_ptr(),
+                    REPLACEFILE_WRITE_THROUGH,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            } else {
+                MoveFileExW(
+                    replacement.as_ptr(),
+                    target.as_ptr(),
+                    MOVEFILE_WRITE_THROUGH,
+                )
+            }
+        };
+        if result == 0 {
+            return Err(StoreError::from(std::io::Error::last_os_error()));
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::rename(&temp_path, path).map_err(StoreError::from)?;
+        let parent = path.parent().ok_or_else(|| {
+            StoreError::Io("atomic replacement target has no parent directory".to_owned())
+        })?;
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(StoreError::from)?;
+    }
+
+    // A retained backup is recovery evidence only; failure to remove it must
+    // not turn an already-published replacement into a reported failed write.
+    if backup_path.exists() {
+        let _ = fs::remove_file(backup_path);
     }
     Ok(())
 }
@@ -1717,6 +1812,7 @@ pub enum HistoryOperation {
     DeleteAtom,
     RebuildIndexes,
     Repair,
+    ResolveRelationTombstone,
 }
 
 /// Append-only history entry stored as one JSON object per line.
@@ -1827,6 +1923,7 @@ pub struct RelationTransitionResult {
 pub enum RelationContextIssueKind {
     MissingContext,
     RelationAtomUnavailable,
+    RelationAtomTombstoned,
     RelationAtomClaimMismatch,
     PredicateContractUnavailable,
     RelationContractViolation,
@@ -1874,7 +1971,68 @@ pub struct RelationContextRepairReport {
 }
 
 /// Selection and safety policy for an explicit relation/context migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationTombstoneAction {
+    RestoreAtom,
+    RetireRelation,
+}
+
+/// Explicit operator decision for a current relation whose atom was tombstoned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelationTombstoneResolution {
+    pub relation_id: u64,
+    pub action: RelationTombstoneAction,
+    /// Human-reviewed reason. Empty reasons are rejected fail-closed.
+    pub reason: String,
+}
+
+/// Durable replay record. The append is the commit point for this bounded repair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RelationTombstoneResolutionRecord {
+    version: u16,
+    operation_id: String,
+    relation: RelationRecord,
+    action: RelationTombstoneAction,
+    reason: String,
+    tombstone_id: AtomId,
+    delete_history_timestamp_unix_ns: u64,
+    restored_trust_level: TrustLevel,
+    retirement_relation_id: Option<u64>,
+    retirement_updated_at_unix_ns: Option<u64>,
+    backup_dir: String,
+    created_at_unix_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RelationTombstoneBackupFile {
+    relative_path: String,
+    byte_len: u64,
+    blake3: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RelationTombstoneBackupManifest {
+    version: u16,
+    batch_id: String,
+    operation_ids: Vec<String>,
+    files: Vec<RelationTombstoneBackupFile>,
+}
+
+/// Result for one explicit tombstoned-relation decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationTombstoneResolutionResult {
+    pub relation_id: u64,
+    pub atom_id: AtomId,
+    pub action: RelationTombstoneAction,
+    pub operation_id: String,
+    pub backup_dir: String,
+    pub already_applied: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RelationContextRepairOptions {
     /// Report the exact plan without mutating the base.
     pub dry_run: bool,
@@ -1883,6 +2041,8 @@ pub struct RelationContextRepairOptions {
     pub allow_partial: bool,
     /// Empty means every current relation; otherwise only these current ids.
     pub relation_ids: Vec<u64>,
+    /// Tombstoned current relations require one explicit reviewed decision each.
+    pub tombstone_resolutions: Vec<RelationTombstoneResolution>,
 }
 
 /// Machine-readable report for dry-run, selected, and partial migrations.
@@ -1896,6 +2056,7 @@ pub struct RelationContextMigrationReport {
     pub blocked_issues: Vec<RelationContextIssue>,
     pub repaired_relation_ids: Vec<u64>,
     pub retired_parallel_atom_ids: Vec<AtomId>,
+    pub tombstone_resolutions: Vec<RelationTombstoneResolutionResult>,
     pub after: RelationContextAuditReport,
 }
 
@@ -2795,6 +2956,18 @@ impl StoreConfig {
         self.meta_dir().join("history.log")
     }
 
+    /// Append-only commit/replay journal for explicit tombstoned-relation decisions.
+    #[inline]
+    pub fn relation_tombstone_resolutions_path(&self) -> PathBuf {
+        self.meta_dir().join("relation_tombstone_resolutions.jsonl")
+    }
+
+    /// Immutable operator backups created before a tombstoned-relation decision.
+    #[inline]
+    pub fn relation_tombstone_backups_dir(&self) -> PathBuf {
+        self.meta_dir().join("relation-tombstone-backups")
+    }
+
     /// Get append-only source registry path.
     #[inline]
     pub fn sources_path(&self) -> PathBuf {
@@ -3327,6 +3500,19 @@ impl CtxManager {
             new_atom_id,
             None,
         )
+    }
+
+    /// Remove every active projection of one globally tombstoned atom.
+    fn retire_atom_projections(&mut self, atom_id: AtomId) -> usize {
+        let mut removed = 0usize;
+        for context in &mut self.contexts {
+            let before = context.active_claims.len();
+            context
+                .active_claims
+                .retain(|_, active| active.atom_id != atom_id);
+            removed = removed.saturating_add(before.saturating_sub(context.active_claims.len()));
+        }
+        removed
     }
 
     fn replace_claim_with_atom_id_for_cardinality(
@@ -5177,6 +5363,20 @@ impl LocationIndex {
         }
     }
 
+    /// Reverse only the derived location tombstone projection.
+    ///
+    /// Callers must first validate a durable explicit restoration decision and
+    /// the exact content-addressed CAS body.
+    fn restore_deleted(&mut self, atom_id: &AtomId) -> Result<(), StoreError> {
+        let location = self
+            .atom_to_location
+            .get_mut(atom_id)
+            .ok_or(StoreError::AtomNotFound(*atom_id))?;
+        location.deleted = false;
+        self.deleted_atoms.remove(atom_id);
+        Ok(())
+    }
+
     /// Check if atom is deleted
     #[inline]
     pub fn is_deleted(&self, atom_id: &AtomId) -> bool {
@@ -5220,68 +5420,32 @@ impl LocationIndex {
     }
 
     fn save_idloc(&self) -> Result<(), StoreError> {
-        let mut builder = IdLocBuilder::new(self.shard_bits);
-        let mut entries: Vec<_> = self.atom_to_location.iter().collect();
-        entries.sort_by_key(|(atom_id, _)| **atom_id);
-
-        for (atom_id, location) in entries {
-            if location.deleted || self.deleted_atoms.contains(atom_id) {
-                continue;
-            }
-            builder.add(
-                atom_id,
-                location.seg_id,
-                location.len,
-                location.offset,
-                location.node_num,
-            );
-        }
-
-        builder
-            .build_to_file(&self.idloc_path)
-            .map_err(StoreError::from)?;
-        Ok(())
+        write_synced_atomic(&self.idloc_path, &self.build())
     }
 
     fn save_state(&self) -> Result<(), StoreError> {
-        fs::create_dir_all(&self.index_dir).map_err(StoreError::from)?;
-        let mut file = File::create(&self.state_path).map_err(StoreError::from)?;
-
-        file.write_all(&LOCATION_STATE_MAGIC.to_le_bytes())
-            .map_err(StoreError::from)?;
-        file.write_all(&LOCATION_STATE_VERSION.to_le_bytes())
-            .map_err(StoreError::from)?;
-        file.write_all(&[self.shard_bits])
-            .map_err(StoreError::from)?;
-        file.write_all(&[0u8]).map_err(StoreError::from)?;
-        file.write_all(&self.node_counter.to_le_bytes())
-            .map_err(StoreError::from)?;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&LOCATION_STATE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&LOCATION_STATE_VERSION.to_le_bytes());
+        bytes.push(self.shard_bits);
+        bytes.push(0);
+        bytes.extend_from_slice(&self.node_counter.to_le_bytes());
 
         let mut entries: Vec<_> = self.atom_to_location.iter().collect();
         entries.sort_by_key(|(atom_id, _)| **atom_id);
-        file.write_all(&(entries.len() as u64).to_le_bytes())
-            .map_err(StoreError::from)?;
+        bytes.extend_from_slice(&(entries.len() as u64).to_le_bytes());
 
         for (atom_id, location) in entries {
-            file.write_all(atom_id).map_err(StoreError::from)?;
-            file.write_all(&location.node_num.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&location.seg_id.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&location.offset.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&location.len.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&location.domain_mask.to_le_bytes())
-                .map_err(StoreError::from)?;
+            bytes.extend_from_slice(atom_id);
+            bytes.extend_from_slice(&location.node_num.to_le_bytes());
+            bytes.extend_from_slice(&location.seg_id.to_le_bytes());
+            bytes.extend_from_slice(&location.offset.to_le_bytes());
+            bytes.extend_from_slice(&location.len.to_le_bytes());
+            bytes.extend_from_slice(&location.domain_mask.to_le_bytes());
             let deleted = location.deleted || self.deleted_atoms.contains(atom_id);
-            file.write_all(&[u8::from(deleted)])
-                .map_err(StoreError::from)?;
+            bytes.push(u8::from(deleted));
         }
-
-        file.flush().map_err(StoreError::from)?;
-        file.sync_all().map_err(StoreError::from)?;
-        Ok(())
+        write_synced_atomic(&self.state_path, &bytes)
     }
 
     fn load_state(&mut self) -> Result<(), StoreError> {
@@ -5552,13 +5716,10 @@ impl MetaStore {
         )
         .map_err(StoreError::from)?;
 
-        let mut file = File::create(&self.path).map_err(StoreError::from)?;
-        file.write_all(&META_STATE_MAGIC.to_le_bytes())
-            .map_err(StoreError::from)?;
-        file.write_all(&META_STATE_VERSION.to_le_bytes())
-            .map_err(StoreError::from)?;
-        file.write_all(&0u16.to_le_bytes())
-            .map_err(StoreError::from)?;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&META_STATE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&META_STATE_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
 
         let mut records: Vec<(AtomId, u64, AtomMetadata)> = self
             .meta
@@ -5576,28 +5737,18 @@ impl MetaStore {
             .collect();
         records.sort_by_key(|(atom_id, _, _)| *atom_id);
 
-        file.write_all(&(records.len() as u64).to_le_bytes())
-            .map_err(StoreError::from)?;
+        bytes.extend_from_slice(&(records.len() as u64).to_le_bytes());
 
         for (atom_id, node_num, meta) in records {
-            file.write_all(&atom_id).map_err(StoreError::from)?;
-            file.write_all(&node_num.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&meta.atom_type.to_u32().to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&meta.created_at_ns.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&meta.trust_level.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&meta.domain_mask.to_le_bytes())
-                .map_err(StoreError::from)?;
-            file.write_all(&meta.source_id.to_le_bytes())
-                .map_err(StoreError::from)?;
+            bytes.extend_from_slice(&atom_id);
+            bytes.extend_from_slice(&node_num.to_le_bytes());
+            bytes.extend_from_slice(&meta.atom_type.to_u32().to_le_bytes());
+            bytes.extend_from_slice(&meta.created_at_ns.to_le_bytes());
+            bytes.extend_from_slice(&meta.trust_level.to_le_bytes());
+            bytes.extend_from_slice(&meta.domain_mask.to_le_bytes());
+            bytes.extend_from_slice(&meta.source_id.to_le_bytes());
         }
-
-        file.flush().map_err(StoreError::from)?;
-        file.sync_all().map_err(StoreError::from)?;
-        Ok(())
+        write_synced_atomic(&self.path, &bytes)
     }
 
     fn load(&mut self) -> Result<(), StoreError> {
@@ -6051,7 +6202,7 @@ impl MemoryX {
             EmbeddingIndex::new(1024) // Default capacity for embeddings
         };
 
-        Ok(MemoryX {
+        let mut store = MemoryX {
             config,
             cas,
             loc_index,
@@ -6063,7 +6214,11 @@ impl MemoryX {
             ctx_manager,
             embedding_index,
             base_lease,
-        })
+        };
+        // A durable explicit resolution journal is an operator-authorized
+        // commit point. Reopen completes only its standard derived projections.
+        store.replay_relation_tombstone_resolutions()?;
+        Ok(store)
     }
 
     /// Persist the full base state under the configured root.
@@ -6099,22 +6254,8 @@ impl MemoryX {
         atom_ids: Vec<String>,
         details: HashMap<String, String>,
     ) -> Result<(), StoreError> {
-        let history_path = self.config.history_path();
-        if let Some(parent) = history_path.parent() {
-            fs::create_dir_all(parent).map_err(StoreError::from)?;
-        }
-
         let entry = HistoryEntry::new(operation, atom_ids, details);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&history_path)
-            .map_err(StoreError::from)?;
-        serde_json::to_writer(&mut file, &entry).map_err(|err| StoreError::Io(err.to_string()))?;
-        file.write_all(b"\n").map_err(StoreError::from)?;
-        file.flush().map_err(StoreError::from)?;
-        file.sync_data().map_err(StoreError::from)?;
-        Ok(())
+        append_bounded_jsonl(&self.config.history_path(), "history", &entry)
     }
 
     /// Return recent durable operation history entries, newest first.
@@ -6123,25 +6264,8 @@ impl MemoryX {
             return Ok(Vec::new());
         }
 
-        let history_path = self.config.history_path();
-        if !history_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(history_path).map_err(StoreError::from)?;
-        let reader = BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line.map_err(StoreError::from)?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let entry: HistoryEntry =
-                serde_json::from_str(&line).map_err(|err| StoreError::Io(err.to_string()))?;
-            entries.push(entry);
-        }
-
+        let mut entries =
+            read_recovering_jsonl::<HistoryEntry>(&self.config.history_path(), "history")?;
         entries.reverse();
         entries.truncate(limit);
         Ok(entries)
@@ -7372,25 +7496,25 @@ impl MemoryX {
         &self,
         relation: &RelationRecord,
         claim: &ClaimData,
+        delete_events: &HashMap<AtomId, (u64, AtomId, String)>,
     ) -> Result<(), RelationContextIssue> {
-        let atom = self
-            .get_atom(&relation.atom_id)
-            .map_err(|error| RelationContextIssue {
-                relation_id: relation.relation_id,
-                atom_id: relation.atom_id,
-                context: relation.context,
-                kind: RelationContextIssueKind::RelationAtomUnavailable,
-                repairable: false,
-                detail: format!("relation atom is unavailable: {error}"),
-            })?;
-        if atom
+        let atom =
+            self.cas
+                .get_atom_view(&relation.atom_id)
+                .map_err(|error| RelationContextIssue {
+                    relation_id: relation.relation_id,
+                    atom_id: relation.atom_id,
+                    context: relation.context,
+                    kind: RelationContextIssueKind::RelationAtomUnavailable,
+                    repairable: false,
+                    detail: format!("relation atom is unavailable: {error}"),
+                })?;
+        if !atom
             .claims
             .iter()
             .any(|stored| Self::claims_match(stored, claim))
         {
-            Ok(())
-        } else {
-            Err(RelationContextIssue {
+            return Err(RelationContextIssue {
                 relation_id: relation.relation_id,
                 atom_id: relation.atom_id,
                 context: relation.context,
@@ -7398,8 +7522,672 @@ impl MemoryX {
                 repairable: false,
                 detail: "relation atom does not contain the journal record's exact claim"
                     .to_owned(),
-            })
+            });
         }
+        if self.loc_index.is_deleted(&relation.atom_id) {
+            let delete_history = delete_events
+                .get(&relation.atom_id)
+                .map(|(_, _, reason)| format!("; durable delete reason: {reason}"))
+                .unwrap_or_else(|| "; durable delete history is unavailable".to_owned());
+            return Err(RelationContextIssue {
+                relation_id: relation.relation_id,
+                atom_id: relation.atom_id,
+                context: relation.context,
+                kind: RelationContextIssueKind::RelationAtomTombstoned,
+                repairable: false,
+                detail: format!(
+                    "relation atom body is intact but the atom is explicitly tombstoned{delete_history}; an operator must choose restore_atom or retire_relation"
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn relation_delete_events(&self) -> Result<HashMap<AtomId, (u64, AtomId, String)>, StoreError> {
+        let mut events = HashMap::new();
+        for entry in self.history(usize::MAX)? {
+            if entry.operation != HistoryOperation::DeleteAtom {
+                continue;
+            }
+            let original_hex = entry.atom_ids.first().ok_or_else(|| {
+                StoreError::Io("delete history omits the original atom id".to_owned())
+            })?;
+            let atom_id = crate::cas::hex_decode(original_hex).map_err(StoreError::from)?;
+            if events.contains_key(&atom_id) {
+                continue;
+            }
+            let tombstone_hex = entry
+                .details
+                .get("tombstone_id")
+                .ok_or_else(|| StoreError::Io("delete history omits tombstone_id".to_owned()))?;
+            let tombstone_id = crate::cas::hex_decode(tombstone_hex).map_err(StoreError::from)?;
+            let reason = entry
+                .details
+                .get("reason")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_owned());
+            events.insert(atom_id, (entry.timestamp_unix_ns, tombstone_id, reason));
+        }
+        Ok(events)
+    }
+
+    fn relation_tombstone_operation_id(
+        relation: &RelationRecord,
+        action: RelationTombstoneAction,
+        reason: &str,
+        tombstone_id: AtomId,
+        delete_history_timestamp_unix_ns: u64,
+        restored_trust_level: TrustLevel,
+    ) -> Result<String, StoreError> {
+        let canonical = serde_json::to_vec(&(
+            RELATION_TOMBSTONE_RESOLUTION_VERSION,
+            relation,
+            action,
+            reason,
+            tombstone_id,
+            delete_history_timestamp_unix_ns,
+            restored_trust_level,
+        ))
+        .map_err(|error| StoreError::Io(error.to_string()))?;
+        Ok(blake3::hash(&canonical).to_hex().to_string())
+    }
+
+    fn validate_relation_tombstone_reason(reason: &str) -> Result<String, StoreError> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > 4096 || reason.chars().any(char::is_control) {
+            return Err(StoreError::Context(
+                "relation tombstone resolution reason must contain 1..=4096 printable characters"
+                    .to_owned(),
+            ));
+        }
+        Ok(reason.to_owned())
+    }
+
+    fn relation_tombstone_backup_sources(&self) -> Vec<(String, PathBuf)> {
+        [
+            "index/location_state.bin",
+            "index/idloc.mmap",
+            "meta/meta_state.bin",
+            "meta/contexts.json",
+            "meta/relations.jsonl",
+            "meta/history.log",
+            "meta/sources.jsonl",
+            "meta/atom_sources.jsonl",
+            "meta/relation_tombstone_resolutions.jsonl",
+        ]
+        .into_iter()
+        .map(|relative| (relative.to_owned(), self.config.root_path.join(relative)))
+        .collect()
+    }
+
+    fn validate_relation_tombstone_backup(
+        &self,
+        backup_dir: &str,
+        expected_operation_ids: &[String],
+    ) -> Result<(), StoreError> {
+        let directory = self.config.root_path.join(backup_dir);
+        let manifest_path = directory.join("manifest.json");
+        let manifest: RelationTombstoneBackupManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).map_err(|error| {
+                StoreError::Io(format!(
+                    "relation tombstone backup manifest {} is unavailable: {error}",
+                    manifest_path.display()
+                ))
+            })?)
+            .map_err(|error| {
+                StoreError::Io(format!("invalid relation tombstone backup: {error}"))
+            })?;
+        if manifest.version != RELATION_TOMBSTONE_RESOLUTION_VERSION
+            || expected_operation_ids.iter().any(|expected| {
+                !manifest
+                    .operation_ids
+                    .iter()
+                    .any(|operation_id| operation_id == expected)
+            })
+        {
+            return Err(StoreError::Io(
+                "relation tombstone backup manifest does not authorize the operation".to_owned(),
+            ));
+        }
+        let mut manifest_operation_ids = manifest.operation_ids.clone();
+        manifest_operation_ids.sort();
+        manifest_operation_ids.dedup();
+        let expected_batch_id = blake3::hash(manifest_operation_ids.join("\n").as_bytes())
+            .to_hex()
+            .to_string();
+        if expected_batch_id != manifest.batch_id
+            || directory.file_name().and_then(|name| name.to_str())
+                != Some(manifest.batch_id.as_str())
+        {
+            return Err(StoreError::Io(
+                "relation tombstone backup batch identity mismatch".to_owned(),
+            ));
+        }
+        let allowed_paths = self
+            .relation_tombstone_backup_sources()
+            .into_iter()
+            .map(|(relative, _)| relative)
+            .collect::<HashSet<_>>();
+        let mut seen_paths = HashSet::new();
+        for file in &manifest.files {
+            if !allowed_paths.contains(&file.relative_path)
+                || !seen_paths.insert(file.relative_path.clone())
+            {
+                return Err(StoreError::Io(
+                    "relation tombstone backup manifest contains an invalid file path".to_owned(),
+                ));
+            }
+            let path = directory.join(&file.relative_path);
+            let bytes = fs::read(&path).map_err(|error| {
+                StoreError::Io(format!(
+                    "relation tombstone backup file {} is unavailable: {error}",
+                    path.display()
+                ))
+            })?;
+            if bytes.len() as u64 != file.byte_len
+                || blake3::hash(&bytes).to_hex().as_str() != file.blake3
+            {
+                return Err(StoreError::Io(format!(
+                    "relation tombstone backup file {} failed identity validation",
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn create_relation_tombstone_backup(
+        &self,
+        operation_ids: &[String],
+    ) -> Result<String, StoreError> {
+        let mut operation_ids = operation_ids.to_vec();
+        operation_ids.sort();
+        operation_ids.dedup();
+        let batch_id = blake3::hash(operation_ids.join("\n").as_bytes())
+            .to_hex()
+            .to_string();
+        let relative_dir = format!("meta/relation-tombstone-backups/{batch_id}");
+        let directory = self.config.root_path.join(&relative_dir);
+        let manifest_path = directory.join("manifest.json");
+        if manifest_path.exists() {
+            self.validate_relation_tombstone_backup(&relative_dir, &operation_ids)?;
+            return Ok(relative_dir);
+        }
+
+        fs::create_dir_all(&directory).map_err(StoreError::from)?;
+        let mut files = Vec::new();
+        for (relative_path, source) in self.relation_tombstone_backup_sources() {
+            if !source.exists() {
+                continue;
+            }
+            let bytes = fs::read(&source).map_err(StoreError::from)?;
+            let destination = directory.join(&relative_path);
+            write_synced_atomic(&destination, &bytes)?;
+            files.push(RelationTombstoneBackupFile {
+                relative_path,
+                byte_len: bytes.len() as u64,
+                blake3: blake3::hash(&bytes).to_hex().to_string(),
+            });
+        }
+        files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        let manifest = RelationTombstoneBackupManifest {
+            version: RELATION_TOMBSTONE_RESOLUTION_VERSION,
+            batch_id,
+            operation_ids,
+            files,
+        };
+        let mut bytes = serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| StoreError::Io(error.to_string()))?;
+        bytes.push(b'\n');
+        write_synced_atomic(&manifest_path, &bytes)?;
+        Ok(relative_dir)
+    }
+
+    fn read_relation_tombstone_resolutions(
+        &self,
+    ) -> Result<Vec<RelationTombstoneResolutionRecord>, StoreError> {
+        let records = read_recovering_jsonl::<RelationTombstoneResolutionRecord>(
+            &self.config.relation_tombstone_resolutions_path(),
+            "relation-tombstone-resolution",
+        )?;
+        let relations = self.read_relations()?;
+        let delete_events = self.relation_delete_events()?;
+        let mut operation_ids = HashSet::new();
+        let mut relation_ids = HashSet::new();
+        let mut backups: HashMap<String, Vec<String>> = HashMap::new();
+        for record in &records {
+            if record.version != RELATION_TOMBSTONE_RESOLUTION_VERSION
+                || record.operation_id.len() != 64
+                || !record
+                    .operation_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                || !operation_ids.insert(record.operation_id.clone())
+                || !relation_ids.insert(record.relation.relation_id)
+            {
+                return Err(StoreError::Io(
+                    "invalid or conflicting relation tombstone resolution journal record"
+                        .to_owned(),
+                ));
+            }
+            let reason = Self::validate_relation_tombstone_reason(&record.reason)?;
+            if reason != record.reason
+                || record.created_at_unix_ns == 0
+                || record.delete_history_timestamp_unix_ns == 0
+                || record.restored_trust_level == 0
+            {
+                return Err(StoreError::Io(
+                    "invalid relation tombstone resolution fields".to_owned(),
+                ));
+            }
+            let expected = relations
+                .iter()
+                .find(|relation| relation.relation_id == record.relation.relation_id)
+                .ok_or_else(|| {
+                    StoreError::Io(format!(
+                        "relation tombstone resolution references missing relation {}",
+                        record.relation.relation_id
+                    ))
+                })?;
+            if expected != &record.relation {
+                return Err(StoreError::Io(format!(
+                    "relation tombstone resolution snapshot conflicts with relation {}",
+                    record.relation.relation_id
+                )));
+            }
+            let payload = self.cas.load_atom(&record.relation.atom_id)?;
+            if compute_atom_id_from_payload(&payload)? != record.relation.atom_id {
+                return Err(StoreError::Io(format!(
+                    "relation {} CAS body is not its canonical atom",
+                    record.relation.relation_id
+                )));
+            }
+            let Some((timestamp, tombstone_id, _)) = delete_events.get(&record.relation.atom_id)
+            else {
+                return Err(StoreError::Io(format!(
+                    "relation {} has no durable delete history",
+                    record.relation.relation_id
+                )));
+            };
+            if *timestamp != record.delete_history_timestamp_unix_ns
+                || *tombstone_id != record.tombstone_id
+            {
+                return Err(StoreError::Io(format!(
+                    "relation {} delete history conflicts with its resolution",
+                    record.relation.relation_id
+                )));
+            }
+            match record.action {
+                RelationTombstoneAction::RestoreAtom
+                    if record.retirement_relation_id.is_none()
+                        && record.retirement_updated_at_unix_ns.is_none() => {}
+                RelationTombstoneAction::RetireRelation
+                    if record.retirement_relation_id.is_some()
+                        && record.retirement_updated_at_unix_ns.is_some() => {}
+                _ => {
+                    return Err(StoreError::Io(
+                        "relation tombstone resolution action fields are inconsistent".to_owned(),
+                    ));
+                }
+            }
+            let operation_id = Self::relation_tombstone_operation_id(
+                &record.relation,
+                record.action,
+                &record.reason,
+                record.tombstone_id,
+                record.delete_history_timestamp_unix_ns,
+                record.restored_trust_level,
+            )?;
+            if operation_id != record.operation_id {
+                return Err(StoreError::Io(
+                    "relation tombstone resolution identity mismatch".to_owned(),
+                ));
+            }
+            backups
+                .entry(record.backup_dir.clone())
+                .or_default()
+                .push(record.operation_id.clone());
+        }
+        for (backup_dir, operation_ids) in backups {
+            self.validate_relation_tombstone_backup(&backup_dir, &operation_ids)?;
+        }
+        Ok(records)
+    }
+
+    fn applied_relation_tombstone_operation_ids(&self) -> Result<HashSet<String>, StoreError> {
+        Ok(self
+            .history(usize::MAX)?
+            .into_iter()
+            .filter(|entry| entry.operation == HistoryOperation::ResolveRelationTombstone)
+            .filter_map(|entry| entry.details.get("operation_id").cloned())
+            .collect())
+    }
+
+    fn plan_relation_tombstone_resolutions(
+        &self,
+        resolutions: &[RelationTombstoneResolution],
+    ) -> Result<Vec<RelationTombstoneResolutionRecord>, StoreError> {
+        let existing = self.read_relation_tombstone_resolutions()?;
+        let all_relations = self.read_relations()?;
+        let current_relations = self.current_relation_records()?;
+        let delete_events = self.relation_delete_events()?;
+        let mut seen = HashSet::new();
+        let mut next_relation_id = all_relations
+            .iter()
+            .map(|relation| relation.relation_id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Io("relation id space exhausted".to_owned()))?;
+        let mut planned = Vec::new();
+
+        for resolution in resolutions {
+            if resolution.relation_id == 0 || !seen.insert(resolution.relation_id) {
+                return Err(StoreError::Context(
+                    "relation tombstone resolutions require unique positive relation ids"
+                        .to_owned(),
+                ));
+            }
+            let reason = Self::validate_relation_tombstone_reason(&resolution.reason)?;
+            if let Some(record) = existing
+                .iter()
+                .find(|record| record.relation.relation_id == resolution.relation_id)
+            {
+                if record.action != resolution.action || record.reason != reason {
+                    return Err(StoreError::Context(format!(
+                        "relation {} already has a conflicting durable tombstone resolution",
+                        resolution.relation_id
+                    )));
+                }
+                planned.push(record.clone());
+                continue;
+            }
+
+            let relation = current_relations
+                .iter()
+                .find(|relation| relation.relation_id == resolution.relation_id)
+                .cloned()
+                .ok_or_else(|| {
+                    StoreError::Context(format!(
+                        "relation {} is not a current tombstoned relation",
+                        resolution.relation_id
+                    ))
+                })?;
+            if current_relations.iter().any(|other| {
+                other.relation_id != relation.relation_id && other.atom_id == relation.atom_id
+            }) {
+                return Err(StoreError::Context(format!(
+                    "relation {} shares its tombstoned atom with another current relation; resolve the ambiguity before migration",
+                    relation.relation_id
+                )));
+            }
+            if !self.loc_index.is_deleted(&relation.atom_id) {
+                return Err(StoreError::Context(format!(
+                    "relation {} atom is not tombstoned",
+                    relation.relation_id
+                )));
+            }
+            let payload = self.cas.load_atom(&relation.atom_id)?;
+            if compute_atom_id_from_payload(&payload)? != relation.atom_id {
+                return Err(StoreError::Context(format!(
+                    "relation {} exact CAS body cannot be validated",
+                    relation.relation_id
+                )));
+            }
+            let atom = self.cas.get_atom_view(&relation.atom_id)?;
+            let claim = Self::relation_claim(&relation);
+            if atom.claims.len() != 1 || !Self::claims_match(&atom.claims[0], &claim) {
+                return Err(StoreError::Context(format!(
+                    "relation {} tombstoned atom is not its exact single-claim projection",
+                    relation.relation_id
+                )));
+            }
+            if atom.trust_level == 0 {
+                return Err(StoreError::Context(format!(
+                    "relation {} CAS body has no durable nonzero trust to restore",
+                    relation.relation_id
+                )));
+            }
+            let restored_trust_level = atom.trust_level;
+            let projected_metadata = self
+                .meta
+                .get_meta(&relation.atom_id)
+                .ok_or(StoreError::AtomNotFound(relation.atom_id))?;
+            if projected_metadata.trust_level != 0
+                && projected_metadata.trust_level != restored_trust_level
+            {
+                return Err(StoreError::Context(format!(
+                    "relation {} metadata trust conflicts with its exact CAS body",
+                    relation.relation_id
+                )));
+            }
+            let (delete_history_timestamp_unix_ns, tombstone_id, _) = delete_events
+                .get(&relation.atom_id)
+                .cloned()
+                .ok_or_else(|| {
+                    StoreError::Context(format!(
+                        "relation {} has no exact durable delete history",
+                        relation.relation_id
+                    ))
+                })?;
+
+            if resolution.action == RelationTombstoneAction::RestoreAtom {
+                if let Some(issue) = self.relation_contract_issue(&relation, &current_relations)? {
+                    return Err(StoreError::Context(format!(
+                        "relation {} restore violates the current predicate contract: {}",
+                        relation.relation_id, issue.detail
+                    )));
+                }
+                let cardinality = self
+                    .get_predicate(relation.predicate)?
+                    .map(|predicate| predicate.contract.cardinality);
+                let mut preview = self.ctx_manager.lock().clone();
+                if preview.get_ctx(relation.context).is_none() {
+                    if relation.context != 0 || !preview.list_contexts().is_empty() {
+                        return Err(StoreError::Context(format!(
+                            "relation {} restore targets unavailable context {}",
+                            relation.relation_id, relation.context
+                        )));
+                    }
+                    if preview.create_context(0) != 0 {
+                        return Err(StoreError::Context(
+                            "default context restore did not allocate context 0".to_owned(),
+                        ));
+                    }
+                }
+                preview.reconcile_claim_with_atom_id(
+                    relation.context,
+                    &claim,
+                    relation.atom_id,
+                    cardinality,
+                )?;
+            }
+
+            let retirement_relation_id =
+                (resolution.action == RelationTombstoneAction::RetireRelation).then_some({
+                    let allocated = next_relation_id;
+                    next_relation_id = next_relation_id
+                        .checked_add(1)
+                        .ok_or_else(|| StoreError::Io("relation id space exhausted".to_owned()))?;
+                    allocated
+                });
+            let retirement_updated_at_unix_ns = retirement_relation_id.map(|_| current_unix_ns());
+            let operation_id = Self::relation_tombstone_operation_id(
+                &relation,
+                resolution.action,
+                &reason,
+                tombstone_id,
+                delete_history_timestamp_unix_ns,
+                restored_trust_level,
+            )?;
+            planned.push(RelationTombstoneResolutionRecord {
+                version: RELATION_TOMBSTONE_RESOLUTION_VERSION,
+                operation_id,
+                relation,
+                action: resolution.action,
+                reason,
+                tombstone_id,
+                delete_history_timestamp_unix_ns,
+                restored_trust_level,
+                retirement_relation_id,
+                retirement_updated_at_unix_ns,
+                backup_dir: String::new(),
+                created_at_unix_ns: current_unix_ns(),
+            });
+        }
+        planned.sort_by_key(|record| record.relation.relation_id);
+        Ok(planned)
+    }
+
+    fn apply_relation_tombstone_resolution(
+        &mut self,
+        record: &RelationTombstoneResolutionRecord,
+        applied_operation_ids: &mut HashSet<String>,
+    ) -> Result<RelationTombstoneResolutionResult, StoreError> {
+        let already_applied = applied_operation_ids.contains(&record.operation_id);
+        if !already_applied {
+            match record.action {
+                RelationTombstoneAction::RestoreAtom => {
+                    let current = self.current_relation_records()?;
+                    if !current.iter().any(|relation| relation == &record.relation) {
+                        return Err(StoreError::Context(format!(
+                            "relation {} is no longer current; restore replay stopped fail-closed",
+                            record.relation.relation_id
+                        )));
+                    }
+                    let claim = Self::relation_claim(&record.relation);
+                    let cardinality = self
+                        .get_predicate(record.relation.predicate)?
+                        .map(|predicate| predicate.contract.cardinality);
+                    let mut preview = self.ctx_manager.lock().clone();
+                    if preview.get_ctx(record.relation.context).is_none() {
+                        if record.relation.context != 0 || !preview.list_contexts().is_empty() {
+                            return Err(StoreError::Context(format!(
+                                "relation {} restore replay cannot recover context {}",
+                                record.relation.relation_id, record.relation.context
+                            )));
+                        }
+                        if preview.create_context(0) != 0 {
+                            return Err(StoreError::Context(
+                                "default context restore did not allocate context 0".to_owned(),
+                            ));
+                        }
+                    }
+                    preview.reconcile_claim_with_atom_id(
+                        record.relation.context,
+                        &claim,
+                        record.relation.atom_id,
+                        cardinality,
+                    )?;
+
+                    if self.loc_index.is_deleted(&record.relation.atom_id) {
+                        self.loc_index.restore_deleted(&record.relation.atom_id)?;
+                        self.loc_index.save()?;
+                    }
+                    let mut metadata = self
+                        .meta
+                        .get_meta(&record.relation.atom_id)
+                        .cloned()
+                        .ok_or(StoreError::AtomNotFound(record.relation.atom_id))?;
+                    if metadata.trust_level != 0
+                        && metadata.trust_level != record.restored_trust_level
+                    {
+                        return Err(StoreError::Context(format!(
+                            "relation {} metadata trust changed after its reviewed resolution",
+                            record.relation.relation_id
+                        )));
+                    }
+                    if metadata.trust_level == 0 {
+                        metadata.trust_level = record.restored_trust_level;
+                        self.meta.put_meta(record.relation.atom_id, metadata);
+                        self.meta.save()?;
+                    }
+                    self.mutate_contexts(|manager| {
+                        *manager = preview;
+                        Ok(())
+                    })?;
+                }
+                RelationTombstoneAction::RetireRelation => {
+                    let retirement_relation_id =
+                        record.retirement_relation_id.ok_or_else(|| {
+                            StoreError::Io("retirement resolution omits successor id".to_owned())
+                        })?;
+                    let retirement = RelationRecord {
+                        relation_id: retirement_relation_id,
+                        subject: record.relation.subject,
+                        predicate: record.relation.predicate,
+                        object: record.relation.object,
+                        atom_id: record.relation.atom_id,
+                        evidence: record.relation.evidence.clone(),
+                        valid_time: record.relation.valid_time,
+                        context: record.relation.context,
+                        confidence: record.relation.confidence,
+                        supersedes: Some(record.relation.relation_id),
+                        deprecated: true,
+                        updated_at_unix_ns: record.retirement_updated_at_unix_ns.ok_or_else(
+                            || StoreError::Io("retirement resolution omits timestamp".to_owned()),
+                        )?,
+                    };
+                    match self
+                        .read_relations()?
+                        .into_iter()
+                        .find(|relation| relation.relation_id == retirement_relation_id)
+                    {
+                        Some(existing) if existing != retirement => {
+                            return Err(StoreError::Io(format!(
+                                "retirement relation id {} is occupied by a conflicting record",
+                                retirement_relation_id
+                            )));
+                        }
+                        Some(_) => {}
+                        None => self.append_relation(&retirement)?,
+                    }
+                    self.mutate_contexts(|manager| {
+                        manager.retire_atom_projections(record.relation.atom_id);
+                        Ok(())
+                    })?;
+                }
+            }
+
+            let mut details = HashMap::new();
+            details.insert("operation_id".to_owned(), record.operation_id.clone());
+            details.insert(
+                "relation_id".to_owned(),
+                record.relation.relation_id.to_string(),
+            );
+            details.insert("action".to_owned(), format!("{:?}", record.action));
+            details.insert("reason".to_owned(), record.reason.clone());
+            details.insert("backup_dir".to_owned(), record.backup_dir.clone());
+            details.insert(
+                "tombstone_id".to_owned(),
+                crate::cas::hex_encode(&record.tombstone_id),
+            );
+            self.record_history(
+                HistoryOperation::ResolveRelationTombstone,
+                vec![crate::cas::hex_encode(&record.relation.atom_id)],
+                details,
+            )?;
+            self.flush()?;
+            applied_operation_ids.insert(record.operation_id.clone());
+        }
+
+        Ok(RelationTombstoneResolutionResult {
+            relation_id: record.relation.relation_id,
+            atom_id: record.relation.atom_id,
+            action: record.action,
+            operation_id: record.operation_id.clone(),
+            backup_dir: record.backup_dir.clone(),
+            already_applied,
+        })
+    }
+
+    fn replay_relation_tombstone_resolutions(&mut self) -> Result<(), StoreError> {
+        let records = self.read_relation_tombstone_resolutions()?;
+        let mut applied_operation_ids = self.applied_relation_tombstone_operation_ids()?;
+        for record in records {
+            self.apply_relation_tombstone_resolution(&record, &mut applied_operation_ids)?;
+        }
+        Ok(())
     }
 
     fn relation_contract_issue(
@@ -7498,6 +8286,7 @@ impl MemoryX {
     /// its durable atom identity in the relation's declared context.
     pub fn audit_relation_contexts(&self) -> Result<RelationContextAuditReport, StoreError> {
         let relations = self.current_relation_records()?;
+        let delete_events = self.relation_delete_events()?;
         let current_relation_atoms = relations
             .iter()
             .map(|relation| relation.atom_id)
@@ -7508,7 +8297,8 @@ impl MemoryX {
 
         for relation in &relations {
             let claim = Self::relation_claim(relation);
-            if let Err(issue) = self.validate_relation_atom_claim(relation, &claim) {
+            if let Err(issue) = self.validate_relation_atom_claim(relation, &claim, &delete_events)
+            {
                 issues.push(issue);
                 continue;
             }
@@ -7588,11 +8378,12 @@ impl MemoryX {
             .iter()
             .map(|relation| relation.atom_id)
             .collect::<HashSet<_>>();
+        let delete_events = self.relation_delete_events()?;
         let already_superseded = self.superseded_atom_ids();
         let mut planned = Vec::new();
         for relation in relations {
             let claim = Self::relation_claim(relation);
-            self.validate_relation_atom_claim(relation, &claim)
+            self.validate_relation_atom_claim(relation, &claim, &delete_events)
                 .map_err(|issue| StoreError::Context(issue.detail))?;
             if let Some(issue) = self.relation_contract_issue(relation, &current_relations)? {
                 return Err(StoreError::Context(format!(
@@ -7779,9 +8570,14 @@ impl MemoryX {
     ) -> Result<RelationContextMigrationReport, StoreError> {
         options.relation_ids.sort_unstable();
         options.relation_ids.dedup();
-        if options.relation_ids.len() > MAX_RELATION_CONTEXT_REPAIR_SELECTION {
+        options
+            .tombstone_resolutions
+            .sort_by_key(|resolution| resolution.relation_id);
+        if options.relation_ids.len() > MAX_RELATION_CONTEXT_REPAIR_SELECTION
+            || options.tombstone_resolutions.len() > MAX_RELATION_CONTEXT_REPAIR_SELECTION
+        {
             return Err(StoreError::Context(format!(
-                "relation context repair selection exceeds {MAX_RELATION_CONTEXT_REPAIR_SELECTION} ids"
+                "relation context repair selection exceeds {MAX_RELATION_CONTEXT_REPAIR_SELECTION} entries"
             )));
         }
 
@@ -7791,16 +8587,29 @@ impl MemoryX {
             .iter()
             .map(|relation| relation.relation_id)
             .collect::<HashSet<_>>();
-        let selected_relation_ids = if options.relation_ids.is_empty() {
+        let existing_resolutions = self.read_relation_tombstone_resolutions()?;
+        let previously_resolved_ids = existing_resolutions
+            .iter()
+            .map(|record| record.relation.relation_id)
+            .collect::<HashSet<_>>();
+        let mut selected_relation_ids = if options.relation_ids.is_empty() {
             let mut ids = current_ids.iter().copied().collect::<Vec<_>>();
-            ids.sort_unstable();
+            ids.extend(
+                options
+                    .tombstone_resolutions
+                    .iter()
+                    .map(|resolution| resolution.relation_id),
+            );
             ids
         } else {
             let unknown = options
                 .relation_ids
                 .iter()
                 .copied()
-                .filter(|relation_id| !current_ids.contains(relation_id))
+                .filter(|relation_id| {
+                    !current_ids.contains(relation_id)
+                        && !previously_resolved_ids.contains(relation_id)
+                })
                 .collect::<Vec<_>>();
             if !unknown.is_empty() {
                 return Err(StoreError::Context(format!(
@@ -7814,14 +8623,43 @@ impl MemoryX {
             }
             options.relation_ids.clone()
         };
+        selected_relation_ids.sort_unstable();
+        selected_relation_ids.dedup();
         let selected = selected_relation_ids
             .iter()
             .copied()
             .collect::<HashSet<_>>();
+        let unselected_resolutions = options
+            .tombstone_resolutions
+            .iter()
+            .filter(|resolution| !selected.contains(&resolution.relation_id))
+            .map(|resolution| resolution.relation_id)
+            .collect::<Vec<_>>();
+        if !unselected_resolutions.is_empty() {
+            return Err(StoreError::Context(format!(
+                "tombstone resolutions are outside relation_ids selection: {}",
+                unselected_resolutions
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )));
+        }
+        let planned_tombstones =
+            self.plan_relation_tombstone_resolutions(&options.tombstone_resolutions)?;
+        let resolved_tombstone_ids = planned_tombstones
+            .iter()
+            .map(|record| record.relation.relation_id)
+            .collect::<HashSet<_>>();
         let blocked_issues = before
             .issues
             .iter()
-            .filter(|issue| selected.contains(&issue.relation_id) && !issue.repairable)
+            .filter(|issue| {
+                selected.contains(&issue.relation_id)
+                    && !issue.repairable
+                    && !(issue.kind == RelationContextIssueKind::RelationAtomTombstoned
+                        && resolved_tombstone_ids.contains(&issue.relation_id))
+            })
             .cloned()
             .collect::<Vec<_>>();
         let mut eligible_relation_ids = before
@@ -7830,10 +8668,27 @@ impl MemoryX {
             .filter(|issue| selected.contains(&issue.relation_id) && issue.repairable)
             .map(|issue| issue.relation_id)
             .collect::<Vec<_>>();
+        eligible_relation_ids.extend(resolved_tombstone_ids.iter().copied());
         eligible_relation_ids.sort_unstable();
         eligible_relation_ids.dedup();
 
         if options.dry_run {
+            let applied_operation_ids = self.applied_relation_tombstone_operation_ids()?;
+            let tombstone_resolutions = planned_tombstones
+                .iter()
+                .map(|record| RelationTombstoneResolutionResult {
+                    relation_id: record.relation.relation_id,
+                    atom_id: record.relation.atom_id,
+                    action: record.action,
+                    operation_id: record.operation_id.clone(),
+                    backup_dir: if record.backup_dir.is_empty() {
+                        "not-created-dry-run".to_owned()
+                    } else {
+                        record.backup_dir.clone()
+                    },
+                    already_applied: applied_operation_ids.contains(&record.operation_id),
+                })
+                .collect();
             return Ok(RelationContextMigrationReport {
                 after: before.clone(),
                 before,
@@ -7844,6 +8699,7 @@ impl MemoryX {
                 blocked_issues,
                 repaired_relation_ids: Vec::new(),
                 retired_parallel_atom_ids: Vec::new(),
+                tombstone_resolutions,
             });
         }
         if !options.allow_partial && !blocked_issues.is_empty() {
@@ -7860,13 +8716,57 @@ impl MemoryX {
             )));
         }
 
+        let existing_operation_ids = existing_resolutions
+            .iter()
+            .map(|record| record.operation_id.clone())
+            .collect::<HashSet<_>>();
+        let new_operation_ids = planned_tombstones
+            .iter()
+            .filter(|record| !existing_operation_ids.contains(&record.operation_id))
+            .map(|record| record.operation_id.clone())
+            .collect::<Vec<_>>();
+        let backup_dir = if new_operation_ids.is_empty() {
+            None
+        } else {
+            Some(self.create_relation_tombstone_backup(&new_operation_ids)?)
+        };
+        for mut record in planned_tombstones {
+            if existing_operation_ids.contains(&record.operation_id) {
+                continue;
+            }
+            record.backup_dir = backup_dir.clone().ok_or_else(|| {
+                StoreError::Io("new tombstone resolution has no durable backup".to_owned())
+            })?;
+            append_bounded_jsonl(
+                &self.config.relation_tombstone_resolutions_path(),
+                "relation-tombstone-resolution",
+                &record,
+            )?;
+        }
+
+        let committed_tombstones = self
+            .read_relation_tombstone_resolutions()?
+            .into_iter()
+            .filter(|record| resolved_tombstone_ids.contains(&record.relation.relation_id))
+            .collect::<Vec<_>>();
+        let mut tombstone_resolutions = Vec::new();
+        let mut applied_operation_ids = self.applied_relation_tombstone_operation_ids()?;
+        for record in committed_tombstones {
+            tombstone_resolutions.push(
+                self.apply_relation_tombstone_resolution(&record, &mut applied_operation_ids)?,
+            );
+        }
+
         let eligible = eligible_relation_ids
             .iter()
             .copied()
             .collect::<HashSet<_>>();
         let planned_relations = current_relations
             .iter()
-            .filter(|relation| eligible.contains(&relation.relation_id))
+            .filter(|relation| {
+                eligible.contains(&relation.relation_id)
+                    && !resolved_tombstone_ids.contains(&relation.relation_id)
+            })
             .cloned()
             .collect::<Vec<_>>();
         let repaired = self.reconcile_relation_records(&planned_relations, "explicit_migration")?;
@@ -7891,6 +8791,7 @@ impl MemoryX {
             blocked_issues,
             repaired_relation_ids: repaired.repaired_relation_ids,
             retired_parallel_atom_ids: repaired.retired_parallel_atom_ids,
+            tombstone_resolutions,
             after,
         })
     }
@@ -8462,6 +9363,12 @@ impl MemoryX {
     ) -> Result<AtomId, StoreError> {
         // Calculate atom ID from canonical form (SKF-1.1 content-address contract)
         let atom_id = compute_atom_id_from_payload(payload)?;
+        if self.loc_index.is_deleted(&atom_id) {
+            return Err(StoreError::Context(format!(
+                "canonical atom {} is tombstoned; ingestion cannot silently reactivate deleted evidence",
+                crate::cas::hex_encode(&atom_id)
+            )));
+        }
 
         // Store in CAS with sections
         // SKF-1.1 Section 2.1: Create sections (SYMBOLS, REFS, CLAIMS, INVARIANTS, EDGES, EVIDENCE, META)
@@ -10028,6 +10935,15 @@ impl MemoryX {
                     continue;
                 }
             };
+            if self.loc_index.is_deleted(&atom_id) {
+                errors.push(BatchError::new(
+                    index,
+                    Some(atom_id),
+                    "canonical atom is tombstoned; batch ingestion cannot silently reactivate deleted evidence"
+                        .to_owned(),
+                ));
+                continue;
+            }
 
             // Validate payload has minimum size for AtomBodyHeader
             if batch_atom.payload.len() < crate::cas::AtomBodyHeader::SIZE {
@@ -10196,9 +11112,7 @@ impl MemoryX {
         new_evidence: Vec<EvidenceRef>,
     ) -> Result<UpdateResult, StoreError> {
         // Step 1: Verify old atom exists (SKF-1.1 §2.1.2)
-        if self.meta.get_meta(&old_atom_id).is_none() {
-            return Err(StoreError::AtomNotFound(old_atom_id));
-        }
+        self.get_atom(&old_atom_id)?;
 
         // Validate payload has minimum size for AtomBodyHeader
         if new_payload.len() < crate::cas::AtomBodyHeader::SIZE {
@@ -10207,6 +11121,12 @@ impl MemoryX {
 
         // Step 2: Create NEW atom with updated content (new BLAKE3 hash!)
         let new_atom_id = compute_atom_id_from_payload(&new_payload)?;
+        if self.loc_index.is_deleted(&new_atom_id) {
+            return Err(StoreError::Context(format!(
+                "canonical update atom {} is tombstoned; update cannot silently reactivate deleted evidence",
+                crate::cas::hex_encode(&new_atom_id)
+            )));
+        }
 
         // Step 3: Store new atom in CAS with sections
         let (seg_id, offset, len) = self.cas.store_atom(&new_atom_id, &new_payload)?;
@@ -10328,10 +11248,24 @@ impl MemoryX {
         reason: DeleteReason,
     ) -> Result<DeleteResult, StoreError> {
         // Step 1: Verify atom exists
+        if self.loc_index.is_deleted(&atom_id) {
+            return Err(StoreError::AtomNotFound(atom_id));
+        }
         let old_metadata = match self.meta.get_meta(&atom_id) {
             Some(meta) => meta.clone(),
             None => return Err(StoreError::AtomNotFound(atom_id)),
         };
+        if let Some(relation) = self
+            .current_relation_records()?
+            .into_iter()
+            .find(|relation| relation.atom_id == atom_id)
+        {
+            return Err(StoreError::Context(format!(
+                "atom {} backs current relation {}; transition/correct the relation before deleting its historical atom",
+                crate::cas::hex_encode(&atom_id),
+                relation.relation_id
+            )));
+        }
 
         // Step 2: Create TOMBSTONE entry in CAS
         // Tombstone is a special CONFLICT atom that marks deletion
@@ -10412,12 +11346,17 @@ impl MemoryX {
     /// This payload follows SKF-1.1 §2.1 format with all 7 sections.
     fn create_tombstone_payload(
         &self,
-        _original_atom_id: AtomId,
+        original_atom_id: AtomId,
         metadata: &AtomMetadata,
         reason: DeleteReason,
     ) -> Vec<u8> {
         // Create minimal sections for tombstone
-        let symbols_bytes = crate::cas::symbols::SymbolsSection::new().to_bytes();
+        let mut symbols = crate::cas::symbols::SymbolsSection::new();
+        symbols.intern(format!(
+            "tombstone:{}",
+            crate::cas::hex_encode(&original_atom_id)
+        ));
+        let symbols_bytes = symbols.to_bytes();
         let refs_bytes = Vec::new(); // REFS: empty
 
         // Claims section with tombstone marker
@@ -11507,6 +12446,52 @@ mod tests {
     }
 
     #[test]
+    fn history_recovers_only_a_torn_final_record_and_rejects_internal_corruption() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("history-tail-recovery"));
+        let mut store = MemoryX::new(config.clone()).unwrap();
+        let atom_id = ingest_test_atom(&mut store, 71);
+        assert_eq!(store.history(usize::MAX).unwrap().len(), 1);
+
+        let history_path = config.history_path();
+        let valid_len = fs::metadata(&history_path).unwrap().len();
+        let mut history = OpenOptions::new().append(true).open(&history_path).unwrap();
+        history.write_all(b"{\"timestamp_unix_ns\":").unwrap();
+        history.sync_all().unwrap();
+        drop(history);
+        assert_eq!(store.history(usize::MAX).unwrap().len(), 1);
+        assert_eq!(fs::metadata(&history_path).unwrap().len(), valid_len);
+        assert!(store.get_atom(&atom_id).is_ok());
+
+        let mut history = OpenOptions::new().append(true).open(&history_path).unwrap();
+        history.write_all(b"{}\n").unwrap();
+        history.sync_all().unwrap();
+        drop(history);
+        assert!(store.history(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn synced_atomic_replace_preserves_a_live_target_and_recovers_legacy_backup_gap() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("state.bin");
+        let temp_path = temp.path().join("state.bin.tmp");
+        let backup_path = temp.path().join("state.bin.bak");
+
+        write_synced_atomic(&target, b"first").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"first");
+        write_synced_atomic(&target, b"second").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"second");
+        assert!(!temp_path.exists());
+        assert!(!backup_path.exists());
+
+        fs::rename(&target, &backup_path).unwrap();
+        write_synced_atomic(&target, b"third").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"third");
+        assert!(!temp_path.exists());
+        assert!(!backup_path.exists());
+    }
+
+    #[test]
     fn test_source_registry_enriches_evidence_record() {
         let test_dir = PathBuf::from("./test_sources");
         let _ = std::fs::remove_dir_all(&test_dir);
@@ -12066,7 +13051,9 @@ mod tests {
 
     #[test]
     fn test_delete_all_reasons() {
-        let config = StoreConfig::new(PathBuf::from("./test_delete_reasons"));
+        let path = PathBuf::from("./test_delete_reasons");
+        let _ = fs::remove_dir_all(&path);
+        let config = StoreConfig::new(path);
         let mut store = MemoryX::new(config).unwrap();
 
         let reasons = vec![
@@ -12077,9 +13064,18 @@ mod tests {
             DeleteReason::Obsolete,
         ];
 
-        for reason in reasons {
-            let payload = build_full_test_payload(AtomType::FACT);
-            let atom_id = store.ingest(&payload, AtomType::FACT, &[], &[]).unwrap();
+        for (index, reason) in reasons.into_iter().enumerate() {
+            let claim = ClaimData {
+                subj: index as u64 + 1,
+                pred: 2,
+                obj_tag: ObjTag::U64.to_u8(),
+                obj_val: index as u64,
+                qualifiers_mask: 0,
+            };
+            let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+            let atom_id = store
+                .ingest(&payload, AtomType::FACT, &[claim], &[])
+                .unwrap();
 
             let result = store.delete_atom(atom_id, reason).unwrap();
             assert!(result.success);
@@ -13598,6 +14594,64 @@ mod tests {
         }
     }
 
+    fn force_legacy_current_relation_tombstone(
+        store: &mut MemoryX,
+        atom_id: AtomId,
+        reason: DeleteReason,
+    ) -> AtomId {
+        let old_metadata = store.meta.get_meta(&atom_id).unwrap().clone();
+        // v2.0.4 and earlier omitted the original AtomId from tombstone identity.
+        let tombstone_payload = store.create_tombstone_payload([0u8; 32], &old_metadata, reason);
+        let tombstone_id = compute_atom_id_from_payload(&tombstone_payload).unwrap();
+        let (seg_id, offset, len) = store
+            .cas
+            .store_atom(&tombstone_id, &tombstone_payload)
+            .unwrap();
+        store.loc_index.mark_deleted(&atom_id);
+        let mut deleted_metadata = old_metadata.clone();
+        deleted_metadata.trust_level = 0;
+        store.meta.put_meta(atom_id, deleted_metadata);
+        store.meta.put_meta(
+            tombstone_id,
+            AtomMetadata {
+                atom_type: AtomType::CONFLICT,
+                created_at_ns: 0,
+                trust_level: 10000,
+                domain_mask: 0xFFFF,
+                source_id: old_metadata.source_id,
+            },
+        );
+        let tombstone_node =
+            store
+                .loc_index
+                .assign_node_num(&tombstone_id, seg_id, offset, len as u32);
+        let original_node = store.loc_index.get_node_num(&atom_id).unwrap();
+        store.graph.add_edge(
+            tombstone_node,
+            original_node,
+            EdgeType::TOMBSTONE_LINK,
+            10000,
+        );
+        let mut details = HashMap::new();
+        details.insert("reason".to_owned(), format!("{reason:?}"));
+        details.insert(
+            "tombstone_id".to_owned(),
+            crate::cas::hex_encode(&tombstone_id),
+        );
+        store
+            .record_history(
+                HistoryOperation::DeleteAtom,
+                vec![
+                    crate::cas::hex_encode(&atom_id),
+                    crate::cas::hex_encode(&tombstone_id),
+                ],
+                details,
+            )
+            .unwrap();
+        store.flush().unwrap();
+        tombstone_id
+    }
+
     #[test]
     fn managed_predicate_and_typed_claim_survive_reopen_and_query() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -14650,7 +15704,7 @@ mod tests {
         assert!(reopened.verify_integrity().unwrap().is_valid());
         drop(reopened);
 
-        let reopened_again = MemoryX::new(config).unwrap();
+        let reopened_again = MemoryX::new(config.clone()).unwrap();
         assert_eq!(reopened_again.read_relations().unwrap().len(), 1);
         assert!(
             reopened_again
@@ -14749,6 +15803,767 @@ mod tests {
     }
 
     #[test]
+    fn delete_atom_rejects_current_relation_before_any_mutation() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("delete-current-relation"));
+        let mut store = MemoryX::new(config).unwrap();
+        let predicate = store
+            .register_predicate(managed_contract(
+                "test:current_state",
+                PredicateCardinality::ManyToOne,
+            ))
+            .unwrap();
+        let subject = store.create_entity("module", "component").unwrap();
+        let object = store.create_entity("active", "state").unwrap();
+        let relation = store
+            .assert_relation(
+                subject.entity_id,
+                predicate.predicate_id,
+                object.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        let history_before = store.history(usize::MAX).unwrap().len();
+
+        let error = match store.delete_atom(relation.atom_id, DeleteReason::Obsolete) {
+            Ok(_) => panic!("current relation atom deletion unexpectedly succeeded"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("backs current relation"));
+        assert!(store.get_atom(&relation.atom_id).is_ok());
+        assert_eq!(store.history(usize::MAX).unwrap().len(), history_before);
+        assert!(store.audit_relation_contexts().unwrap().is_consistent());
+    }
+
+    #[test]
+    fn explicit_restore_of_legacy_tombstoned_relation_is_dry_run_safe_and_idempotent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("restore-tombstoned-relation"));
+        let relation_id;
+        let relation_atom;
+        let source_id;
+        let tombstone_id;
+        let bound_object;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "test:session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let object = store.create_entity("NOT_ACTIVATED", "state").unwrap();
+            bound_object = store
+                .create_entity("BOUND_SESSION", "state")
+                .unwrap()
+                .entity_id;
+            source_id = store
+                .register_source(
+                    SourceKind::File,
+                    "module registry",
+                    SourceLocation {
+                        path: Some("MODULES.md".to_owned()),
+                        line_range: Some((1, 4)),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap()
+                .source_id;
+            let authored = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            store.set_atom_source(relation_atom, source_id).unwrap();
+            tombstone_id = force_legacy_current_relation_tombstone(
+                &mut store,
+                relation_atom,
+                DeleteReason::Obsolete,
+            );
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        let audit = reopened.audit_relation_contexts().unwrap();
+        assert_eq!(audit.issues.len(), 1);
+        assert_eq!(
+            audit.issues[0].kind,
+            RelationContextIssueKind::RelationAtomTombstoned
+        );
+        assert!(!audit.issues[0].repairable);
+        let before_paths = [
+            config.root_path.join("index/location_state.bin"),
+            config.contexts_path(),
+            config.relations_path(),
+            config.history_path(),
+        ];
+        let before_hashes = before_paths
+            .iter()
+            .map(|path| blake3::hash(&fs::read(path).unwrap()))
+            .collect::<Vec<_>>();
+        let resolution = RelationTombstoneResolution {
+            relation_id,
+            action: RelationTombstoneAction::RestoreAtom,
+            reason: "Reviewed deletion was erroneous; restore the exact canonical atom".to_owned(),
+        };
+        let dry = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: true,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+                tombstone_resolutions: vec![resolution.clone()],
+            })
+            .unwrap();
+        assert_eq!(dry.tombstone_resolutions.len(), 1);
+        assert_eq!(
+            dry.tombstone_resolutions[0].backup_dir,
+            "not-created-dry-run"
+        );
+        assert!(!config.relation_tombstone_resolutions_path().exists());
+        assert_eq!(
+            before_hashes,
+            before_paths
+                .iter()
+                .map(|path| blake3::hash(&fs::read(path).unwrap()))
+                .collect::<Vec<_>>()
+        );
+
+        let applied = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+                tombstone_resolutions: vec![resolution.clone()],
+            })
+            .unwrap();
+        assert_eq!(applied.tombstone_resolutions.len(), 1);
+        assert!(!applied.tombstone_resolutions[0].already_applied);
+        assert!(
+            config
+                .root_path
+                .join(&applied.tombstone_resolutions[0].backup_dir)
+                .join("manifest.json")
+                .exists()
+        );
+        assert!(reopened.get_atom(&relation_atom).is_ok());
+        assert!(reopened.get_atom(&tombstone_id).is_ok());
+        assert_eq!(
+            reopened.list_atom_source_ids(&relation_atom).unwrap(),
+            vec![source_id]
+        );
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+
+        let repeated = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+                tombstone_resolutions: vec![resolution],
+            })
+            .unwrap();
+        assert!(repeated.tombstone_resolutions[0].already_applied);
+        let transitioned = reopened
+            .transition_relation(relation_id, bound_object, 0, Vec::new(), vec![source_id])
+            .unwrap();
+        assert_eq!(transitioned.previous_atom_id, relation_atom);
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config.clone()).unwrap();
+        assert!(reopened_again.get_atom(&transitioned.atom_id).is_ok());
+        assert!(
+            reopened_again
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+        assert_eq!(
+            reopened_again
+                .history(usize::MAX)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.operation == HistoryOperation::ResolveRelationTombstone)
+                .count(),
+            1
+        );
+        drop(reopened_again);
+
+        let journal_path = config.relation_tombstone_resolutions_path();
+        let valid_len = fs::metadata(&journal_path).unwrap().len();
+        let mut journal = OpenOptions::new().append(true).open(&journal_path).unwrap();
+        journal.write_all(b"{\"version\":").unwrap();
+        journal.sync_all().unwrap();
+        drop(journal);
+        drop(MemoryX::new(config.clone()).unwrap());
+        assert_eq!(fs::metadata(&journal_path).unwrap().len(), valid_len);
+
+        let mut journal = OpenOptions::new().append(true).open(&journal_path).unwrap();
+        journal.write_all(b"{}\n").unwrap();
+        journal.sync_all().unwrap();
+        drop(journal);
+        assert!(MemoryX::new(config).is_err());
+    }
+
+    #[test]
+    fn tombstone_resolution_backup_tampering_blocks_reopen() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("tampered-resolution-backup"));
+        let backup_dir;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "test:tamper_slot",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let object = store.create_entity("old", "state").unwrap();
+            let authored = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            force_legacy_current_relation_tombstone(
+                &mut store,
+                authored.atom_id,
+                DeleteReason::Obsolete,
+            );
+            let report = store
+                .migrate_relation_contexts(RelationContextRepairOptions {
+                    dry_run: false,
+                    allow_partial: false,
+                    relation_ids: vec![authored.relation_id.unwrap()],
+                    tombstone_resolutions: vec![RelationTombstoneResolution {
+                        relation_id: authored.relation_id.unwrap(),
+                        action: RelationTombstoneAction::RetireRelation,
+                        reason: "Reviewed deletion is authoritative".to_owned(),
+                    }],
+                })
+                .unwrap();
+            backup_dir = report.tombstone_resolutions[0].backup_dir.clone();
+        }
+        let manifest_path = config.root_path.join(&backup_dir).join("manifest.json");
+        let manifest: RelationTombstoneBackupManifest =
+            serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();
+        let target = config
+            .root_path
+            .join(&backup_dir)
+            .join(&manifest.files[0].relative_path);
+        let mut bytes = fs::read(&target).unwrap();
+        bytes[0] ^= 0xFF;
+        fs::write(target, bytes).unwrap();
+        assert!(MemoryX::new(config).is_err());
+    }
+
+    #[test]
+    fn explicit_retirement_preserves_tombstone_history_and_replays_after_interruption() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("retire-tombstoned-relation"));
+        let relation_id;
+        let relation_atom;
+        let resolution;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "test:obsolete_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let object = store.create_entity("obsolete", "state").unwrap();
+            let authored = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            force_legacy_current_relation_tombstone(
+                &mut store,
+                relation_atom,
+                DeleteReason::Obsolete,
+            );
+            resolution = RelationTombstoneResolution {
+                relation_id,
+                action: RelationTombstoneAction::RetireRelation,
+                reason: "Reviewed durable deletion is authoritative; retire the relation"
+                    .to_owned(),
+            };
+
+            let mut planned = store
+                .plan_relation_tombstone_resolutions(std::slice::from_ref(&resolution))
+                .unwrap();
+            let backup = store
+                .create_relation_tombstone_backup(&[planned[0].operation_id.clone()])
+                .unwrap();
+            planned[0].backup_dir = backup;
+            append_bounded_jsonl(
+                &config.relation_tombstone_resolutions_path(),
+                "relation-tombstone-resolution",
+                &planned[0],
+            )
+            .unwrap();
+            // Simulate process loss after the synced decision commit and during
+            // the ancillary history append. Reopen must trim only this tail and
+            // replay the committed decision exactly once.
+            let mut history = OpenOptions::new()
+                .append(true)
+                .open(config.history_path())
+                .unwrap();
+            history.write_all(b"{\"timestamp_unix_ns\":").unwrap();
+            history.sync_all().unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        assert!(reopened.current_relation_records().unwrap().is_empty());
+        assert!(reopened.get_atom(&relation_atom).is_err());
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        let relations = reopened.read_relations().unwrap();
+        assert_eq!(relations.len(), 2);
+        assert!(
+            relations.iter().any(|relation| {
+                relation.deprecated && relation.supersedes == Some(relation_id)
+            })
+        );
+        assert!(reopened.list_contexts().iter().all(|context| {
+            context
+                .active_claims
+                .values()
+                .all(|active| active.atom_id != relation_atom)
+        }));
+        let repeated = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+                tombstone_resolutions: vec![resolution],
+            })
+            .unwrap();
+        assert!(repeated.tombstone_resolutions[0].already_applied);
+        drop(reopened);
+        assert!(
+            MemoryX::new(config)
+                .unwrap()
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+    }
+
+    #[test]
+    fn tombstone_resolution_fails_closed_on_cardinality_conflict_and_missing_cas() {
+        for cardinality in [
+            PredicateCardinality::ManyToOne,
+            PredicateCardinality::OneToOne,
+        ] {
+            let temp = tempfile::TempDir::new().unwrap();
+            let config = StoreConfig::new(temp.path().join(format!("conflict-{cardinality:?}")));
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract("test:slot", cardinality))
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let old_object = store.create_entity("old", "state").unwrap();
+            let other_object = store.create_entity("other", "state").unwrap();
+            let authored = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    old_object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            force_legacy_current_relation_tombstone(
+                &mut store,
+                authored.atom_id,
+                DeleteReason::Obsolete,
+            );
+            let other_claim = ClaimData {
+                subj: subject.entity_id,
+                pred: u64::from(predicate.predicate_id),
+                obj_tag: ObjTag::NODENUM.to_u8(),
+                obj_val: other_object.entity_id,
+                qualifiers_mask: 0,
+            };
+            let payload = build_authoring_payload(
+                AtomType::FACT,
+                std::slice::from_ref(&other_claim),
+                &["other".to_owned()],
+            )
+            .unwrap();
+            let other_atom = store
+                .ingest(&payload, AtomType::FACT, &[other_claim], &[])
+                .unwrap();
+            store
+                .append_relation(&RelationRecord {
+                    relation_id: authored.relation_id.unwrap() + 1,
+                    subject: subject.entity_id,
+                    predicate: predicate.predicate_id,
+                    object: other_object.entity_id,
+                    atom_id: other_atom,
+                    evidence: Vec::new(),
+                    valid_time: None,
+                    context: 0,
+                    confidence: 5000,
+                    supersedes: None,
+                    deprecated: false,
+                    updated_at_unix_ns: current_unix_ns(),
+                })
+                .unwrap();
+            let error = store
+                .migrate_relation_contexts(RelationContextRepairOptions {
+                    dry_run: false,
+                    allow_partial: false,
+                    relation_ids: vec![authored.relation_id.unwrap()],
+                    tombstone_resolutions: vec![RelationTombstoneResolution {
+                        relation_id: authored.relation_id.unwrap(),
+                        action: RelationTombstoneAction::RestoreAtom,
+                        reason: "Attempted reviewed restore".to_owned(),
+                    }],
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("predicate contract"));
+            assert!(!config.relation_tombstone_resolutions_path().exists());
+        }
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("mixed-unavailable"));
+        let mut store = MemoryX::new(config.clone()).unwrap();
+        let predicate = store
+            .register_predicate(managed_contract(
+                "test:available_slot",
+                PredicateCardinality::ManyToMany,
+            ))
+            .unwrap();
+        let subject = store.create_entity("module", "component").unwrap();
+        let object = store.create_entity("value", "state").unwrap();
+        let authored = store
+            .assert_relation(
+                subject.entity_id,
+                predicate.predicate_id,
+                object.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        force_legacy_current_relation_tombstone(
+            &mut store,
+            authored.atom_id,
+            DeleteReason::Obsolete,
+        );
+        store
+            .append_relation(&RelationRecord {
+                relation_id: authored.relation_id.unwrap() + 1,
+                subject: subject.entity_id + 100,
+                predicate: 7,
+                object: object.entity_id + 100,
+                atom_id: [0xA5; 32],
+                evidence: Vec::new(),
+                valid_time: None,
+                context: 0,
+                confidence: 5000,
+                supersedes: None,
+                deprecated: false,
+                updated_at_unix_ns: current_unix_ns(),
+            })
+            .unwrap();
+        let partial = store
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: true,
+                relation_ids: vec![
+                    authored.relation_id.unwrap(),
+                    authored.relation_id.unwrap() + 1,
+                ],
+                tombstone_resolutions: vec![RelationTombstoneResolution {
+                    relation_id: authored.relation_id.unwrap(),
+                    action: RelationTombstoneAction::RetireRelation,
+                    reason: "Reviewed deletion remains authoritative".to_owned(),
+                }],
+            })
+            .unwrap();
+        assert_eq!(partial.tombstone_resolutions.len(), 1);
+        assert_eq!(partial.blocked_issues.len(), 1);
+        assert_eq!(
+            partial.blocked_issues[0].kind,
+            RelationContextIssueKind::RelationAtomUnavailable
+        );
+        assert!(partial.after.issues.iter().any(|issue| {
+            issue.kind == RelationContextIssueKind::RelationAtomUnavailable && !issue.repairable
+        }));
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("conflicting-trust-projection"));
+        let mut store = MemoryX::new(config.clone()).unwrap();
+        let predicate = store
+            .register_predicate(managed_contract(
+                "test:trust_projection",
+                PredicateCardinality::ManyToMany,
+            ))
+            .unwrap();
+        let subject = store.create_entity("module", "component").unwrap();
+        let object = store.create_entity("state", "value").unwrap();
+        let authored = store
+            .assert_relation(
+                subject.entity_id,
+                predicate.predicate_id,
+                object.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        force_legacy_current_relation_tombstone(
+            &mut store,
+            authored.atom_id,
+            DeleteReason::Obsolete,
+        );
+        store
+            .meta
+            .meta
+            .get_mut(&authored.atom_id)
+            .unwrap()
+            .trust_level = 1;
+        store.meta.save().unwrap();
+        let error = store
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: true,
+                allow_partial: false,
+                relation_ids: vec![authored.relation_id.unwrap()],
+                tombstone_resolutions: vec![RelationTombstoneResolution {
+                    relation_id: authored.relation_id.unwrap(),
+                    action: RelationTombstoneAction::RestoreAtom,
+                    reason: "Reviewed restore with conflicting metadata".to_owned(),
+                }],
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("metadata trust conflicts"));
+        assert!(!config.relation_tombstone_resolutions_path().exists());
+    }
+
+    #[test]
+    fn kpa_shaped_legacy_tombstones_are_recoverable_across_independent_bases() {
+        for (base_index, relation_count) in [18usize, 1, 1, 1].into_iter().enumerate() {
+            let temp = tempfile::TempDir::new().unwrap();
+            let config = StoreConfig::new(temp.path().join(format!("kpa-shape-{base_index}")));
+            let mut relation_ids = Vec::new();
+            let mut relation_atoms = Vec::new();
+            let mut tombstone_ids = Vec::new();
+            {
+                let mut store = MemoryX::new(config.clone()).unwrap();
+                let predicate = store
+                    .register_predicate(managed_contract(
+                        &format!("test:kpa_shape_{base_index}"),
+                        PredicateCardinality::ManyToMany,
+                    ))
+                    .unwrap();
+                for index in 0..relation_count {
+                    let subject = store
+                        .create_entity(format!("module-{index}"), "component")
+                        .unwrap();
+                    let object = store
+                        .create_entity(format!("state-{index}"), "state")
+                        .unwrap();
+                    let authored = store
+                        .assert_relation(
+                            subject.entity_id,
+                            predicate.predicate_id,
+                            object.entity_id,
+                            0,
+                            Vec::new(),
+                        )
+                        .unwrap();
+                    relation_ids.push(authored.relation_id.unwrap());
+                    relation_atoms.push(authored.atom_id);
+                    tombstone_ids.push(force_legacy_current_relation_tombstone(
+                        &mut store,
+                        authored.atom_id,
+                        DeleteReason::Obsolete,
+                    ));
+                }
+            }
+
+            assert!(tombstone_ids.windows(2).all(|pair| pair[0] == pair[1]));
+            let mut reopened = MemoryX::new(config.clone()).unwrap();
+            let before = reopened.audit_relation_contexts().unwrap();
+            assert_eq!(before.issues.len(), relation_count);
+            assert!(before.issues.iter().all(|issue| {
+                issue.kind == RelationContextIssueKind::RelationAtomTombstoned && !issue.repairable
+            }));
+            let resolutions = relation_ids
+                .iter()
+                .map(|relation_id| RelationTombstoneResolution {
+                    relation_id: *relation_id,
+                    action: RelationTombstoneAction::RestoreAtom,
+                    reason: "Fixture owner explicitly confirms erroneous legacy deletion"
+                        .to_owned(),
+                })
+                .collect::<Vec<_>>();
+            let dry_run = reopened
+                .migrate_relation_contexts(RelationContextRepairOptions {
+                    dry_run: true,
+                    allow_partial: false,
+                    relation_ids: relation_ids.clone(),
+                    tombstone_resolutions: resolutions.clone(),
+                })
+                .unwrap();
+            assert_eq!(dry_run.eligible_relation_ids, relation_ids);
+            assert_eq!(dry_run.tombstone_resolutions.len(), relation_count);
+            assert!(dry_run.repaired_relation_ids.is_empty());
+            assert!(dry_run.retired_parallel_atom_ids.is_empty());
+            assert!(!config.relation_tombstone_resolutions_path().exists());
+
+            let applied = reopened
+                .migrate_relation_contexts(RelationContextRepairOptions {
+                    dry_run: false,
+                    allow_partial: false,
+                    relation_ids: relation_ids.clone(),
+                    tombstone_resolutions: resolutions.clone(),
+                })
+                .unwrap();
+            assert_eq!(applied.tombstone_resolutions.len(), relation_count);
+            assert!(applied.after.is_consistent());
+            assert_eq!(applied.after.current_relation_count, relation_count);
+            assert_eq!(applied.after.active_relation_claim_count, relation_count);
+            assert_eq!(
+                applied
+                    .tombstone_resolutions
+                    .iter()
+                    .map(|result| result.backup_dir.as_str())
+                    .collect::<HashSet<_>>()
+                    .len(),
+                1
+            );
+            for atom_id in &relation_atoms {
+                assert!(reopened.get_atom(atom_id).is_ok());
+            }
+            let repeated = reopened
+                .migrate_relation_contexts(RelationContextRepairOptions {
+                    dry_run: false,
+                    allow_partial: false,
+                    relation_ids: relation_ids.clone(),
+                    tombstone_resolutions: resolutions,
+                })
+                .unwrap();
+            assert!(
+                repeated
+                    .tombstone_resolutions
+                    .iter()
+                    .all(|result| result.already_applied)
+            );
+            drop(reopened);
+
+            let final_store = MemoryX::new(config).unwrap();
+            assert!(
+                final_store
+                    .audit_relation_contexts()
+                    .unwrap()
+                    .is_consistent()
+            );
+            assert_eq!(
+                final_store
+                    .history(usize::MAX)
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| {
+                        entry.operation == HistoryOperation::ResolveRelationTombstone
+                    })
+                    .count(),
+                relation_count
+            );
+        }
+    }
+
+    #[test]
+    fn tombstone_identity_includes_the_original_atom() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("unique-tombstones"));
+        let mut store = MemoryX::new(config).unwrap();
+        let first = ingest_test_atom(&mut store, 1);
+        let second = ingest_test_atom(&mut store, 2);
+        let first_tombstone = store
+            .delete_atom(first, DeleteReason::Obsolete)
+            .unwrap()
+            .tombstone_id;
+        let second_tombstone = store
+            .delete_atom(second, DeleteReason::Obsolete)
+            .unwrap()
+            .tombstone_id;
+        assert_ne!(first_tombstone, second_tombstone);
+    }
+
+    #[test]
+    fn ingest_and_update_cannot_silently_reactivate_a_tombstoned_identity() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("no-silent-reactivation"));
+        let mut store = MemoryX::new(config).unwrap();
+        let claim = ClaimData {
+            subj: 41,
+            pred: 42,
+            obj_tag: ObjTag::U64.to_u8(),
+            obj_val: 43,
+            qualifiers_mask: 0,
+        };
+        let payload = build_full_test_payload_with_claim(AtomType::FACT, Some(claim.clone()));
+        let atom_id = store
+            .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+            .unwrap();
+        store.delete_atom(atom_id, DeleteReason::Obsolete).unwrap();
+
+        let ingest_error = store
+            .ingest(&payload, AtomType::FACT, std::slice::from_ref(&claim), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(ingest_error.contains("cannot silently reactivate"));
+        let update_error = match store.update_atom(
+            atom_id,
+            payload.clone(),
+            AtomType::FACT,
+            vec![claim.clone()],
+            Vec::new(),
+        ) {
+            Ok(_) => panic!("tombstoned atom update unexpectedly succeeded"),
+            Err(error) => error.to_string(),
+        };
+        assert!(matches!(
+            store.get_atom(&atom_id),
+            Err(StoreError::AtomNotFound(_))
+        ));
+        assert!(update_error.contains("Atom not found"));
+
+        let batch = store
+            .batch_ingest(vec![BatchAtom::new(
+                payload,
+                AtomType::FACT,
+                vec![claim],
+                Vec::new(),
+            )])
+            .unwrap();
+        assert!(batch.atom_ids.is_empty());
+        assert_eq!(batch.errors.len(), 1);
+        assert!(batch.errors[0].error.contains("cannot silently reactivate"));
+    }
+
+    #[test]
     fn relation_context_migration_dry_run_apply_and_reopen_preserve_provenance() {
         let temp = tempfile::TempDir::new().unwrap();
         let config = StoreConfig::new(temp.path().join("migration-modes"));
@@ -14820,6 +16635,7 @@ mod tests {
                 dry_run: true,
                 allow_partial: false,
                 relation_ids: vec![relation_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(dry_run.eligible_relation_ids, vec![relation_id]);
@@ -14831,6 +16647,7 @@ mod tests {
                 dry_run: false,
                 allow_partial: false,
                 relation_ids: vec![relation_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(applied.repaired_relation_ids, vec![relation_id]);
@@ -14845,6 +16662,7 @@ mod tests {
                 dry_run: false,
                 allow_partial: false,
                 relation_ids: vec![relation_id, relation_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert!(idempotent.eligible_relation_ids.is_empty());
@@ -14930,6 +16748,7 @@ mod tests {
                 dry_run: true,
                 allow_partial: false,
                 relation_ids: Vec::new(),
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(dry_run.eligible_relation_ids, vec![repairable_id]);
@@ -14948,6 +16767,7 @@ mod tests {
                 dry_run: false,
                 allow_partial: true,
                 relation_ids: Vec::new(),
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(partial.repaired_relation_ids, vec![repairable_id]);
@@ -15047,6 +16867,7 @@ mod tests {
                     dry_run: false,
                     allow_partial: true,
                     relation_ids: Vec::new(),
+                    tombstone_resolutions: Vec::new(),
                 })
                 .unwrap();
             assert!(partial.repaired_relation_ids.is_empty());
@@ -15135,6 +16956,7 @@ mod tests {
                 dry_run: true,
                 allow_partial: false,
                 relation_ids: vec![first_id, second_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(dry_run.eligible_relation_ids, vec![first_id, second_id]);
@@ -15144,6 +16966,7 @@ mod tests {
                 dry_run: false,
                 allow_partial: false,
                 relation_ids: vec![first_id, second_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(applied.repaired_relation_ids, vec![first_id, second_id]);
@@ -15241,6 +17064,7 @@ mod tests {
                 dry_run: false,
                 allow_partial: false,
                 relation_ids: vec![relation_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert_eq!(applied.repaired_relation_ids, vec![relation_id]);
@@ -15260,6 +17084,7 @@ mod tests {
                 dry_run: false,
                 allow_partial: false,
                 relation_ids: vec![relation_id],
+                tombstone_resolutions: Vec::new(),
             })
             .unwrap();
         assert!(idempotent.repaired_relation_ids.is_empty());

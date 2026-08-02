@@ -5598,7 +5598,7 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                     },
                                     {
                                         "name": "repair_relation_contexts",
-                                        "description": "Plan or apply a safe, idempotent migration of current relation atoms into context active_claims. Empty arguments preserve strict apply behavior. Set dry_run=true for a non-mutating report, relation_ids to select current relations, and allow_partial=true explicitly to repair eligible records while reporting blocked records. Missing atoms, claim mismatches, contract/cardinality violations, ambiguity, and conflicting values are never silently repaired. CAS atoms, sources, relation records, and history are preserved.",
+                                        "description": "Plan or apply a safe, idempotent relation/context migration. Ordinary unambiguous missing projections can be repaired directly. A current relation backed by an explicitly tombstoned but byte-identical CAS atom remains blocked unless tombstone_resolutions supplies a reviewed per-relation restore_atom or retire_relation decision with a reason. restore_atom reactivates the same canonical atom; retire_relation appends standard supersedes history and keeps the atom deleted. Missing CAS bodies, claim mismatches, contract/cardinality violations, ambiguity, and conflicts always fail closed. Apply creates a verified state backup and an append-only replay record before mutation.",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
@@ -5615,13 +5615,45 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                                     "items": { "type": "integer", "minimum": 1 },
                                                     "maxItems": 4096,
                                                     "uniqueItems": true
+                                                },
+                                                "tombstone_resolutions": {
+                                                    "type": "array",
+                                                    "maxItems": 4096,
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "relation_id": { "type": "integer", "minimum": 1 },
+                                                            "action": {
+                                                                "type": "string",
+                                                                "enum": ["restore_atom", "retire_relation"]
+                                                            },
+                                                            "reason": {
+                                                                "type": "string",
+                                                                "minLength": 1,
+                                                                "maxLength": 4096
+                                                            }
+                                                        },
+                                                        "required": ["relation_id", "action", "reason"],
+                                                        "additionalProperties": false
+                                                    }
                                                 }
                                             },
                                             "additionalProperties": false,
                                             "examples": [
                                                 { "dry_run": true },
                                                 { "dry_run": false, "relation_ids": [1, 2, 3] },
-                                                { "dry_run": false, "allow_partial": true }
+                                                { "dry_run": false, "allow_partial": true },
+                                                {
+                                                    "dry_run": true,
+                                                    "relation_ids": [7],
+                                                    "tombstone_resolutions": [
+                                                        {
+                                                            "relation_id": 7,
+                                                            "action": "retire_relation",
+                                                            "reason": "Reviewed durable deletion; relation is no longer current"
+                                                        }
+                                                    ]
+                                                }
                                             ]
                                         }
                                     },
@@ -8057,22 +8089,56 @@ fn mcp_repair_relation_contexts_response(
             return mcp_error(id, -32602, "Field 'relation_ids' must be an array");
         }
     };
+    let tombstone_resolutions = match args.get("tombstone_resolutions") {
+        None => Vec::new(),
+        Some(serde_json::Value::Array(values))
+            if values.len() <= memoryx::store::api::MAX_RELATION_CONTEXT_REPAIR_SELECTION =>
+        {
+            match serde_json::from_value::<Vec<RelationTombstoneResolution>>(
+                serde_json::Value::Array(values.clone()),
+            ) {
+                Ok(resolutions) => resolutions,
+                Err(error) => {
+                    return mcp_error(
+                        id,
+                        -32602,
+                        format!("Field 'tombstone_resolutions' is invalid: {error}"),
+                    );
+                }
+            }
+        }
+        Some(serde_json::Value::Array(_)) => {
+            return mcp_error(
+                id,
+                -32602,
+                format!(
+                    "Field 'tombstone_resolutions' exceeds {} entries",
+                    memoryx::store::api::MAX_RELATION_CONTEXT_REPAIR_SELECTION
+                ),
+            );
+        }
+        Some(_) => {
+            return mcp_error(id, -32602, "Field 'tombstone_resolutions' must be an array");
+        }
+    };
     let options = RelationContextRepairOptions {
         dry_run,
         allow_partial,
         relation_ids,
+        tombstone_resolutions,
     };
 
     match store.migrate_relation_contexts(options) {
         Ok(report) => mcp_structured_result(
             id,
             format!(
-                "Relation context migration\nMode: {}\nIssues before: {}\nEligible relations: {}\nBlocked relations: {}\nRepaired relations: {}\nRetired parallel atoms: {}\nIssues after: {}",
+                "Relation context migration\nMode: {}\nIssues before: {}\nEligible relations: {}\nBlocked relations: {}\nRepaired relations: {}\nResolved tombstoned relations: {}\nRetired parallel atoms: {}\nIssues after: {}",
                 if report.dry_run { "dry_run" } else { "apply" },
                 report.before.issues.len(),
                 report.eligible_relation_ids.len(),
                 report.blocked_issues.len(),
                 report.repaired_relation_ids.len(),
+                report.tombstone_resolutions.len(),
                 report.retired_parallel_atom_ids.len(),
                 report.after.issues.len()
             ),
@@ -8092,14 +8158,23 @@ fn mcp_repair_relation_contexts_response(
                     "detail": issue.detail
                 })).collect::<Vec<_>>(),
                 "repaired_relation_ids": report.repaired_relation_ids,
+                "tombstone_resolutions": report.tombstone_resolutions.iter().map(|resolution| serde_json::json!({
+                    "relation_id": resolution.relation_id,
+                    "atom_id": hex::encode(resolution.atom_id),
+                    "action": resolution.action,
+                    "operation_id": resolution.operation_id,
+                    "backup_dir": resolution.backup_dir,
+                    "already_applied": resolution.already_applied
+                })).collect::<Vec<_>>(),
                 "retired_parallel_atom_ids": report.retired_parallel_atom_ids
                     .iter()
                     .map(hex::encode)
                     .collect::<Vec<_>>(),
                 "after": relation_context_audit_json(&report.after),
-                "preserved": ["cas_atoms", "relation_journal", "source_attachments", "history"],
-                "mutated": !report.dry_run && !report.repaired_relation_ids.is_empty(),
-                "durability": if report.dry_run { "not_applicable" } else { "committed" }
+                "preserved": ["canonical_cas_atoms", "source_attachments", "delete_history", "tombstones"],
+                "mutated": !report.dry_run && (!report.repaired_relation_ids.is_empty() || report.tombstone_resolutions.iter().any(|resolution| !resolution.already_applied)),
+                "durability": if report.dry_run { "not_applicable" } else { "backup_then_synced_replay_journal" },
+                "crash_atomicity_scope": "bounded relation-tombstone resolution replay; full N5 operation atomicity remains a roadmap gate"
             }),
         ),
         Err(error) => mcp_error(
@@ -10360,6 +10435,170 @@ mod tests {
         assert_eq!(
             reopened_audit["result"]["structuredContent"]["audit"]["active_relation_claim_count"],
             1
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn mcp_tombstoned_current_relation_requires_explicit_resolution_and_reopens() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("mcp-tombstoned-relation");
+        let config = StoreConfig::new(base.clone());
+        let relation_id = 1u64;
+        let relation_atom;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(PredicateContract {
+                    stable_key: "test:mcp_state".to_owned(),
+                    canonical_name: "MCP state".to_owned(),
+                    description: "Current state used by the MCP migration regression.".to_owned(),
+                    direction: PredicateDirection::Directed,
+                    inverse_stable_key: None,
+                    cardinality: PredicateCardinality::ManyToOne,
+                })
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let object = store.create_entity("obsolete", "state").unwrap();
+            relation_atom = store
+                .add_entity_claim(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    ObjTag::NODENUM,
+                    object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap()
+                .atom_id;
+            store
+                .delete_atom(relation_atom, DeleteReason::Obsolete)
+                .unwrap();
+            drop(store);
+
+            let relation = RelationRecord {
+                relation_id,
+                subject: subject.entity_id,
+                predicate: predicate.predicate_id,
+                object: object.entity_id,
+                atom_id: relation_atom,
+                evidence: Vec::new(),
+                valid_time: None,
+                context: 0,
+                confidence: 5000,
+                supersedes: None,
+                deprecated: false,
+                updated_at_unix_ns: 1,
+            };
+            let mut bytes = serde_json::to_vec(&relation).unwrap();
+            bytes.push(b'\n');
+            std::fs::write(config.relations_path(), bytes).unwrap();
+        }
+
+        let mut state = test_mcp_state(base.clone());
+        let audit_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 801,
+            "method": "tools/call",
+            "params": { "name": "audit_relation_contexts", "arguments": {} }
+        })
+        .to_string();
+        let audit: serde_json::Value =
+            serde_json::from_str(&process_mcp_request(&mut state, &audit_request).await).unwrap();
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["issues"][0]["kind"],
+            "relation_atom_tombstoned"
+        );
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["issues"][0]["repairable"],
+            false
+        );
+
+        let unresolved_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 802,
+            "method": "tools/call",
+            "params": {
+                "name": "repair_relation_contexts",
+                "arguments": { "relation_ids": [relation_id] }
+            }
+        })
+        .to_string();
+        let unresolved: serde_json::Value =
+            serde_json::from_str(&process_mcp_request(&mut state, &unresolved_request).await)
+                .unwrap();
+        assert_eq!(unresolved["error"]["code"], -32603);
+        assert!(
+            unresolved["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("operator must choose")
+        );
+
+        let resolution_arguments = serde_json::json!({
+            "relation_ids": [relation_id],
+            "tombstone_resolutions": [{
+                "relation_id": relation_id,
+                "action": "restore_atom",
+                "reason": "Reviewed MCP fixture deletion was erroneous"
+            }]
+        });
+        let dry_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 803,
+            "method": "tools/call",
+            "params": {
+                "name": "repair_relation_contexts",
+                "arguments": {
+                    "dry_run": true,
+                    "relation_ids": [relation_id],
+                    "tombstone_resolutions": resolution_arguments["tombstone_resolutions"].clone()
+                }
+            }
+        })
+        .to_string();
+        let dry: serde_json::Value =
+            serde_json::from_str(&process_mcp_request(&mut state, &dry_request).await).unwrap();
+        assert_eq!(dry["result"]["structuredContent"]["dry_run"], true);
+        assert_eq!(
+            dry["result"]["structuredContent"]["tombstone_resolutions"][0]["action"],
+            "restore_atom"
+        );
+        assert_eq!(
+            dry["result"]["structuredContent"]["tombstone_resolutions"][0]["backup_dir"],
+            "not-created-dry-run"
+        );
+
+        let apply_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 804,
+            "method": "tools/call",
+            "params": { "name": "repair_relation_contexts", "arguments": resolution_arguments }
+        })
+        .to_string();
+        let applied: serde_json::Value =
+            serde_json::from_str(&process_mcp_request(&mut state, &apply_request).await).unwrap();
+        assert_eq!(
+            applied["result"]["structuredContent"]["after"]["consistent"],
+            true
+        );
+        assert_eq!(
+            applied["result"]["structuredContent"]["tombstone_resolutions"][0]["atom_id"],
+            hex::encode(relation_atom)
+        );
+        assert_eq!(
+            applied["result"]["structuredContent"]["durability"],
+            "backup_then_synced_replay_journal"
+        );
+        drop(state);
+
+        let mut reopened = test_mcp_state(base);
+        let reopened_audit: serde_json::Value =
+            serde_json::from_str(&process_mcp_request(&mut reopened, &audit_request).await)
+                .unwrap();
+        assert_eq!(
+            reopened_audit["result"]["structuredContent"]["audit"]["consistent"],
+            true
         );
     }
 

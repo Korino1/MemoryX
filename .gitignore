@@ -12,6 +12,8 @@
 /test_*/
 /benchmarks/results/
 /benchmarks/rag_comparison/runs/
+__pycache__/
+*.py[cod]
 
 *.7z
 *.log
