@@ -10365,6 +10365,129 @@ mod tests {
 
     #[cfg(feature = "mcp")]
     #[tokio::test]
+    async fn mcp_many_to_many_relation_migration_is_batch_truthful() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("many-to-many-repair");
+        let mut state = test_mcp_state(base.clone());
+        let relation_ids;
+        {
+            let store = test_mcp_active_store_mut(&mut state);
+            assert_eq!(store.create_context(0).unwrap(), 0);
+            let predicate = store
+                .register_predicate(PredicateContract {
+                    stable_key: "depends_on".to_owned(),
+                    canonical_name: "depends on".to_owned(),
+                    description: "A module may depend on multiple modules.".to_owned(),
+                    direction: PredicateDirection::Directed,
+                    inverse_stable_key: None,
+                    cardinality: PredicateCardinality::ManyToMany,
+                })
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let first_object = store.create_entity("first", "component").unwrap();
+            let second_object = store.create_entity("second", "component").unwrap();
+            let first = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    first_object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            let second = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    second_object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_ids = vec![first.relation_id.unwrap(), second.relation_id.unwrap()];
+            assert!(store.audit_relation_contexts().unwrap().is_consistent());
+        }
+        drop(state);
+
+        let contexts_path = StoreConfig::new(base.clone()).contexts_path();
+        let mut contexts: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&contexts_path).unwrap()).unwrap();
+        contexts["contexts"][0]["active_claims"] = serde_json::json!({});
+        std::fs::write(&contexts_path, serde_json::to_vec(&contexts).unwrap()).unwrap();
+
+        let mut state = test_mcp_state(base.clone());
+        let dry_run_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 720,
+            "method": "tools/call",
+            "params": {
+                "name": "repair_relation_contexts",
+                "arguments": {
+                    "dry_run": true,
+                    "relation_ids": relation_ids.clone()
+                }
+            }
+        })
+        .to_string();
+        let dry_run_response = process_mcp_request(&mut state, &dry_run_request).await;
+        let dry_run: serde_json::Value = serde_json::from_str(&dry_run_response).unwrap();
+        assert_eq!(
+            dry_run["result"]["structuredContent"]["eligible_relation_ids"],
+            serde_json::json!(relation_ids.clone())
+        );
+        assert_eq!(
+            dry_run["result"]["structuredContent"]["blocked_issues"],
+            serde_json::json!([])
+        );
+
+        let repair_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 721,
+            "method": "tools/call",
+            "params": {
+                "name": "repair_relation_contexts",
+                "arguments": { "relation_ids": relation_ids.clone() }
+            }
+        })
+        .to_string();
+        let repair_response = process_mcp_request(&mut state, &repair_request).await;
+        let repair: serde_json::Value = serde_json::from_str(&repair_response).unwrap();
+        assert_eq!(
+            repair["result"]["structuredContent"]["repaired_relation_ids"],
+            serde_json::json!(relation_ids)
+        );
+        assert_eq!(
+            repair["result"]["structuredContent"]["after"]["issue_count"],
+            0
+        );
+        assert_eq!(
+            repair["result"]["structuredContent"]["after"]["active_relation_claim_count"],
+            2
+        );
+        drop(state);
+
+        let mut reopened = test_mcp_state(base);
+        let audit_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 722,
+            "method": "tools/call",
+            "params": { "name": "audit_relation_contexts", "arguments": {} }
+        })
+        .to_string();
+        let audit_response = process_mcp_request(&mut reopened, &audit_request).await;
+        let audit: serde_json::Value = serde_json::from_str(&audit_response).unwrap();
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["issue_count"],
+            0
+        );
+        assert_eq!(
+            audit["result"]["structuredContent"]["audit"]["active_relation_claim_count"],
+            2
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
     async fn mcp_transition_stats_and_integrity_are_store_backed_after_reopen() {
         let dir = tempdir().unwrap();
         let base = dir.path().join("transition");

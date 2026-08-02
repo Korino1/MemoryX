@@ -3244,9 +3244,9 @@ impl CtxManager {
         ctx_id: CtxId,
         claim: &ClaimData,
         atom_id: AtomId,
+        cardinality: Option<PredicateCardinality>,
     ) -> Result<bool, StoreError> {
         let expected_signature = Self::compute_claim_id(claim);
-        let expected_pattern = Self::compute_pattern_hash(claim);
         let ctx = self
             .get_ctx_mut(ctx_id)
             .ok_or(StoreError::ContextNotFound)?;
@@ -3268,10 +3268,11 @@ impl CtxManager {
             ));
         }
 
-        if ctx.active_claims.values().any(|active| {
-            Self::compute_pattern_hash(&active.claim) == expected_pattern
-                && Self::compute_claim_id(&active.claim) != expected_signature
-        }) {
+        if ctx
+            .active_claims
+            .values()
+            .any(|active| Self::relation_claims_conflict(&active.claim, claim, cardinality))
+        {
             return Err(StoreError::ClaimRejected(
                 "relation context repair conflicts with another active claim".to_owned(),
             ));
@@ -3288,6 +3289,25 @@ impl CtxManager {
         Ok(true)
     }
 
+    fn relation_claims_conflict(
+        active: &ClaimData,
+        incoming: &ClaimData,
+        cardinality: Option<PredicateCardinality>,
+    ) -> bool {
+        if active.pred != incoming.pred || Self::claims_equal(active, incoming) {
+            return false;
+        }
+        let same_subject = active.subj == incoming.subj;
+        let same_object = active.obj_tag == incoming.obj_tag && active.obj_val == incoming.obj_val;
+        match cardinality {
+            Some(PredicateCardinality::OneToOne) => same_subject || same_object,
+            Some(PredicateCardinality::OneToMany) => same_object,
+            Some(PredicateCardinality::ManyToOne) => same_subject,
+            Some(PredicateCardinality::ManyToMany) => false,
+            None => Self::compute_pattern_hash(active) == Self::compute_pattern_hash(incoming),
+        }
+    }
+
     /// Replace one explicitly identified active claim in the same context.
     ///
     /// This is the TMS operation used by current-state relation transitions:
@@ -3299,6 +3319,23 @@ impl CtxManager {
         old_atom_id: AtomId,
         claim: &ClaimData,
         new_atom_id: AtomId,
+    ) -> Result<CtxId, StoreError> {
+        self.replace_claim_with_atom_id_for_cardinality(
+            ctx_id,
+            old_atom_id,
+            claim,
+            new_atom_id,
+            None,
+        )
+    }
+
+    fn replace_claim_with_atom_id_for_cardinality(
+        &mut self,
+        ctx_id: CtxId,
+        old_atom_id: AtomId,
+        claim: &ClaimData,
+        new_atom_id: AtomId,
+        cardinality: Option<PredicateCardinality>,
     ) -> Result<CtxId, StoreError> {
         let mut preview = self.clone();
         let preview_ctx = preview
@@ -3313,9 +3350,10 @@ impl CtxManager {
                 "relation being replaced is not active in the selected context".to_owned(),
             ));
         }
-        if preview
-            .probe_conflict_with_atoms(ctx_id, claim, new_atom_id)
-            .is_some()
+        if preview_ctx
+            .active_claims
+            .values()
+            .any(|active| Self::relation_claims_conflict(&active.claim, claim, cardinality))
         {
             return Err(StoreError::ClaimRejected(
                 "replacement relation conflicts with another active claim".to_owned(),
@@ -7161,9 +7199,33 @@ impl MemoryX {
         ctx_id: CtxId,
         claim: &ClaimData,
         atom_id: AtomId,
+        cardinality: Option<PredicateCardinality>,
     ) -> Result<CtxId, StoreError> {
         let mut preview = self.ctx_manager.lock().clone();
-        preview.assert_claim_with_atom_id(ctx_id, claim, atom_id)
+        if cardinality.is_some() {
+            preview.reconcile_claim_with_atom_id(ctx_id, claim, atom_id, cardinality)?;
+            Ok(ctx_id)
+        } else {
+            preview.assert_claim_with_atom_id(ctx_id, claim, atom_id)
+        }
+    }
+
+    fn assert_relation_claim_with_atom_id(
+        &mut self,
+        ctx_id: CtxId,
+        claim: &ClaimData,
+        atom_id: AtomId,
+        cardinality: Option<PredicateCardinality>,
+    ) -> Result<CtxId, StoreError> {
+        self.ensure_authoring_context(ctx_id)?;
+        if cardinality.is_some() {
+            self.mutate_contexts(|manager| {
+                manager.reconcile_claim_with_atom_id(ctx_id, claim, atom_id, cardinality)?;
+                Ok(ctx_id)
+            })
+        } else {
+            self.assert_claim_with_atom_id(ctx_id, claim, atom_id)
+        }
     }
 
     fn ensure_authoring_context(&mut self, ctx_id: CtxId) -> Result<(), StoreError> {
@@ -7221,6 +7283,7 @@ impl MemoryX {
         manager: &CtxManager,
         relation: &RelationRecord,
         claim: &ClaimData,
+        cardinality: Option<PredicateCardinality>,
     ) -> Option<RelationContextIssue> {
         let Some(context) = manager.get_ctx(relation.context) else {
             let can_create_default = relation.context == 0 && manager.list_contexts().is_empty();
@@ -7241,7 +7304,6 @@ impl MemoryX {
         };
 
         let signature = CtxManager::compute_claim_id(claim);
-        let pattern = CtxManager::compute_pattern_hash(claim);
         if let Some(active) = context.active_claims.get(&signature)
             && active.atom_id == relation.atom_id
             && Self::claims_match(&active.claim, claim)
@@ -7263,10 +7325,11 @@ impl MemoryX {
             });
         }
 
-        if context.active_claims.values().any(|active| {
-            CtxManager::compute_pattern_hash(&active.claim) == pattern
-                && CtxManager::compute_claim_id(&active.claim) != signature
-        }) {
+        if context
+            .active_claims
+            .values()
+            .any(|active| CtxManager::relation_claims_conflict(&active.claim, claim, cardinality))
+        {
             return Some(RelationContextIssue {
                 relation_id: relation.relation_id,
                 atom_id: relation.atom_id,
@@ -7453,7 +7516,12 @@ impl MemoryX {
                 issues.push(issue);
                 continue;
             }
-            if let Some(mut issue) = Self::relation_context_issue(&manager, relation, &claim) {
+            let cardinality = self
+                .get_predicate(relation.predicate)?
+                .map(|predicate| predicate.contract.cardinality);
+            if let Some(mut issue) =
+                Self::relation_context_issue(&manager, relation, &claim, cardinality)
+            {
                 if issue.repairable
                     && let Err(detail) = self.validate_parallel_relation_projection(
                         &manager,
@@ -7515,8 +7583,8 @@ impl MemoryX {
         trigger: &str,
     ) -> Result<RelationReconciliationResult, StoreError> {
         let manager = self.ctx_manager.lock().clone();
-        let current_relation_atoms = self
-            .current_relation_records()?
+        let current_relations = self.current_relation_records()?;
+        let current_relation_atoms = current_relations
             .iter()
             .map(|relation| relation.atom_id)
             .collect::<HashSet<_>>();
@@ -7526,7 +7594,18 @@ impl MemoryX {
             let claim = Self::relation_claim(relation);
             self.validate_relation_atom_claim(relation, &claim)
                 .map_err(|issue| StoreError::Context(issue.detail))?;
-            if let Some(issue) = Self::relation_context_issue(&manager, relation, &claim) {
+            if let Some(issue) = self.relation_contract_issue(relation, &current_relations)? {
+                return Err(StoreError::Context(format!(
+                    "relation {} cannot be reconciled: {}",
+                    relation.relation_id, issue.detail
+                )));
+            }
+            let cardinality = self
+                .get_predicate(relation.predicate)?
+                .map(|predicate| predicate.contract.cardinality);
+            if let Some(issue) =
+                Self::relation_context_issue(&manager, relation, &claim, cardinality)
+            {
                 if !issue.repairable {
                     return Err(StoreError::Context(format!(
                         "relation {} cannot be reconciled: {}",
@@ -7546,7 +7625,7 @@ impl MemoryX {
                             relation.relation_id
                         ))
                     })?;
-                planned.push((relation.clone(), claim, parallel_atom));
+                planned.push((relation.clone(), claim, parallel_atom, cardinality));
             }
         }
         if planned.is_empty() {
@@ -7554,7 +7633,7 @@ impl MemoryX {
         }
 
         self.mutate_contexts(|manager| {
-            for (relation, claim, _) in &planned {
+            for (relation, claim, _, cardinality) in &planned {
                 if manager.get_ctx(relation.context).is_none() {
                     if relation.context != 0 || !manager.list_contexts().is_empty() {
                         return Err(StoreError::Context(format!(
@@ -7569,24 +7648,29 @@ impl MemoryX {
                         ));
                     }
                 }
-                manager.reconcile_claim_with_atom_id(relation.context, claim, relation.atom_id)?;
+                manager.reconcile_claim_with_atom_id(
+                    relation.context,
+                    claim,
+                    relation.atom_id,
+                    *cardinality,
+                )?;
             }
             Ok(())
         })?;
 
         let repaired_relation_ids = planned
             .iter()
-            .map(|(relation, _, _)| relation.relation_id)
+            .map(|(relation, _, _, _)| relation.relation_id)
             .collect::<Vec<_>>();
         let mut retired_parallel_atom_ids = planned
             .iter()
-            .filter_map(|(_, _, atom_id)| *atom_id)
+            .filter_map(|(_, _, atom_id, _)| *atom_id)
             .collect::<Vec<_>>();
         retired_parallel_atom_ids.sort_unstable();
         retired_parallel_atom_ids.dedup();
 
         let mut added_supersedes_edges = Vec::new();
-        for (relation, _, parallel_atom) in &planned {
+        for (relation, _, parallel_atom, _) in &planned {
             let Some(parallel_atom) = parallel_atom else {
                 continue;
             };
@@ -7646,7 +7730,7 @@ impl MemoryX {
         );
         let affected_atoms = planned
             .iter()
-            .flat_map(|(relation, _, parallel)| {
+            .flat_map(|(relation, _, parallel, _)| {
                 std::iter::once(relation.atom_id).chain(parallel.iter().copied())
             })
             .map(|atom_id| crate::cas::hex_encode(&atom_id))
@@ -7990,7 +8074,10 @@ impl MemoryX {
         if self.get_entity(object)?.is_none() {
             return Err(StoreError::Io(format!("entity {} not found", object)));
         }
-        self.require_managed_predicate(predicate)?;
+        let predicate_record = self.require_managed_predicate(predicate)?;
+        let cardinality = predicate_record
+            .as_ref()
+            .map(|record| record.contract.cardinality);
         if let Some(existing) = self
             .current_relation_records()?
             .into_iter()
@@ -8031,7 +8118,7 @@ impl MemoryX {
         let payload =
             build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
         let atom_id = compute_atom_id_from_payload(&payload)?;
-        let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id)?;
+        let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id, cardinality)?;
         let relation_id = self
             .read_relations()?
             .iter()
@@ -8060,7 +8147,8 @@ impl MemoryX {
             std::slice::from_ref(&claim),
             &evidence,
         )?;
-        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, atom_id)?;
+        let actual_ctx =
+            self.assert_relation_claim_with_atom_id(ctx_id, &claim, atom_id, cardinality)?;
         debug_assert_eq!(actual_ctx, relation.context);
         self.append_relation(&relation)?;
         Ok(AuthoringResult {
@@ -8086,6 +8174,10 @@ impl MemoryX {
             .rev()
             .find(|relation| relation.relation_id == old_relation_id)
             .ok_or_else(|| StoreError::Io(format!("relation {} not found", old_relation_id)))?;
+        let cardinality = self
+            .require_managed_predicate(predicate)?
+            .as_ref()
+            .map(|record| record.contract.cardinality);
         self.validate_relation_contract(subject, predicate, object, Some(old_relation_id))?;
         self.ensure_authoring_context(ctx_id)?;
 
@@ -8100,7 +8192,7 @@ impl MemoryX {
         let payload =
             build_authoring_payload(AtomType::FACT, std::slice::from_ref(&claim), &symbols)?;
         let atom_id = compute_atom_id_from_payload(&payload)?;
-        let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id)?;
+        let actual_ctx = self.preview_relation_context(ctx_id, &claim, atom_id, cardinality)?;
         let relation_id = self
             .read_relations()?
             .iter()
@@ -8130,7 +8222,12 @@ impl MemoryX {
             vec![claim.clone()],
             evidence.clone(),
         )?;
-        let actual_ctx = self.assert_claim_with_atom_id(ctx_id, &claim, update.new_atom_id)?;
+        let actual_ctx = self.assert_relation_claim_with_atom_id(
+            ctx_id,
+            &claim,
+            update.new_atom_id,
+            cardinality,
+        )?;
         debug_assert_eq!(update.new_atom_id, relation.atom_id);
         debug_assert_eq!(actual_ctx, relation.context);
         self.append_relation(&relation)?;
@@ -8174,6 +8271,10 @@ impl MemoryX {
                 old_relation_id
             )));
         }
+        let cardinality = self
+            .require_managed_predicate(old_relation.predicate)?
+            .as_ref()
+            .map(|record| record.contract.cardinality);
         if old_relation.object == new_object {
             return Err(StoreError::Io(format!(
                 "relation {} already has object {}",
@@ -8225,7 +8326,13 @@ impl MemoryX {
         }
         let mut context_preview = self.ctx_manager.lock().clone();
         context_preview
-            .replace_claim_with_atom_id(ctx_id, old_relation.atom_id, &claim, atom_id)
+            .replace_claim_with_atom_id_for_cardinality(
+                ctx_id,
+                old_relation.atom_id,
+                &claim,
+                atom_id,
+                cardinality,
+            )
             .map_err(|error| {
                 StoreError::Context(format!("relation transition preflight failed: {error}"))
             })?;
@@ -8264,12 +8371,18 @@ impl MemoryX {
         for source_id in &source_ids {
             self.set_atom_source(atom_id, *source_id)?;
         }
-        self.replace_claim_with_atom_id(ctx_id, old_relation.atom_id, &claim, atom_id)
-            .map_err(|error| {
-                StoreError::Context(format!(
-                    "relation transition context persistence failed: {error}"
-                ))
-            })?;
+        self.replace_relation_claim_with_atom_id(
+            ctx_id,
+            old_relation.atom_id,
+            &claim,
+            atom_id,
+            cardinality,
+        )
+        .map_err(|error| {
+            StoreError::Context(format!(
+                "relation transition context persistence failed: {error}"
+            ))
+        })?;
         self.append_relation(&relation)?;
 
         let mut details = HashMap::new();
@@ -9083,15 +9196,22 @@ impl MemoryX {
         self.mutate_contexts(|manager| manager.assert_claim_with_atom_id(ctx_id, claim, atom_id))
     }
 
-    fn replace_claim_with_atom_id(
+    fn replace_relation_claim_with_atom_id(
         &mut self,
         ctx_id: CtxId,
         old_atom_id: AtomId,
         claim: &ClaimData,
         new_atom_id: AtomId,
+        cardinality: Option<PredicateCardinality>,
     ) -> Result<CtxId, StoreError> {
         self.mutate_contexts(|manager| {
-            manager.replace_claim_with_atom_id(ctx_id, old_atom_id, claim, new_atom_id)
+            manager.replace_claim_with_atom_id_for_cardinality(
+                ctx_id,
+                old_atom_id,
+                claim,
+                new_atom_id,
+                cardinality,
+            )
         })
     }
 
@@ -14915,6 +15035,116 @@ mod tests {
     }
 
     #[test]
+    fn many_to_many_relations_share_a_context_and_migrate_as_one_batch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("many-to-many-migration"));
+        let first_id;
+        let second_id;
+        let first_atom;
+        let second_atom;
+        let predicate_id;
+        let subject_id;
+        let second_object_id;
+        let replacement_id;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            predicate_id = store
+                .register_predicate(managed_contract(
+                    "depends_on",
+                    PredicateCardinality::ManyToMany,
+                ))
+                .unwrap()
+                .predicate_id;
+            subject_id = store
+                .create_entity("module", "component")
+                .unwrap()
+                .entity_id;
+            let first_object = store.create_entity("first", "component").unwrap();
+            let second_object = store.create_entity("second", "component").unwrap();
+            second_object_id = second_object.entity_id;
+            replacement_id = store
+                .create_entity("replacement", "component")
+                .unwrap()
+                .entity_id;
+
+            let first = store
+                .assert_relation(
+                    subject_id,
+                    predicate_id,
+                    first_object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            let second = store
+                .assert_relation(
+                    subject_id,
+                    predicate_id,
+                    second_object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            first_id = first.relation_id.unwrap();
+            second_id = second.relation_id.unwrap();
+            first_atom = first.atom_id;
+            second_atom = second.atom_id;
+            assert_eq!(first.ctx_id, 0);
+            assert_eq!(second.ctx_id, 0);
+            assert_eq!(store.list_contexts().len(), 1);
+            assert!(store.audit_relation_contexts().unwrap().is_consistent());
+
+            store
+                .mutate_contexts(|manager| {
+                    manager
+                        .get_ctx_mut(0)
+                        .ok_or(StoreError::ContextNotFound)?
+                        .active_claims
+                        .retain(|_, active| {
+                            active.atom_id != first_atom && active.atom_id != second_atom
+                        });
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        let dry_run = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: true,
+                allow_partial: false,
+                relation_ids: vec![first_id, second_id],
+            })
+            .unwrap();
+        assert_eq!(dry_run.eligible_relation_ids, vec![first_id, second_id]);
+        assert!(dry_run.blocked_issues.is_empty());
+        let applied = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![first_id, second_id],
+            })
+            .unwrap();
+        assert_eq!(applied.repaired_relation_ids, vec![first_id, second_id]);
+        assert!(applied.after.is_consistent());
+
+        let duplicate = reopened
+            .assert_relation(subject_id, predicate_id, second_object_id, 0, Vec::new())
+            .unwrap();
+        assert_eq!(duplicate.relation_id, Some(second_id));
+        let transitioned = reopened
+            .transition_relation(first_id, replacement_id, 0, Vec::new(), Vec::new())
+            .unwrap();
+        assert_eq!(transitioned.previous_relation_id, first_id);
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        assert!(reopened_again.verify_integrity().unwrap().is_valid());
+        assert_eq!(reopened_again.current_relation_records().unwrap().len(), 2);
+    }
+
+    #[test]
     fn relation_context_repair_recovers_both_context_publish_interruption_states() {
         let temp = tempfile::TempDir::new().unwrap();
         let config = StoreConfig::new(temp.path().join("repair-interruption"));
@@ -14960,7 +15190,12 @@ mod tests {
             missing_bytes = fs::read(config.contexts_path()).unwrap();
             let mut repaired = store.ctx_manager.lock().clone();
             repaired
-                .reconcile_claim_with_atom_id(0, &claim, relation_atom)
+                .reconcile_claim_with_atom_id(
+                    0,
+                    &claim,
+                    relation_atom,
+                    Some(PredicateCardinality::ManyToOne),
+                )
                 .unwrap();
             repaired_bytes = serde_json::to_vec(&repaired).unwrap();
         }

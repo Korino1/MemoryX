@@ -96,6 +96,12 @@ duplicate relation assertions are idempotent and reconcile only an unambiguous
 legacy projection; different evidence, cardinality conflicts, and unavailable
 atoms still fail closed.
 
+Managed relation activation and migration use the predicate registry's durable
+cardinality contract. In particular, `one_to_many` and `many_to_many` may keep
+multiple permitted targets active in one context; `many_to_one` and
+`one_to_one` still reject incompatible current values. A missing managed
+predicate contract is never guessed.
+
 Context migration publishes `contexts.json` through a synchronized temp file
 and backup replacement. A restart before publication observes the old state;
 a restart after publication observes the repaired state, and reapplying is a
