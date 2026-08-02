@@ -1,0 +1,26 @@
+{
+  "schema_version": "memoryx.compact-recovery.v1",
+  "status": "ready_for_compact",
+  "recorded_at_utc": "2026-08-02T06:42:25.8931029Z",
+  "session_state": "BOUND",
+  "session_id": "019fc0f9-f099-79a2-be80-ebe515628fa5",
+  "acceptance_state": "passed_with_limitations",
+  "document_hashes": {
+    "TASK.md": "2AA1FE6A0E1347BE5EF9FB4F0009318E1F6D68FD09448EF11A7ED61573D03159",
+    "PLAN.md": "D296EAECE168E406E398B09AFD8601107D01F4C09F0BD82214635A0896B84B22",
+    "PROGRESS.md": "92B80DE4B5024555AC2EF922207031F42408CB18D3C9A7FCC10749613058C9A1",
+    "DECISIONS.md": "E2C60630348699F5AF4F3B20395B5D88CE37132D6DA239CCAC784CB958D307FB"
+  },
+  "compact_context_sha256": "8657DF983D126F935EB8C99AC1C81D6439B963CE3E1940FA6C9B580E2338A83F",
+  "recovery_sources": [
+    "CANONICAL_PACKET.md",
+    "TASK.md",
+    "PLAN.md",
+    "PROGRESS.md",
+    "DECISIONS.md",
+    "ACCEPTANCE.md",
+    "COMPACT_CONTEXT.md",
+    "MEMORYX_CONTRACT.json"
+  ],
+  "statement": "This record contains only hashes and references to state saved before compact."
+}

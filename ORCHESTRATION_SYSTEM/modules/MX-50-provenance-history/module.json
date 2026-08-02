@@ -1,0 +1,56 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-50",
+  "slug": "provenance-history",
+  "display_name": "Provenance, Evidence and History",
+  "responsibility": "Own source registration, evidence identity, multi-source atom attachment, provenance traversal, supersession, tombstones and durable history semantics.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-50-provenance-history",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-50-provenance-history",
+    "path": ".memoryx/bases/mx-50-provenance-history",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/ingest/"
+    ],
+    "shared_surfaces": [
+      "source, provenance and history methods in src/store/api.rs",
+      "src/cas/evidence.rs encoding with MX-10",
+      "AnswerGraph evidence projection with MX-40"
+    ],
+    "forbidden_paths": [
+      "src/context/",
+      "src/crdt/"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/Расширение.txt",
+    "Concept/SKF.txt#20-ingest"
+  ],
+  "dossiers": [
+    "DOSSIERS/EVIDENCE_IDENTITY.md",
+    "DOSSIERS/PROVENANCE_HISTORY.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

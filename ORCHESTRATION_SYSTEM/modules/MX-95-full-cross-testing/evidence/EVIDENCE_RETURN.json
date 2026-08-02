@@ -1,0 +1,219 @@
+{
+  "schema_version": "memoryx.evidence-return.v1",
+  "module": {
+    "id": "MX-95",
+    "slug": "full-cross-testing"
+  },
+  "session": {
+    "state": "BOUND",
+    "id": "019fc0f9-f099-79a2-be80-ebe515628fa5"
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh"
+  },
+  "task": "Fresh post-fix full MCP and cross-tool audit of MemoryX 2.0.5 under authoritative run 20260802T062756339Z.",
+  "gates": [
+    {
+      "name": "binary_identity",
+      "status": "passed",
+      "evidence": "Observed target/release/memoryx.exe as memoryx 2.0.5, 6165504 bytes, SHA-256 7e9b26731625830b1a715429de87d502fd9169b7f8e1ff3e8969939bbbd7a969."
+    },
+    {
+      "name": "exact_mcp_lifecycle",
+      "status": "passed",
+      "evidence": "Fresh surface.json records initialize/tools/list success for 2025-11-25, 2025-06-18 and 2024-11-05, silent initialized notifications, exit 0 and no orphan for every owned child."
+    },
+    {
+      "name": "authoritative_surface_inventory",
+      "status": "passed",
+      "evidence": "The first live tools/list for run 20260802T062756339Z returned 47 observed and 47 unique tools with no duplicates; surface digest 77a3e319d6b56ee5aaa8e8d70f4467ec1b2b9853aab1eb75a8b2b55cda553027."
+    },
+    {
+      "name": "tool_mappings",
+      "status": "passed",
+      "evidence": "coverage-ledger.accepted.json maps all 47 discovered tools to observed MCP requests, CLI or live-owner-client exposure, current Rust dispatch/library anchors, schemas, classifications and limitations."
+    },
+    {
+      "name": "direct_tool_coverage",
+      "status": "passed",
+      "evidence": "Fresh full-attempt-01 executed and passed 47/47 direct tools across 66 recorded calls with request/response hashes."
+    },
+    {
+      "name": "cross_tool_coverage",
+      "status": "passed",
+      "evidence": "Fresh sequences.json contains 14 passed meaningful cross-tool sequences and every discovered tool participates in at least one."
+    },
+    {
+      "name": "live_owner_concurrency_reopen",
+      "status": "passed",
+      "evidence": "Live-owner proxy mutation was observed, competing direct writer returned expected exit 73, primary/reopen owners exited 0, and no foreign process was stopped."
+    },
+    {
+      "name": "integrity_provenance_conflict_query_contract",
+      "status": "passed",
+      "evidence": "Clean-base integrity checked 16 valid atoms with zero invalid/missing and consistent relations; provenance resolved an exact source path; conflict and invalid QueryContract negative cases failed closed."
+    },
+    {
+      "name": "response_limit",
+      "status": "passed",
+      "evidence": "Observed max_bytes=2048, max_items=1, emitted_bytes=1131, bytes_truncated=true and items_truncated=true."
+    },
+    {
+      "name": "migration_idempotence",
+      "status": "passed",
+      "evidence": "A deliberately removed disposable relation projection was detected, selected by dry-run, repaired durably, audited consistent and unchanged by repeat apply."
+    },
+    {
+      "name": "post_commit_process_death_recovery",
+      "status": "passed",
+      "evidence": "After killing only the owned child following an acknowledged ingest, reopen returned lexical count=1 and valid integrity with one checked atom. This is not an in-flight N5 boundary test."
+    },
+    {
+      "name": "postfix_semantic_determinism",
+      "status": "passed",
+      "evidence": "32 identical same-process queries plus one after reopen produced one semantic result and one stable IncompleteEvidence description; both owners exited 0 and integrity passed. Three full variants differed only in response framing byte counters explicitly excluded from semantic comparison."
+    },
+    {
+      "name": "fail_closed_coverage_validator",
+      "status": "passed",
+      "evidence": "Final validator passed the real 47-tool/66-call/14-sequence/13-resilience/32+1 join. Nine controls passed, including fail-closed rejection of missing or duplicate tools, missing direct/cross evidence, missing hashes, nondeterministic semantics and fewer than 32 repetitions."
+    },
+    {
+      "name": "module_memoryx_provenance",
+      "status": "passed",
+      "evidence": "Durable atom d00b222f813e35229cadd073f2fefa950e8fc4d2b1201c8996b0e79de767cb10 exposes provenance source IDs 6-17; the verified retry registered IDs 12-17 and module-base integrity is valid."
+    },
+    {
+      "name": "module_acceptance",
+      "status": "passed",
+      "evidence": "All task first-pass and post-fix gates passed for the checked 2.0.5 binary and audited query shape, with framing-byte and scope limitations explicit."
+    },
+    {
+      "name": "evidence_return_schema",
+      "status": "passed",
+      "evidence": "PowerShell Test-Json validates this file against ORCHESTRATION_SYSTEM/schemas/evidence-return.schema.json."
+    },
+    {
+      "name": "hook_compact_cache_model_quality_semantic_n5",
+      "status": "not_run",
+      "evidence": "Structural module checks and this runtime audit do not prove real hook lifecycle, real compact-resume, cache reuse, model quality, total MemoryX semantic acceptance or N5 completion."
+    }
+  ],
+  "changed_artifacts": [
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/TASK.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/PLAN.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/PROGRESS.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/DECISIONS.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/ACCEPTANCE.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/COMPACT_CONTEXT.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/state/ACTIVE_RUN_ID.txt",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/state/RECOVERY.json",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/DOSSIERS/TOOL_INVENTORY.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/DOSSIERS/CROSS_TOOL_MATRIX.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/DOSSIERS/TEST_EVIDENCE.md",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/run_postfix_determinism.py",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/run_resilience_audit.py",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/validate_coverage.py",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/test_validator_fail_closed.py",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/finalize_postfix_audit.py",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/register_module_evidence.py",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/MEMORYX_REGISTRATION_20260802T062756339Z_attempt-02.json",
+    "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/EVIDENCE_RETURN.json"
+  ],
+  "commands": [
+    {
+      "command": "target/release/memoryx.exe --version; Get-Item target/release/memoryx.exe; Get-FileHash target/release/memoryx.exe -Algorithm SHA256",
+      "exit_code": 0,
+      "observed_result": "Observed memoryx 2.0.5, 6165504 bytes and the required SHA-256."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/capture_surface.py --binary target/release/memoryx.exe --repo-root . --output-root ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs --run-id 20260802T062756339Z --expected-count 47",
+      "exit_code": 1,
+      "observed_result": "Harness invocation stopped before MCP because output-root pointed at the existing common runs directory; no runtime process or defect was created."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/capture_surface.py --binary target/release/memoryx.exe --repo-root . --output-root ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z --run-id 20260802T062756339Z --expected-count 47",
+      "exit_code": 0,
+      "observed_result": "Fresh authoritative 47/47 unique surface and all three exact protocol lifecycles passed."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/run_full_audit.py --binary target/release/memoryx.exe --repo-root . --surface ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/surface.json --output ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/full-attempt-01 --run-id 20260802T062756339Z",
+      "exit_code": 0,
+      "observed_result": "47 direct tools, 66 calls and 14 cross-tool sequences passed; primary and reopened owners exited 0."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/run_postfix_determinism.py --binary target/release/memoryx.exe --repo-root . --base-name mx-95-disposable-20260802T062756339Z-primary --output ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/determinism-postfix --repetitions 32",
+      "exit_code": 2,
+      "observed_result": "Diagnostic gate was over-strict on complete results: three variants were observed, differing only in response_limits.emitted_bytes; description was unique and owners exited 0."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/run_postfix_determinism.py --binary target/release/memoryx.exe --repo-root . --base-name mx-95-disposable-20260802T062756339Z-primary --output ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/determinism-postfix-attempt-02 --repetitions 32",
+      "exit_code": 0,
+      "observed_result": "32 same-process plus one reopen query produced one semantic result and one IncompleteEvidence description; integrity and both exits passed."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/run_resilience_audit.py --binary target/release/memoryx.exe --repo-root . --run-root ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z --run-id 20260802T062756339Z --primary-name mx-95-disposable-20260802T062756339Z-primary --core-attempt full-attempt-01 --attempt 1",
+      "exit_code": 0,
+      "observed_result": "All 13 resilience cases passed and coverage-ledger.final.json was produced."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/finalize_postfix_audit.py --binary target/release/memoryx.exe --run-root ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z --core-attempt full-attempt-01 --resilience-attempt resilience-attempt-01 --determinism-dir determinism-postfix-attempt-02 --validator-controls validator-controls-attempt-02 --expected-version 2.0.5 --expected-sha256 7E9B26731625830B1A715429DE87D502FD9169B7F8E1FF3E8969939BBBD7A969 --expected-size 6165504",
+      "exit_code": 0,
+      "observed_result": "Joined binary, surface, core, resilience, determinism and validator-control evidence; postfix-run-summary passed."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/validate_coverage.py --surface ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/surface.json --ledger ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/coverage-ledger.accepted.json --calls ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/full-attempt-01/calls.jsonl --sequences ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/full-attempt-01/sequences.json --resilience ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/resilience-attempt-01/resilience-report.json --determinism ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/determinism-postfix-attempt-02/determinism-report.json --report ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/coverage-validation.accepted.json",
+      "exit_code": 0,
+      "observed_result": "47 ledger tools, 66 calls, 14 sequences, 13 resilience cases and the 32+1 determinism gate passed with no failures."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/test_validator_fail_closed.py --validator ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/validate_coverage.py --surface ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/surface.json --ledger ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/coverage-ledger.accepted.json --calls ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/full-attempt-01/calls.jsonl --sequences ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/full-attempt-01/sequences.json --determinism ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/determinism-postfix-attempt-02/determinism-report.json --output ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z/validator-controls-attempt-02",
+      "exit_code": 0,
+      "observed_result": "All nine baseline and corruption controls observed their expected exits."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/register_module_evidence.py --binary target/release/memoryx.exe --repo-root . --run-root ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z --run-id 20260802T062756339Z --output ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/MEMORYX_REGISTRATION_20260802T062756339Z.json",
+      "exit_code": 1,
+      "observed_result": "Six sources and attachments committed, but the local harness failed to unwrap text-result provenance; raw logs were preserved and no production defect was claimed."
+    },
+    {
+      "command": "python -B ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/scripts/register_module_evidence.py --binary target/release/memoryx.exe --repo-root . --run-root ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/runs/20260802T062756339Z --run-id 20260802T062756339Z --output ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/MEMORYX_REGISTRATION_20260802T062756339Z_attempt-02.json",
+      "exit_code": 0,
+      "observed_result": "Verified source IDs 12-17 and provenance IDs 6-17 on atom d00b222f813e35229cadd073f2fefa950e8fc4d2b1201c8996b0e79de767cb10; integrity valid and owner exit 0."
+    },
+    {
+      "command": "pwsh -NoLogo -ExecutionPolicy Bypass -File ORCHESTRATION_SYSTEM/scripts/validate_module.ps1 -Module MX-95 -RequireBase",
+      "exit_code": 0,
+      "observed_result": "Structural module validation passed while explicitly not proving live hooks, compact/resume, cache reuse, model quality, semantic acceptance or N5."
+    },
+    {
+      "command": "Test-Json -Json (Get-Content -Raw ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/EVIDENCE_RETURN.json) -SchemaFile ORCHESTRATION_SYSTEM/schemas/evidence-return.schema.json",
+      "exit_code": 0,
+      "observed_result": "EvidenceReturn validates against memoryx.evidence-return.v1."
+    }
+  ],
+  "memoryx": {
+    "base_path": ".memoryx/bases/mx-95-full-cross-testing",
+    "provenance_refs": [
+      "atom:d00b222f813e35229cadd073f2fefa950e8fc4d2b1201c8996b0e79de767cb10",
+      "source:12:surface.json",
+      "source:13:coverage-ledger.accepted.json",
+      "source:14:postfix-run-summary.json",
+      "source:15:resilience-attempt-01/resilience-report.json",
+      "source:16:determinism-postfix-attempt-02/determinism-report.json",
+      "source:17:validator-controls-attempt-02/mutation-control-report.json",
+      "provenance-observed-source-set:6-17"
+    ]
+  },
+  "unresolved_conflicts": [],
+  "unknowns": [
+    "Full serialized AnswerPacks had three response framing variants caused solely by emitted byte counters; semantic content and the IncompleteEvidence description were stable.",
+    "The determinism gate covers one module-owned snapshot and one query shape and is not total MemoryX semantic acceptance.",
+    "No in-flight persistence-boundary crash matrix was run; N5 remains open.",
+    "Real hook lifecycle, real compact-resume, cache reuse, hidden-context retention and model quality remain unproved.",
+    "The root developer's Cargo.toml, Cargo.lock and src/store/api.rs changes were present before MX-95 execution and were not modified by this module."
+  ],
+  "next_step": "MX-ROOT should accept the bounded MX95-001 post-fix result, MX-40 and MX-70 should retain the deterministic limitation/MCP regressions, and MX-90 may consume run 20260802T062756339Z for conformance; rerun MX-95 from a new tools/list after any binary or surface change."
+}

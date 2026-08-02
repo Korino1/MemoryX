@@ -1,0 +1,567 @@
+{
+  "schema_version": "memoryx.mx95.postfix-determinism.v1",
+  "observed_at_utc": "2026-08-02T06:31:37.281198+00:00",
+  "binary": {
+    "path": "E:\\Rust\\AI\\MemoryX\\MemoryX_2\\target\\release\\memoryx.exe",
+    "size_bytes": 6165504,
+    "sha256": "7e9b26731625830b1a715429de87d502fd9169b7f8e1ff3e8969939bbbd7a969"
+  },
+  "base_name": "mx-95-disposable-20260802T062756339Z-primary",
+  "query_arguments": {
+    "query_text": "mx95_provenance_marker",
+    "ctx_id": 0
+  },
+  "same_process_repetitions": 32,
+  "after_reopen_repetitions": 1,
+  "observations": [
+    {
+      "phase": "same_process",
+      "iteration": 1,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 2,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 3,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 4,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 5,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 6,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 7,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 8,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 9,
+      "full_answer_sha256": "9e72e709253a85f436aad9088df9cc02a54afae146713ed3a985ce1c72d85a49",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 10,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 11,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 12,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 13,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 14,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 15,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 16,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 17,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 18,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 19,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 20,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 21,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 22,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 23,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 24,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 25,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 26,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 27,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 28,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 29,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 30,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 31,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "same_process",
+      "iteration": 32,
+      "full_answer_sha256": "104ac80867ae50468a5e6ca8d8b866673044a18b04a9008d75cc952e952a564c",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    },
+    {
+      "phase": "after_reopen",
+      "iteration": 1,
+      "full_answer_sha256": "f275592dd876e6626454817856d76de7e20599c8e28527acd845a2ae5a3a2813",
+      "semantic_projection_sha256": "5bfc6b2815eeecd2fae73bc89422c6d8e1986e1ea55202497d7c678025cf6ad2",
+      "incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+      "status": "NoMatch",
+      "snapshot": {
+        "cas_atom_count": 16,
+        "context_id": 0,
+        "graph_edge_count": 23,
+        "graph_node_count": 9571,
+        "index_generation": 16,
+        "solver_version": "2.0.5"
+      }
+    }
+  ],
+  "unique_same_process_full_results": 2,
+  "unique_same_process_semantic_results": 1,
+  "unique_all_full_results": 3,
+  "unique_all_semantic_results": 1,
+  "unique_incomplete_evidence_descriptions": 1,
+  "stable_incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+  "semantic_projection_excluded_fields": [
+    "response_limits.emitted_bytes",
+    "response_limits.original_bytes"
+  ],
+  "integrity_valid_after_reopen": true,
+  "process_exit_codes": [
+    0,
+    0
+  ],
+  "passed": true,
+  "limitations": [
+    "Full serialized AnswerPacks may differ in response framing byte counters; those counters are reported separately and are excluded from the semantic projection.",
+    "This gate covers one module-owned snapshot and one query shape; it is not total MemoryX semantic acceptance.",
+    "It does not prove hook lifecycle, compact/resume, cache reuse, model quality, or N5 completion."
+  ]
+}

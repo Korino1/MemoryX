@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memoryx.local/schemas/orchestration-module.v1.json",
+  "title": "MemoryX orchestration module",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "slug",
+    "display_name",
+    "responsibility",
+    "path",
+    "base",
+    "execution",
+    "session",
+    "ownership",
+    "canonical_refs",
+    "dossiers",
+    "hooks",
+    "evidence_return_schema"
+  ],
+  "properties": {
+    "schema_version": {"const": "memoryx.orchestration-module.v1"},
+    "id": {"type": "string", "pattern": "^MX-(ROOT|[0-9]{2})$"},
+    "slug": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "display_name": {"type": "string", "minLength": 3},
+    "responsibility": {"type": "string", "minLength": 20},
+    "path": {"type": "string", "minLength": 1},
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "name", "path", "max_mutable_owners"],
+      "properties": {
+        "scope": {"const": "project-local"},
+        "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "path": {"type": "string", "pattern": "^\\.memoryx/bases/[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "max_mutable_owners": {"const": 1}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "reasoning_effort", "forbidden_reasoning_effort", "reassert_on_start_resume"],
+      "properties": {
+        "model": {"const": "gpt-5.6-sol"},
+        "reasoning_effort": {"const": "xhigh"},
+        "forbidden_reasoning_effort": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "contains": {"const": "max"},
+          "items": {"type": "string"}
+        },
+        "reassert_on_start_resume": {"const": true}
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_file", "initial_state", "resume_only_when_bound", "never_synthesize_uuid"],
+      "properties": {
+        "binding_file": {"const": "session_id.txt"},
+        "initial_state": {"const": "UNBOUND"},
+        "resume_only_when_bound": {"const": true},
+        "never_synthesize_uuid": {"const": true}
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owned_paths", "shared_surfaces", "forbidden_paths"],
+      "properties": {
+        "owned_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "shared_surfaces": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "forbidden_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "canonical_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "dossiers": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^DOSSIERS/[A-Z0-9_]+\\.md$"}
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_start", "pre_compact", "post_compact"],
+      "properties": {
+        "session_start": {"const": "hooks/SessionStart.ps1"},
+        "pre_compact": {"const": "hooks/PreCompact.ps1"},
+        "post_compact": {"const": "hooks/PostCompact.ps1"}
+      }
+    },
+    "evidence_return_schema": {
+      "enum": [
+        "schemas/evidence-return.schema.json",
+        "../../schemas/evidence-return.schema.json"
+      ]
+    }
+  }
+}

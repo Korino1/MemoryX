@@ -1,0 +1,34 @@
+{
+  "schema_version": "memoryx.evidence-return.v1",
+  "module": {
+    "id": "MX-30",
+    "slug": "contexts-tms"
+  },
+  "session": {
+    "state": "UNBOUND",
+    "id": null
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh"
+  },
+  "task": "No active task.",
+  "gates": [
+    {
+      "name": "module_acceptance",
+      "status": "not_run",
+      "evidence": "No task has been activated."
+    }
+  ],
+  "changed_artifacts": [],
+  "commands": [],
+  "memoryx": {
+    "base_path": ".memoryx/bases/mx-30-contexts-tms",
+    "provenance_refs": []
+  },
+  "unresolved_conflicts": [],
+  "unknowns": [
+    "No live module execution has been observed."
+  ],
+  "next_step": "Activate a bounded task through the root manifest registry."
+}

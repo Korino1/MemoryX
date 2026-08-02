@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memoryx.local/schemas/evidence-return.v1.json",
+  "title": "MemoryX module EvidenceReturn",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "session",
+    "execution",
+    "task",
+    "gates",
+    "changed_artifacts",
+    "commands",
+    "memoryx",
+    "unresolved_conflicts",
+    "unknowns",
+    "next_step"
+  ],
+  "properties": {
+    "schema_version": {"const": "memoryx.evidence-return.v1"},
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "slug"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^MX-(ROOT|[0-9]{2})$"},
+        "slug": {"type": "string", "minLength": 1}
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "id"],
+      "properties": {
+        "state": {"enum": ["UNBOUND", "BOUND"]},
+        "id": {"type": ["string", "null"], "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "reasoning_effort"],
+      "properties": {
+        "model": {"const": "gpt-5.6-sol"},
+        "reasoning_effort": {"const": "xhigh"}
+      }
+    },
+    "task": {"type": "string", "minLength": 1},
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "evidence"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "status": {"enum": ["passed", "failed", "blocked", "not_run"]},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "changed_artifacts": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exit_code", "observed_result"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1},
+          "exit_code": {"type": ["integer", "null"]},
+          "observed_result": {"type": "string"}
+        }
+      }
+    },
+    "memoryx": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_path", "provenance_refs"],
+      "properties": {
+        "base_path": {"type": "string", "pattern": "^\\.memoryx/bases/"},
+        "provenance_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "unresolved_conflicts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "unknowns": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "next_step": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"session": {"properties": {"state": {"const": "UNBOUND"}}}}},
+      "then": {"properties": {"session": {"properties": {"id": {"type": "null"}}}}}
+    },
+    {
+      "if": {"properties": {"session": {"properties": {"state": {"const": "BOUND"}}}}},
+      "then": {"properties": {"session": {"properties": {"id": {"type": "string"}}}}}
+    }
+  ]
+}

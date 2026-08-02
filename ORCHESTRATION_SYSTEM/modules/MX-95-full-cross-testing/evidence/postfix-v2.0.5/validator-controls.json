@@ -1,0 +1,101 @@
+{
+  "schema_version": "memoryx.mx95.validator-mutation-controls.v1",
+  "synthetic_fixture_is_runtime_evidence": false,
+  "results": [
+    {
+      "name": "baseline_join",
+      "expected_exit_code": 0,
+      "observed_exit_code": 0,
+      "passed": true,
+      "validator_failures": []
+    },
+    {
+      "name": "missing_tool",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "ledger tool set differs from authoritative tools/list: missing=['active_base'], extra=[]"
+      ]
+    },
+    {
+      "name": "duplicate_tool",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "coverage ledger contains duplicate tool names"
+      ]
+    },
+    {
+      "name": "missing_direct_case",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "active_base: direct case 'D-BASE-002' is absent",
+        "active_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "connect_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "list_bases: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "query_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "switch_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002"
+      ]
+    },
+    {
+      "name": "missing_cross_case",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "active_base: cross sequence 'SQ-DOES-NOT-EXIST' is absent"
+      ]
+    },
+    {
+      "name": "missing_cross_evidence",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "batch_ingest: cross sequence SQ-ATOM-LIFECYCLE refers to missing evidence CASE-DOES-NOT-EXIST",
+        "correct_claim: cross sequence SQ-ATOM-LIFECYCLE refers to missing evidence CASE-DOES-NOT-EXIST",
+        "delete_atom: cross sequence SQ-ATOM-LIFECYCLE refers to missing evidence CASE-DOES-NOT-EXIST",
+        "history: cross sequence SQ-ATOM-LIFECYCLE refers to missing evidence CASE-DOES-NOT-EXIST",
+        "supersede_claim: cross sequence SQ-ATOM-LIFECYCLE refers to missing evidence CASE-DOES-NOT-EXIST",
+        "update_atom: cross sequence SQ-ATOM-LIFECYCLE refers to missing evidence CASE-DOES-NOT-EXIST"
+      ]
+    },
+    {
+      "name": "passed_without_observed_evidence",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "active_base: passed direct case lacks observed request/response evidence",
+        "active_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "connect_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "list_bases: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "query_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002",
+        "switch_base: cross sequence SQ-BASE refers to missing evidence D-BASE-002"
+      ]
+    },
+    {
+      "name": "nondeterministic_semantics",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "post-fix semantic query result is not unique"
+      ]
+    },
+    {
+      "name": "insufficient_determinism_repetitions",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "passed": true,
+      "validator_failures": [
+        "post-fix deterministic query report has fewer than 32 repetitions"
+      ]
+    }
+  ],
+  "passed": true
+}

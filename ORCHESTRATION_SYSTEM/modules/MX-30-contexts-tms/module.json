@@ -1,0 +1,58 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-30",
+  "slug": "contexts-tms",
+  "display_name": "Contexts, TMS, Claims and Conflicts",
+  "responsibility": "Own context lineage, active claim projection, relation state, branching, conflict lifecycle, invariants and sourced transitions.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-30-contexts-tms",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-30-contexts-tms",
+    "path": ".memoryx/bases/mx-30-contexts-tms",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/context/",
+      "src/invariants/"
+    ],
+    "shared_surfaces": [
+      "claim, relation and context methods in src/store/api.rs",
+      "MCP context and relation tools with MX-70",
+      "claim schemas with MX-80"
+    ],
+    "forbidden_paths": [
+      "src/cas/io.rs",
+      "src/federation/"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/SKF.txt#3-context-model",
+    "Concept/SKF.txt#10-tms-conflicts-and-branches",
+    "docs/LIVE_OWNER_CONTROL.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/TMS_CONTEXT.md",
+    "DOSSIERS/RELATION_TRANSITION.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-40",
+  "slug": "query-proof",
+  "display_name": "Query Contracts and Proof Assembly",
+  "responsibility": "Own QueryContract compilation, deterministic routing, backward-forward reasoning, fixed-point solving, budgets and minimal AnswerGraph construction.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-40-query-proof",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-40-query-proof",
+    "path": ".memoryx/bases/mx-40-query-proof",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/query/"
+    ],
+    "shared_surfaces": [
+      "MemoryX answer/query entrypoints in src/store/api.rs",
+      "source-bearing graph projection with MX-50",
+      "query JSON schemas with MX-80"
+    ],
+    "forbidden_paths": [
+      "src/crdt/",
+      "src/bin/memoryx.rs"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/SKF.txt#11-heptapod-style-two-way-reasoning",
+    "Concept/SKF.txt#12-fixed-point-answering",
+    "Concept/Расширение.txt"
+  ],
+  "dossiers": [
+    "DOSSIERS/QUERY_CONTRACT.md",
+    "DOSSIERS/FIXED_POINT_GRAPH.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

@@ -1,0 +1,60 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-90",
+  "slug": "conformance-release",
+  "display_name": "Conformance, Benchmarks and Release",
+  "responsibility": "Own independent conformance suites, adversarial and migration fixtures, honest benchmarks, CI gates, packaging and release evidence without editing production Rust.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-90-conformance-release",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-90-conformance-release",
+    "path": ".memoryx/bases/mx-90-conformance-release",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+            "tests/conformance/",
+      "benches/",
+      "benchmarks/",
+      ".github/workflows/",
+      "CHANGELOG.md",
+      "SECURITY.md"
+    ],
+    "shared_surfaces": [
+            "repository test files remain owned by their production modules",
+      "release documentation with MX-70 and MX-80"
+    ],
+    "forbidden_paths": [
+      "src/"
+    ]
+  },
+  "canonical_refs": [
+    "README.md",
+    "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md",
+    "ORCHESTRATION_PLAN.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/CONFORMANCE.md",
+    "DOSSIERS/BENCH_RELEASE.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

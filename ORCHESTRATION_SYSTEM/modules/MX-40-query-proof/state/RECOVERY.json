@@ -1,0 +1,12 @@
+{
+  "schema_version": "memoryx.compact-recovery.v1",
+  "status": "never_compacted",
+  "recorded_at_utc": null,
+  "session_state": "UNBOUND",
+  "session_id": null,
+  "acceptance_state": "not_evaluated",
+  "document_hashes": {},
+  "compact_context_sha256": null,
+  "recovery_sources": [],
+  "statement": "No real pre-compact lifecycle has been observed."
+}

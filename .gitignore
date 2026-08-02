@@ -4,7 +4,12 @@
 /.memoryx/
 /.codegraph/
 /.cabal/
-/ORCHESTRATION_SYSTEM/
+/ORCHESTRATION_SYSTEM/**/logs/*
+!/ORCHESTRATION_SYSTEM/**/logs/.gitkeep
+/ORCHESTRATION_SYSTEM/modules/*/runs/
+/ORCHESTRATION_SYSTEM/state/resource-coordination.lock/
+/ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/*.stdout.jsonl
+/ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/evidence/MEMORYX_REGISTRATION*.json
 /build/
 /data/
 /memoryx_data/

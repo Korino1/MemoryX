@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memoryx.local/schemas/orchestration-manifest.v1.json",
+  "title": "MemoryX orchestration manifest registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repository", "root_contour", "execution_profile", "storage_policy", "modules"],
+  "properties": {
+    "schema_version": {"const": "memoryx.orchestration-manifest.v1"},
+    "repository": {"const": "MemoryX"},
+    "root_contour": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "base_name", "base_path", "session_file"],
+      "properties": {
+        "id": {"const": "MX-ROOT"},
+        "path": {"const": "."},
+        "base_name": {"const": "memoryx"},
+        "base_path": {"const": ".memoryx/bases/memoryx"},
+        "session_file": {"const": "session_id.txt"}
+      }
+    },
+    "execution_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "reasoning_effort", "forbidden_reasoning_effort", "resume_command", "cache_policy"],
+      "properties": {
+        "model": {"const": "gpt-5.6-sol"},
+        "reasoning_effort": {"const": "xhigh"},
+        "forbidden_reasoning_effort": {"type": "array", "contains": {"const": "max"}, "items": {"type": "string"}},
+        "resume_command": {"type": "string", "pattern": "^codex exec resume <UUID>"},
+        "cache_policy": {"const": "stable_session_and_prefix_are_optimizations_not_guarantees"}
+      }
+    },
+    "storage_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "base_root", "mutable_owners_per_physical_base", "forbid_user_scope", "forbid_foreign_bases"],
+      "properties": {
+        "scope": {"const": "project-local-only"},
+        "base_root": {"const": ".memoryx/bases"},
+        "mutable_owners_per_physical_base": {"const": 1},
+        "forbid_user_scope": {"const": true},
+        "forbid_foreign_bases": {"const": true}
+      }
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "slug", "display_name", "base_name", "responsibility", "owned_paths", "shared_surfaces", "forbidden_paths", "canonical_refs", "dossiers"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^MX-[0-9]{2}$"},
+          "slug": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "display_name": {"type": "string", "minLength": 3},
+          "base_name": {"type": "string", "pattern": "^mx-[0-9]{2}-[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "responsibility": {"type": "string", "minLength": 20},
+          "owned_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "shared_surfaces": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "forbidden_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "canonical_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "dossiers": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "title", "kind", "scope"],
+              "properties": {
+                "id": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+                "title": {"type": "string", "minLength": 3},
+                "kind": {"enum": ["conceptual", "mathematical", "technical"]},
+                "scope": {"type": "string", "minLength": 10}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

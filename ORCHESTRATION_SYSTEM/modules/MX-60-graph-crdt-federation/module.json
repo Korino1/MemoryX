@@ -1,0 +1,59 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-60",
+  "slug": "graph-crdt-federation",
+  "display_name": "Graph, CRDT and Federation",
+  "responsibility": "Own graph storage and traversal, CRDT convergence, replication, snapshots and federation over claims, provenance and metadata.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-60-graph-crdt-federation",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-60-graph-crdt-federation",
+    "path": ".memoryx/bases/mx-60-graph-crdt-federation",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/graph/",
+      "src/crdt/",
+      "src/federation/"
+    ],
+    "shared_surfaces": [
+      "snapshot identity with MX-10 and MX-20",
+      "federated QueryContract planning with MX-40",
+      "wire schemas with MX-80"
+    ],
+    "forbidden_paths": [
+      "src/bin/memoryx.rs",
+      "src/context/"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/SKF.txt#16-federation",
+    "Concept/SKF.txt#19-merkle-integrity-crdt-replication-and-repair",
+    "Concept/SKF-1.1 Implementer-Ready Spec.txt"
+  ],
+  "dossiers": [
+    "DOSSIERS/GRAPH_GENERATIONS.md",
+    "DOSSIERS/CRDT_FEDERATION.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

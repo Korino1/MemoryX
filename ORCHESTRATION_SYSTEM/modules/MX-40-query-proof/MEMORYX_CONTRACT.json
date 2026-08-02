@@ -1,0 +1,46 @@
+{
+  "schema_version": "memoryx.module-contract.v1",
+  "module_id": "MX-40",
+  "physical_base": {
+    "scope": "project-local",
+    "path": ".memoryx/bases/mx-40-query-proof",
+    "name": "mx-40-query-proof"
+  },
+  "ownership": {
+    "max_mutable_owners": 1,
+    "live_owner_required_for_shared_access": true,
+    "implicit_second_writer_forbidden": true
+  },
+  "knowledge": {
+    "unit": "knowledge_atom",
+    "rules_authority": "versioned_files",
+    "memoryx_role": "structured_evidence_provenance_conflicts_query_recovery",
+    "candidate_is_not_proof": true
+  },
+  "evidence": {
+    "source_registration_required": true,
+    "provenance_required_for_acceptance": true,
+    "unverified_model_output_is_not_evidence": true
+  },
+  "query": {
+    "strict_query_contract": true,
+    "fixed_point_required_for_strict_answer": true,
+    "answer_graph_required": true,
+    "budgets_required": true
+  },
+  "conflicts": {
+    "policy": "fail-closed",
+    "branching_preserved": true,
+    "unknowns_explicit": true
+  },
+  "recovery": {
+    "file_contracts_are_primary": true,
+    "history_required": true,
+    "n5_status": "open"
+  },
+  "forbidden": [
+    "user-scoped-base",
+    "foreign-project-base",
+    "unsourced-acceptance-evidence"
+  ]
+}

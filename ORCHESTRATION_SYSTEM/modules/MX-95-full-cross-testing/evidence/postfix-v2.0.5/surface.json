@@ -1,0 +1,5608 @@
+{
+  "schema_version": "memoryx.mx95.surface-capture.v1",
+  "run_id": "20260802T062756339Z",
+  "observed_at_utc": "2026-08-02T06:28:20.347227+00:00",
+  "binary": {
+    "path": "E:\\Rust\\AI\\MemoryX\\MemoryX_2\\target\\release\\memoryx.exe",
+    "size_bytes": 6165504,
+    "sha256": "7e9b26731625830b1a715429de87d502fd9169b7f8e1ff3e8969939bbbd7a969"
+  },
+  "authoritative_protocol": "2025-11-25",
+  "supported_protocols_tested": [
+    "2025-11-25",
+    "2025-06-18",
+    "2024-11-05"
+  ],
+  "authoritative_surface_sha256": "77a3e319d6b56ee5aaa8e8d70f4467ec1b2b9853aab1eb75a8b2b55cda553027",
+  "observed_count": 47,
+  "observed_unique_count": 47,
+  "expected_count_assertion": 47,
+  "count_matches_expectation": true,
+  "unique_matches_count": true,
+  "duplicate_names": [],
+  "lifecycle": [
+    {
+      "protocol": "2025-11-25",
+      "initialize_ok": true,
+      "notification_silent": true,
+      "tools_count": 47,
+      "unique_count": 47,
+      "duplicates": [],
+      "surface_digest": "77a3e319d6b56ee5aaa8e8d70f4467ec1b2b9853aab1eb75a8b2b55cda553027",
+      "base_name": "mx-95-disposable-20260802T062756339Z-surface-1-20251125",
+      "base_path": "E:\\Rust\\AI\\MemoryX\\MemoryX_2\\.memoryx\\bases\\mx-95-disposable-20260802T062756339Z-surface-1-20251125",
+      "child_pid": 27188,
+      "exit_code": 0,
+      "orphan_after_close": false
+    },
+    {
+      "protocol": "2025-06-18",
+      "initialize_ok": true,
+      "notification_silent": true,
+      "tools_count": 47,
+      "unique_count": 47,
+      "duplicates": [],
+      "surface_digest": "77a3e319d6b56ee5aaa8e8d70f4467ec1b2b9853aab1eb75a8b2b55cda553027",
+      "base_name": "mx-95-disposable-20260802T062756339Z-surface-2-20250618",
+      "base_path": "E:\\Rust\\AI\\MemoryX\\MemoryX_2\\.memoryx\\bases\\mx-95-disposable-20260802T062756339Z-surface-2-20250618",
+      "child_pid": 24148,
+      "exit_code": 0,
+      "orphan_after_close": false
+    },
+    {
+      "protocol": "2024-11-05",
+      "initialize_ok": true,
+      "notification_silent": true,
+      "tools_count": 47,
+      "unique_count": 47,
+      "duplicates": [],
+      "surface_digest": "77a3e319d6b56ee5aaa8e8d70f4467ec1b2b9853aab1eb75a8b2b55cda553027",
+      "base_name": "mx-95-disposable-20260802T062756339Z-surface-3-20241105",
+      "base_path": "E:\\Rust\\AI\\MemoryX\\MemoryX_2\\.memoryx\\bases\\mx-95-disposable-20260802T062756339Z-surface-3-20241105",
+      "child_pid": 6936,
+      "exit_code": 0,
+      "orphan_after_close": false
+    }
+  ],
+  "child_pids": [
+    27188,
+    24148,
+    6936
+  ],
+  "inventory": [
+    {
+      "name": "active_base",
+      "description": "Return the currently active base_ref used by tools when base_ref is omitted.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {},
+        "type": "object"
+      },
+      "schema_sha256": "778439a11331c1620b38c9e6fd4c4951941eaecc96194bd79d36fc8520f72a4e",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "add_claim",
+      "description": "Add a semi-structured atom-backed claim to an existing high-level entity; this writes an atom and asserts it in the selected context.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 0,
+            "entity_id": 1,
+            "object": 4090,
+            "object_tag": "U64",
+            "predicate": 7
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "entity_id": {
+            "type": "integer"
+          },
+          "object": {
+            "type": "integer"
+          },
+          "object_tag": {
+            "type": "string"
+          },
+          "predicate": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity_id",
+          "predicate",
+          "object"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "0869af9ac79b9be4e69aaecd17d28d78822aa190a4c8ca50c8ba7fdcd60e7c64",
+      "published_examples": [
+        {
+          "ctx_id": 0,
+          "entity_id": 1,
+          "object": 4090,
+          "object_tag": "U64",
+          "predicate": 7
+        }
+      ]
+    },
+    {
+      "name": "alias_entity",
+      "description": "Add an alias to an existing high-level entity record.",
+      "input_schema": {
+        "examples": [
+          {
+            "alias": "memoryx-db",
+            "entity_id": 1
+          }
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity_id",
+          "alias"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "feab1085a0c3c0edc223a2ab6a89b2a23ceeff8084ebb4ce8c038f853641c556",
+      "published_examples": [
+        {
+          "alias": "memoryx-db",
+          "entity_id": 1
+        }
+      ]
+    },
+    {
+      "name": "assert_relation",
+      "description": "Create an atom-backed relation claim between two high-level entities and assert it in a context.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 0,
+            "object": 2,
+            "predicate": 42,
+            "subject": 1
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "object": {
+            "type": "integer"
+          },
+          "predicate": {
+            "type": "integer"
+          },
+          "subject": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "subject",
+          "predicate",
+          "object"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "a9964cffc8dbe17de1174e10435f664bf4ac8c618bfe93ccad92ba82ed81c53d",
+      "published_examples": [
+        {
+          "ctx_id": 0,
+          "object": 2,
+          "predicate": 42,
+          "subject": 1
+        }
+      ]
+    },
+    {
+      "name": "attach_atom_source",
+      "description": "Accumulate one existing registered source id on an atom. Distinct sources are preserved durably; repeating the same atom/source pair is idempotent and never replaces prior attachments.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "source_id": 1
+          }
+        ],
+        "properties": {
+          "atom_id": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "source_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "atom_id",
+          "source_id"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "3043b23d775aef8f04b713d7d8a6e6f9c216fe4dfe2d8f6d62c756fd00b69207",
+      "published_examples": [
+        {
+          "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "source_id": 1
+        }
+      ]
+    },
+    {
+      "name": "audit_relation_contexts",
+      "description": "Audit the durable projection from every current relation journal record to its declared context active_claims. This read-only check reports missing contexts, missing relation atoms, atom/claim mismatches, non-canonical equivalent claims, and conflicting active values without changing the base.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "batch_ingest",
+      "description": "Create multiple atoms in one call; each batch item uses the same payload shape as ingest and becomes a separate stored atom.",
+      "input_schema": {
+        "examples": [
+          {
+            "atoms": [
+              {
+                "atom_type": "FACT",
+                "claims": [
+                  {
+                    "obj_tag": 0,
+                    "obj_val": 3,
+                    "pred": 2,
+                    "qualifiers_mask": 0,
+                    "subj": 1
+                  }
+                ],
+                "symbols": [
+                  "memoryx"
+                ]
+              },
+              {
+                "atom_type": "DECISION",
+                "claims": [
+                  {
+                    "obj_tag": 0,
+                    "obj_val": 6,
+                    "pred": 5,
+                    "qualifiers_mask": 0,
+                    "subj": 4
+                  }
+                ],
+                "symbols": [
+                  "global",
+                  "projects"
+                ]
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "atoms": {
+            "type": "array"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "atoms"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "739083b3edeb4cd26ccfc1c075684827abb989b4020887e4f7ba551f03c10a4f",
+      "published_examples": [
+        {
+          "atoms": [
+            {
+              "atom_type": "FACT",
+              "claims": [
+                {
+                  "obj_tag": 0,
+                  "obj_val": 3,
+                  "pred": 2,
+                  "qualifiers_mask": 0,
+                  "subj": 1
+                }
+              ],
+              "symbols": [
+                "memoryx"
+              ]
+            },
+            {
+              "atom_type": "DECISION",
+              "claims": [
+                {
+                  "obj_tag": 0,
+                  "obj_val": 6,
+                  "pred": 5,
+                  "qualifiers_mask": 0,
+                  "subj": 4
+                }
+              ],
+              "symbols": [
+                "global",
+                "projects"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "branch_context",
+      "description": "Create a child context from an existing live parent context id and optionally assign a new policy id and branch reason.",
+      "input_schema": {
+        "examples": [
+          {
+            "parent_ctx": 1,
+            "policy_id": 2,
+            "reason": "Project-specific working branch"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "parent_ctx": {
+            "type": "integer"
+          },
+          "policy_id": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "parent_ctx"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "e1d4bd378fd6b2a05e0afa603280d6f3d491b281fe1d88921887c9514e41ee22",
+      "published_examples": [
+        {
+          "parent_ctx": 1,
+          "policy_id": 2,
+          "reason": "Project-specific working branch"
+        }
+      ]
+    },
+    {
+      "name": "compile_query_contract",
+      "description": "Compile natural-language query_text into the explicit QueryContract JSON that an agent can inspect, edit, validate, and pass back to query.",
+      "input_schema": {
+        "examples": [
+          {
+            "query_text": "Explain MemoryX MCP and require provenance"
+          }
+        ],
+        "properties": {
+          "query_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_text"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "4c5c9116ff9fa9835668b3369b39087ecc2d3d28fc6f6e3a15c252c6de979b4b",
+      "published_examples": [
+        {
+          "query_text": "Explain MemoryX MCP and require provenance"
+        }
+      ]
+    },
+    {
+      "name": "connect_base",
+      "description": "Connect a project/user/path base to this MCP process. Use base_ref later to query or write that base without starting another MCP server.",
+      "input_schema": {
+        "examples": [
+          {
+            "base_ref": "project:client-a",
+            "name": "client-a",
+            "scope": "project"
+          },
+          {
+            "base_ref": "global",
+            "name": "default",
+            "scope": "user"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "user"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "6ce9cd1a2a06a696d596e1f83aa5d9926eb8fd1e38f3105670440d373f8469d5",
+      "published_examples": [
+        {
+          "base_ref": "project:client-a",
+          "name": "client-a",
+          "scope": "project"
+        },
+        {
+          "base_ref": "global",
+          "name": "default",
+          "scope": "user"
+        }
+      ]
+    },
+    {
+      "name": "correct_claim",
+      "description": "Correct a claim-bearing atom by writing a superseding atom version; no old content is erased.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "obj_tag": 0,
+                "obj_val": 9,
+                "pred": 2,
+                "qualifiers_mask": 0,
+                "subj": 1
+              }
+            ],
+            "symbols": [
+              "corrected",
+              "claim"
+            ]
+          }
+        ],
+        "properties": {
+          "atom_id": {
+            "type": "string"
+          },
+          "atom_type": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "claims": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "obj_tag": {
+                  "maximum": 8,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "obj_val": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pred": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "qualifiers_mask": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "subj": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "subj",
+                "pred",
+                "obj_tag",
+                "obj_val"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "atom_id",
+          "atom_type",
+          "claims"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "034fccb318a927bb9354337542872d686901e83b6955973b0152197129d2b9ce",
+      "published_examples": [
+        {
+          "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "atom_type": "FACT",
+          "claims": [
+            {
+              "obj_tag": 0,
+              "obj_val": 9,
+              "pred": 2,
+              "qualifiers_mask": 0,
+              "subj": 1
+            }
+          ],
+          "symbols": [
+            "corrected",
+            "claim"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "correct_relation",
+      "description": "Correct an existing relation by writing a superseding atom-backed relation.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 0,
+            "object": 3,
+            "predicate": 42,
+            "relation_id": 1,
+            "subject": 1
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "object": {
+            "type": "integer"
+          },
+          "predicate": {
+            "type": "integer"
+          },
+          "relation_id": {
+            "type": "integer"
+          },
+          "subject": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "relation_id",
+          "subject",
+          "predicate",
+          "object"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "c69fb459d3dc130051357b772dce9d07e707199256199fef42885126a461576b",
+      "published_examples": [
+        {
+          "ctx_id": 0,
+          "object": 3,
+          "predicate": 42,
+          "relation_id": 1,
+          "subject": 1
+        }
+      ]
+    },
+    {
+      "name": "create_context",
+      "description": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
+      "input_schema": {
+        "examples": [
+          {
+            "policy_id": 1
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "e2c74a7e7ed91a7f0f9076ac282dac64e23135f2a2fa6685e565f804cdf1e849",
+      "published_examples": [
+        {
+          "policy_id": 1
+        }
+      ]
+    },
+    {
+      "name": "create_entity",
+      "description": "Create a high-level entity record for authoring knowledge without manually constructing atoms.",
+      "input_schema": {
+        "examples": [
+          {
+            "canonical_name": "MemoryX",
+            "entity_type": "project"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "canonical_name": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "canonical_name",
+          "entity_type"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "5338d84b4a1afad40129b266b398dd1cecaf34a99ade072ce4f535378b7dd682",
+      "published_examples": [
+        {
+          "canonical_name": "MemoryX",
+          "entity_type": "project"
+        }
+      ]
+    },
+    {
+      "name": "delete_atom",
+      "description": "Create a tombstone for the given atom id and preserve deletion provenance instead of physically erasing the atom.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "reason": "Superseded by a later decision"
+          }
+        ],
+        "properties": {
+          "atom_id": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "atom_id"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "0adf24f7db4174770fa2b23408358849adcd5face4731a3c4c49f8e085bd1785",
+      "published_examples": [
+        {
+          "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "reason": "Superseded by a later decision"
+        }
+      ]
+    },
+    {
+      "name": "explain_answer_graph",
+      "description": "Execute query_text or contract and return only the answer graph explanation fields: status, snapshot, graph counts, branch lineage, coverage, retrieval trace, and rejected candidates.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 0,
+            "query_text": "Find facts about MemoryX persistence"
+          }
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "query_text"
+            ]
+          },
+          {
+            "required": [
+              "contract"
+            ]
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "contract": {
+            "$defs": {
+              "constraint_value": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bool": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "bool"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "number": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "number"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "time_range": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "from_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "to_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "time_range"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "list": {
+                        "items": {
+                          "$ref": "#/$defs/constraint_value"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$id": "https://memoryx.local/schemas/query-contract-1.0.5.json",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "description": "Executable QueryContract. Omitted policy, output, and budget fields use documented MemoryX defaults.",
+            "properties": {
+              "ambiguity_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_ambiguous_targets": {
+                    "type": "boolean"
+                  },
+                  "require_disambiguation_notes": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allow_ambiguous_targets",
+                  "require_disambiguation_notes"
+                ],
+                "type": "object"
+              },
+              "budgets": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_atoms": {
+                    "maximum": 65536,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_context_branches": {
+                    "description": "Maximum transient conflict branches created inside the isolated query workspace; read queries never persist them.",
+                    "maximum": 65536,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_edges": {
+                    "maximum": 262144,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_federated_calls": {
+                    "description": "Maximum remote retrieval calls; local MCP query execution performs zero.",
+                    "maximum": 128,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_io_bytes": {
+                    "maximum": 1073741824,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_iterations": {
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_time_ms": {
+                    "maximum": 300000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "completeness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "expose_unknowns": {
+                    "type": "boolean"
+                  },
+                  "expose_unsatisfied_constraints": {
+                    "type": "boolean"
+                  },
+                  "require_minimal_proof_subgraph": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "require_minimal_proof_subgraph",
+                  "expose_unknowns",
+                  "expose_unsatisfied_constraints"
+                ],
+                "type": "object"
+              },
+              "conflict_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "fail_on_hard_conflict": {
+                    "type": "boolean"
+                  },
+                  "include_conflicts": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "enum": [
+                      "fail",
+                      "branch",
+                      "include_alternatives",
+                      "prefer_trusted",
+                      "prefer_recent"
+                    ],
+                    "type": "string"
+                  },
+                  "prefer_latest_branch": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "include_conflicts",
+                  "fail_on_hard_conflict",
+                  "prefer_latest_branch"
+                ],
+                "type": "object"
+              },
+              "constraints": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "operator": {
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "contains",
+                        "exists",
+                        "matches",
+                        "before",
+                        "after",
+                        "during",
+                        "within",
+                        "gte",
+                        "lte"
+                      ],
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "entity",
+                            "entity_type",
+                            "predicate",
+                            "relation",
+                            "source",
+                            "evidence",
+                            "time",
+                            "context",
+                            "domain",
+                            "numeric_metric",
+                            "text"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "custom": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "custom"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "$ref": "#/$defs/constraint_value"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "strength",
+                    "target",
+                    "operator",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1024,
+                "type": "array"
+              },
+              "context_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include_conflicting_branches": {
+                    "type": "boolean"
+                  },
+                  "policy_id": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "selectors": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "active",
+                            "user_global"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "named": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "named"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "branch": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "branch"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "project": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "project"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assumption_set": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "assumption_set"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "branch_ids",
+                  "include_conflicting_branches"
+                ],
+                "type": "object"
+              },
+              "evidence_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_inferred_claims": {
+                    "type": "boolean"
+                  },
+                  "include_rejected_candidates": {
+                    "type": "boolean"
+                  },
+                  "min_evidence_items": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "require_direct_evidence": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "min_evidence_items",
+                  "require_direct_evidence",
+                  "allow_inferred_claims",
+                  "include_rejected_candidates"
+                ],
+                "type": "object"
+              },
+              "freshness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_age_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "stale_behavior": {
+                    "enum": [
+                      "allow",
+                      "mark_stale",
+                      "reject"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stale_behavior"
+                ],
+                "type": "object"
+              },
+              "intent": {
+                "enum": [
+                  "lookup",
+                  "verify",
+                  "explain",
+                  "derive",
+                  "compare",
+                  "plan",
+                  "define"
+                ],
+                "type": "string"
+              },
+              "output_contract": {
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "structured_json",
+                      "text_summary",
+                      "evidence_table",
+                      "minimal_graph"
+                    ],
+                    "type": "string"
+                  },
+                  "include_answer_graph": {
+                    "type": "boolean"
+                  },
+                  "include_confidence": {
+                    "type": "boolean"
+                  },
+                  "include_execution_trace": {
+                    "type": "boolean"
+                  },
+                  "include_provenance": {
+                    "type": "boolean"
+                  },
+                  "max_bytes": {
+                    "maximum": 8388608,
+                    "minimum": 2048,
+                    "type": "integer"
+                  },
+                  "max_items": {
+                    "maximum": 4096,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "quantifiers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "constraint_ids": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "quantifier": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "all",
+                            "any"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at_least": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "at_least"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exactly": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "exactly"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "quantifier",
+                    "constraint_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "object": {
+                      "type": "string"
+                    },
+                    "predicate": {
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "subject": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "subject",
+                    "predicate",
+                    "object",
+                    "strength"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "semantic_vectors": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "source_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_federated_sources": {
+                    "type": "boolean"
+                  },
+                  "allowed_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "forbidden_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "require_provenance": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowed_sources",
+                  "forbidden_sources",
+                  "require_provenance",
+                  "allow_federated_sources"
+                ],
+                "type": "object"
+              },
+              "targets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "aliases": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "atom_id": {
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "domain_mask": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_type": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "node_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "stable_key": {
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "symbol_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "term_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "temporal_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "after_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "before_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "latest_count": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "observed_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "require_current": {
+                    "type": "boolean"
+                  },
+                  "time_range": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "from_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "to_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "valid_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "intent"
+            ],
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "query_text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "cd8ce85f8858339fa2ee3cbd0b5c7541a17b85494bc88b15261fc17bfdd5c670",
+      "published_examples": [
+        {
+          "ctx_id": 0,
+          "query_text": "Find facts about MemoryX persistence"
+        }
+      ]
+    },
+    {
+      "name": "extract_subgraph",
+      "description": "Extract the bounded neighborhood around one center node using graph traversal within the requested radius.",
+      "input_schema": {
+        "examples": [
+          {
+            "center_node": 42,
+            "edge_types": [
+              "DEPENDS_ON",
+              "SUPPORTS"
+            ],
+            "radius": 2
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "center_node": {
+            "type": "integer"
+          },
+          "edge_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "radius": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "center_node"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "7825cbea36c22aef4a23612a68eef4d652de608ceb2b4736e6f78c1996b980ff",
+      "published_examples": [
+        {
+          "center_node": 42,
+          "edge_types": [
+            "DEPENDS_ON",
+            "SUPPORTS"
+          ],
+          "radius": 2
+        }
+      ]
+    },
+    {
+      "name": "get_predicate",
+      "description": "Inspect one managed predicate contract by its durable numeric predicate ID before using add_claim or assert_relation.",
+      "input_schema": {
+        "examples": [
+          {
+            "predicate_id": 2147483648
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "predicate_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "predicate_id"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "b8ab5bbecbe0290c14f1054f0f15d3d1706f6d40c3581a6bc5d695449af1fccf",
+      "published_examples": [
+        {
+          "predicate_id": 2147483648
+        }
+      ]
+    },
+    {
+      "name": "get_provenance_path",
+      "description": "Return the proof-grade ProvenanceChain for one atom_id, including derivation nodes, DERIVED_FROM edges, direct evidence links, confidence, and trust.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          }
+        ],
+        "properties": {
+          "atom_id": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "atom_id"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "5534cb3d51f7e7efd35549bda4d65c4e25fe48b0d24d921a1aab80dd4fd72a2e",
+      "published_examples": [
+        {
+          "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      ]
+    },
+    {
+      "name": "get_stats",
+      "description": "Return stable base statistics. CAS live counts include non-tombstoned superseded history; current counts exclude superseded atoms; physical graph counts include historical nodes and edges.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "graph_neighbors",
+      "description": "Return the direct incoming and outgoing neighbors of one graph node, optionally filtered by edge type; this is a one-hop query only.",
+      "input_schema": {
+        "examples": [
+          {
+            "edge_types": [
+              "DEPENDS_ON",
+              "SUPPORTS"
+            ],
+            "node_num": 42
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "edge_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "node_num": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node_num"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "6934689204b3418b18de9f72b7e04703d514714e4731bc3b097f0952fee95e60",
+      "published_examples": [
+        {
+          "edge_types": [
+            "DEPENDS_ON",
+            "SUPPORTS"
+          ],
+          "node_num": 42
+        }
+      ]
+    },
+    {
+      "name": "graph_walk",
+      "description": "Traverse the graph from the provided seed nodes up to the requested depth and return visited edges; this is multi-hop traversal, not subgraph extraction.",
+      "input_schema": {
+        "examples": [
+          {
+            "depth": 2,
+            "edge_types": [
+              "DEPENDS_ON"
+            ],
+            "seed_nodes": [
+              42
+            ]
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer"
+          },
+          "edge_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "seed_nodes": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seed_nodes"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "7de52f7382d1322894ed85259128bbf9887c4e72847e261296001a5eec823d05",
+      "published_examples": [
+        {
+          "depth": 2,
+          "edge_types": [
+            "DEPENDS_ON"
+          ],
+          "seed_nodes": [
+            42
+          ]
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "description": "Return newest-first durable write-operation history from the active base; use this to inspect recent ingest, update, delete, repair, and rebuild actions.",
+      "input_schema": {
+        "examples": [
+          {
+            "limit": 20
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "62b441b82ecc82a8d09c710e5927581b4ccaa85feee0da10e737669f344e339f",
+      "published_examples": [
+        {
+          "limit": 20
+        }
+      ]
+    },
+    {
+      "name": "ingest",
+      "description": "Create one atom from claim tuples and write it to the current base; each claim must use numeric fields {subj, pred, obj_tag, obj_val, qualifiers_mask}.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "obj_tag": 0,
+                "obj_val": 3,
+                "pred": 2,
+                "qualifiers_mask": 0,
+                "subj": 1
+              }
+            ],
+            "domain_mask": 65535,
+            "symbols": [
+              "memoryx",
+              "persistence"
+            ],
+            "trust_level": 5000
+          }
+        ],
+        "properties": {
+          "atom_type": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "claims": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "obj_tag": {
+                  "maximum": 8,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "obj_val": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pred": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "qualifiers_mask": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "subj": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "subj",
+                "pred",
+                "obj_tag",
+                "obj_val"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "domain_mask": {
+            "type": "integer"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "trust_level": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "atom_type",
+          "claims"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "98d792945366b406ef336b6f5c55d3d9247dc0700bb1ab4c0403d9870bd66a54",
+      "published_examples": [
+        {
+          "atom_type": "FACT",
+          "claims": [
+            {
+              "obj_tag": 0,
+              "obj_val": 3,
+              "pred": 2,
+              "qualifiers_mask": 0,
+              "subj": 1
+            }
+          ],
+          "domain_mask": 65535,
+          "symbols": [
+            "memoryx",
+            "persistence"
+          ],
+          "trust_level": 5000
+        }
+      ]
+    },
+    {
+      "name": "list_bases",
+      "description": "List project/user bases visible to this MCP process plus bases already connected in the multi-base registry.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {},
+        "type": "object"
+      },
+      "schema_sha256": "778439a11331c1620b38c9e6fd4c4951941eaecc96194bd79d36fc8520f72a4e",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "list_conflicts",
+      "description": "Return all conflict records for the requested context id, or for the active context when ctx_id is omitted.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 1
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "071f291212f0cbbbcd44f6a8b66b4298c109d81e837c1b5ac3d2e462b9619b75",
+      "published_examples": [
+        {
+          "ctx_id": 1
+        }
+      ]
+    },
+    {
+      "name": "list_contexts",
+      "description": "Return every context in the base with its id, parent, policy, state, and claim counts.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "list_entities",
+      "description": "List latest high-level entity records with canonical names, aliases, type, and merge/split lineage.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "list_predicates",
+      "description": "List every managed predicate ID and its complete immutable semantic contract in the selected base.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "list_sources",
+      "description": "List durable provenance sources registered in the active base with their exact location/version metadata.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    },
+    {
+      "name": "merge_entities",
+      "description": "Merge a source entity into a target entity, preserving aliases, claims, and merge lineage.",
+      "input_schema": {
+        "examples": [
+          {
+            "source_entity": 2,
+            "target_entity": 1
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "source_entity": {
+            "type": "integer"
+          },
+          "target_entity": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_entity",
+          "source_entity"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "c2a44391772176ef97beba6f1d86e15c7c8968beeb18772ef5c93344eff3882b",
+      "published_examples": [
+        {
+          "source_entity": 2,
+          "target_entity": 1
+        }
+      ]
+    },
+    {
+      "name": "query",
+      "description": "Run the fixed-point solver against the active base or a base selected by optional base_ref. Input must provide either query_text/question for natural-language compilation or contract for strict QueryContract execution. Returns an AnswerPack-shaped JSON payload, not a free-form text answer.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 0,
+            "query_text": "What decisions mention MemoryX persistence?"
+          },
+          {
+            "contract": {
+              "constraints": [],
+              "intent": "lookup",
+              "relations": [],
+              "targets": [
+                {
+                  "label": "term:1"
+                }
+              ]
+            },
+            "ctx_id": 0
+          }
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "query_text"
+            ]
+          },
+          {
+            "required": [
+              "question"
+            ]
+          },
+          {
+            "required": [
+              "contract"
+            ]
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "type": "string"
+          },
+          "contract": {
+            "$defs": {
+              "constraint_value": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bool": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "bool"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "number": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "number"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "time_range": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "from_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "to_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "time_range"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "list": {
+                        "items": {
+                          "$ref": "#/$defs/constraint_value"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$id": "https://memoryx.local/schemas/query-contract-1.0.5.json",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "description": "Executable QueryContract. Omitted policy, output, and budget fields use documented MemoryX defaults.",
+            "properties": {
+              "ambiguity_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_ambiguous_targets": {
+                    "type": "boolean"
+                  },
+                  "require_disambiguation_notes": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allow_ambiguous_targets",
+                  "require_disambiguation_notes"
+                ],
+                "type": "object"
+              },
+              "budgets": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_atoms": {
+                    "maximum": 65536,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_context_branches": {
+                    "description": "Maximum transient conflict branches created inside the isolated query workspace; read queries never persist them.",
+                    "maximum": 65536,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_edges": {
+                    "maximum": 262144,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_federated_calls": {
+                    "description": "Maximum remote retrieval calls; local MCP query execution performs zero.",
+                    "maximum": 128,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_io_bytes": {
+                    "maximum": 1073741824,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_iterations": {
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_time_ms": {
+                    "maximum": 300000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "completeness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "expose_unknowns": {
+                    "type": "boolean"
+                  },
+                  "expose_unsatisfied_constraints": {
+                    "type": "boolean"
+                  },
+                  "require_minimal_proof_subgraph": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "require_minimal_proof_subgraph",
+                  "expose_unknowns",
+                  "expose_unsatisfied_constraints"
+                ],
+                "type": "object"
+              },
+              "conflict_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "fail_on_hard_conflict": {
+                    "type": "boolean"
+                  },
+                  "include_conflicts": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "enum": [
+                      "fail",
+                      "branch",
+                      "include_alternatives",
+                      "prefer_trusted",
+                      "prefer_recent"
+                    ],
+                    "type": "string"
+                  },
+                  "prefer_latest_branch": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "include_conflicts",
+                  "fail_on_hard_conflict",
+                  "prefer_latest_branch"
+                ],
+                "type": "object"
+              },
+              "constraints": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "operator": {
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "contains",
+                        "exists",
+                        "matches",
+                        "before",
+                        "after",
+                        "during",
+                        "within",
+                        "gte",
+                        "lte"
+                      ],
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "entity",
+                            "entity_type",
+                            "predicate",
+                            "relation",
+                            "source",
+                            "evidence",
+                            "time",
+                            "context",
+                            "domain",
+                            "numeric_metric",
+                            "text"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "custom": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "custom"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "$ref": "#/$defs/constraint_value"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "strength",
+                    "target",
+                    "operator",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1024,
+                "type": "array"
+              },
+              "context_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include_conflicting_branches": {
+                    "type": "boolean"
+                  },
+                  "policy_id": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "selectors": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "active",
+                            "user_global"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "named": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "named"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "branch": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "branch"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "project": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "project"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assumption_set": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "assumption_set"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "branch_ids",
+                  "include_conflicting_branches"
+                ],
+                "type": "object"
+              },
+              "evidence_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_inferred_claims": {
+                    "type": "boolean"
+                  },
+                  "include_rejected_candidates": {
+                    "type": "boolean"
+                  },
+                  "min_evidence_items": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "require_direct_evidence": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "min_evidence_items",
+                  "require_direct_evidence",
+                  "allow_inferred_claims",
+                  "include_rejected_candidates"
+                ],
+                "type": "object"
+              },
+              "freshness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_age_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "stale_behavior": {
+                    "enum": [
+                      "allow",
+                      "mark_stale",
+                      "reject"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stale_behavior"
+                ],
+                "type": "object"
+              },
+              "intent": {
+                "enum": [
+                  "lookup",
+                  "verify",
+                  "explain",
+                  "derive",
+                  "compare",
+                  "plan",
+                  "define"
+                ],
+                "type": "string"
+              },
+              "output_contract": {
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "structured_json",
+                      "text_summary",
+                      "evidence_table",
+                      "minimal_graph"
+                    ],
+                    "type": "string"
+                  },
+                  "include_answer_graph": {
+                    "type": "boolean"
+                  },
+                  "include_confidence": {
+                    "type": "boolean"
+                  },
+                  "include_execution_trace": {
+                    "type": "boolean"
+                  },
+                  "include_provenance": {
+                    "type": "boolean"
+                  },
+                  "max_bytes": {
+                    "maximum": 8388608,
+                    "minimum": 2048,
+                    "type": "integer"
+                  },
+                  "max_items": {
+                    "maximum": 4096,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "quantifiers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "constraint_ids": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "quantifier": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "all",
+                            "any"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at_least": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "at_least"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exactly": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "exactly"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "quantifier",
+                    "constraint_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "object": {
+                      "type": "string"
+                    },
+                    "predicate": {
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "subject": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "subject",
+                    "predicate",
+                    "object",
+                    "strength"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "semantic_vectors": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "source_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_federated_sources": {
+                    "type": "boolean"
+                  },
+                  "allowed_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "forbidden_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "require_provenance": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowed_sources",
+                  "forbidden_sources",
+                  "require_provenance",
+                  "allow_federated_sources"
+                ],
+                "type": "object"
+              },
+              "targets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "aliases": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "atom_id": {
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "domain_mask": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_type": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "node_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "stable_key": {
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "symbol_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "term_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "temporal_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "after_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "before_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "latest_count": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "observed_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "require_current": {
+                    "type": "boolean"
+                  },
+                  "time_range": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "from_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "to_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "valid_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "intent"
+            ],
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "query_text": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "fcc5d620ca2dc2c9d0a70f0c08a82224e1c434aa74ee7ba4f7bd10cf878c0ac0",
+      "published_examples": [
+        {
+          "ctx_id": 0,
+          "query_text": "What decisions mention MemoryX persistence?"
+        },
+        {
+          "contract": {
+            "constraints": [],
+            "intent": "lookup",
+            "relations": [],
+            "targets": [
+              {
+                "label": "term:1"
+              }
+            ]
+          },
+          "ctx_id": 0
+        }
+      ]
+    },
+    {
+      "name": "query_base",
+      "description": "Explicit multi-base query. Requires base_ref and otherwise accepts the same arguments as query.",
+      "input_schema": {
+        "examples": [
+          {
+            "base_ref": "project:client-a",
+            "ctx_id": 0,
+            "query_text": "What decisions mention persistence?"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "type": "string"
+          },
+          "contract": {
+            "$defs": {
+              "constraint_value": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bool": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "bool"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "number": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "number"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "time_range": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "from_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "to_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "time_range"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "list": {
+                        "items": {
+                          "$ref": "#/$defs/constraint_value"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$id": "https://memoryx.local/schemas/query-contract-1.0.5.json",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "description": "Executable QueryContract. Omitted policy, output, and budget fields use documented MemoryX defaults.",
+            "properties": {
+              "ambiguity_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_ambiguous_targets": {
+                    "type": "boolean"
+                  },
+                  "require_disambiguation_notes": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allow_ambiguous_targets",
+                  "require_disambiguation_notes"
+                ],
+                "type": "object"
+              },
+              "budgets": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_atoms": {
+                    "maximum": 65536,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_context_branches": {
+                    "description": "Maximum transient conflict branches created inside the isolated query workspace; read queries never persist them.",
+                    "maximum": 65536,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_edges": {
+                    "maximum": 262144,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_federated_calls": {
+                    "description": "Maximum remote retrieval calls; local MCP query execution performs zero.",
+                    "maximum": 128,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_io_bytes": {
+                    "maximum": 1073741824,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_iterations": {
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_time_ms": {
+                    "maximum": 300000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "completeness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "expose_unknowns": {
+                    "type": "boolean"
+                  },
+                  "expose_unsatisfied_constraints": {
+                    "type": "boolean"
+                  },
+                  "require_minimal_proof_subgraph": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "require_minimal_proof_subgraph",
+                  "expose_unknowns",
+                  "expose_unsatisfied_constraints"
+                ],
+                "type": "object"
+              },
+              "conflict_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "fail_on_hard_conflict": {
+                    "type": "boolean"
+                  },
+                  "include_conflicts": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "enum": [
+                      "fail",
+                      "branch",
+                      "include_alternatives",
+                      "prefer_trusted",
+                      "prefer_recent"
+                    ],
+                    "type": "string"
+                  },
+                  "prefer_latest_branch": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "include_conflicts",
+                  "fail_on_hard_conflict",
+                  "prefer_latest_branch"
+                ],
+                "type": "object"
+              },
+              "constraints": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "operator": {
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "contains",
+                        "exists",
+                        "matches",
+                        "before",
+                        "after",
+                        "during",
+                        "within",
+                        "gte",
+                        "lte"
+                      ],
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "entity",
+                            "entity_type",
+                            "predicate",
+                            "relation",
+                            "source",
+                            "evidence",
+                            "time",
+                            "context",
+                            "domain",
+                            "numeric_metric",
+                            "text"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "custom": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "custom"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "$ref": "#/$defs/constraint_value"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "strength",
+                    "target",
+                    "operator",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1024,
+                "type": "array"
+              },
+              "context_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include_conflicting_branches": {
+                    "type": "boolean"
+                  },
+                  "policy_id": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "selectors": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "active",
+                            "user_global"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "named": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "named"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "branch": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "branch"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "project": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "project"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assumption_set": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "assumption_set"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "branch_ids",
+                  "include_conflicting_branches"
+                ],
+                "type": "object"
+              },
+              "evidence_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_inferred_claims": {
+                    "type": "boolean"
+                  },
+                  "include_rejected_candidates": {
+                    "type": "boolean"
+                  },
+                  "min_evidence_items": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "require_direct_evidence": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "min_evidence_items",
+                  "require_direct_evidence",
+                  "allow_inferred_claims",
+                  "include_rejected_candidates"
+                ],
+                "type": "object"
+              },
+              "freshness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_age_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "stale_behavior": {
+                    "enum": [
+                      "allow",
+                      "mark_stale",
+                      "reject"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stale_behavior"
+                ],
+                "type": "object"
+              },
+              "intent": {
+                "enum": [
+                  "lookup",
+                  "verify",
+                  "explain",
+                  "derive",
+                  "compare",
+                  "plan",
+                  "define"
+                ],
+                "type": "string"
+              },
+              "output_contract": {
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "structured_json",
+                      "text_summary",
+                      "evidence_table",
+                      "minimal_graph"
+                    ],
+                    "type": "string"
+                  },
+                  "include_answer_graph": {
+                    "type": "boolean"
+                  },
+                  "include_confidence": {
+                    "type": "boolean"
+                  },
+                  "include_execution_trace": {
+                    "type": "boolean"
+                  },
+                  "include_provenance": {
+                    "type": "boolean"
+                  },
+                  "max_bytes": {
+                    "maximum": 8388608,
+                    "minimum": 2048,
+                    "type": "integer"
+                  },
+                  "max_items": {
+                    "maximum": 4096,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "quantifiers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "constraint_ids": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "quantifier": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "all",
+                            "any"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at_least": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "at_least"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exactly": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "exactly"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "quantifier",
+                    "constraint_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "object": {
+                      "type": "string"
+                    },
+                    "predicate": {
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "subject": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "subject",
+                    "predicate",
+                    "object",
+                    "strength"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "semantic_vectors": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "source_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_federated_sources": {
+                    "type": "boolean"
+                  },
+                  "allowed_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "forbidden_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "require_provenance": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowed_sources",
+                  "forbidden_sources",
+                  "require_provenance",
+                  "allow_federated_sources"
+                ],
+                "type": "object"
+              },
+              "targets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "aliases": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "atom_id": {
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "domain_mask": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_type": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "node_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "stable_key": {
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "symbol_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "term_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "temporal_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "after_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "before_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "latest_count": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "observed_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "require_current": {
+                    "type": "boolean"
+                  },
+                  "time_range": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "from_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "to_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "valid_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "intent"
+            ],
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "query_text": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_ref"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "947caf6dfff6658d676164214eede40747b34daea9ad8e338ae5678caa5b0e5e",
+      "published_examples": [
+        {
+          "base_ref": "project:client-a",
+          "ctx_id": 0,
+          "query_text": "What decisions mention persistence?"
+        }
+      ]
+    },
+    {
+      "name": "register_predicate",
+      "description": "Register an immutable project predicate contract and return its durable managed numeric ID. Repeating the identical contract is idempotent; reusing its stable key or canonical name with different semantics fails closed.",
+      "input_schema": {
+        "examples": [
+          {
+            "canonical_name": "depends_on",
+            "cardinality": "many_to_many",
+            "description": "Subject requires object before it can be completed.",
+            "direction": "directed",
+            "inverse_stable_key": "project:required_by",
+            "stable_key": "project:depends_on"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "canonical_name": {
+            "type": "string"
+          },
+          "cardinality": {
+            "enum": [
+              "one_to_one",
+              "one_to_many",
+              "many_to_one",
+              "many_to_many"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "description": "Precise semantic contract for authors and reviewers.",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "directed",
+              "symmetric"
+            ],
+            "type": "string"
+          },
+          "inverse_stable_key": {
+            "type": "string"
+          },
+          "stable_key": {
+            "description": "Project-qualified immutable key, for example hpf:depends_on.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stable_key",
+          "canonical_name",
+          "description"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "c423d3df3dc6fcdc6a4e3384746f20efa5fc70521abfea8b9d9cda8584178f21",
+      "published_examples": [
+        {
+          "canonical_name": "depends_on",
+          "cardinality": "many_to_many",
+          "description": "Subject requires object before it can be completed.",
+          "direction": "directed",
+          "inverse_stable_key": "project:required_by",
+          "stable_key": "project:depends_on"
+        }
+      ]
+    },
+    {
+      "name": "register_source",
+      "description": "Register a durable provenance source such as a file, page, repository, commit, API response, message, table, measurement, human, or agent.",
+      "input_schema": {
+        "examples": [
+          {
+            "kind": "file",
+            "label": "SKF concept",
+            "line_end": 40,
+            "line_start": 1,
+            "path": "Concept/SKF.txt",
+            "source_version": "draft"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "commit_hash": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "line_end": {
+            "type": "integer"
+          },
+          "line_start": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "caeedb838b5be8e8cb2c029617e65d985d9f26a9a8c113e8af2ca17de2e60376",
+      "published_examples": [
+        {
+          "kind": "file",
+          "label": "SKF concept",
+          "line_end": 40,
+          "line_start": 1,
+          "path": "Concept/SKF.txt",
+          "source_version": "draft"
+        }
+      ]
+    },
+    {
+      "name": "repair_relation_contexts",
+      "description": "Plan or apply a safe, idempotent migration of current relation atoms into context active_claims. Empty arguments preserve strict apply behavior. Set dry_run=true for a non-mutating report, relation_ids to select current relations, and allow_partial=true explicitly to repair eligible records while reporting blocked records. Missing atoms, claim mismatches, contract/cardinality violations, ambiguity, and conflicting values are never silently repaired. CAS atoms, sources, relation records, and history are preserved.",
+      "input_schema": {
+        "additionalProperties": false,
+        "examples": [
+          {
+            "dry_run": true
+          },
+          {
+            "dry_run": false,
+            "relation_ids": [
+              1,
+              2,
+              3
+            ]
+          },
+          {
+            "allow_partial": true,
+            "dry_run": false
+          }
+        ],
+        "properties": {
+          "allow_partial": {
+            "default": false,
+            "type": "boolean"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": false,
+            "type": "boolean"
+          },
+          "relation_ids": {
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 4096,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "cc308681d6cff646b8f95911a75b3824813411cbd8008dbadc69a05da65c7ee2",
+      "published_examples": [
+        {
+          "dry_run": true
+        },
+        {
+          "dry_run": false,
+          "relation_ids": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "allow_partial": true,
+          "dry_run": false
+        }
+      ]
+    },
+    {
+      "name": "resolve_predicate",
+      "description": "Resolve an exact stable key or canonical predicate name to its durable numeric ID and full contract; this operation never creates a predicate.",
+      "input_schema": {
+        "examples": [
+          {
+            "name_or_key": "project:depends_on"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "name_or_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name_or_key"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "bc3d2579a65620f666422a462c6259b2d4295b7f4dd07dbf97023938b2688b0f",
+      "published_examples": [
+        {
+          "name_or_key": "project:depends_on"
+        }
+      ]
+    },
+    {
+      "name": "search_graph",
+      "description": "Match graph edges against the literal pattern 'src -> EDGE_TYPE -> dst', where either node id or the edge type can be '*' as a wildcard.",
+      "input_schema": {
+        "examples": [
+          {
+            "limit": 10,
+            "pattern": "42 -> DEPENDS_ON -> *"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "bc1acad386eaa55804859412e8f9823cb8b44bd446a11d1e654c5672a3df184d",
+      "published_examples": [
+        {
+          "limit": 10,
+          "pattern": "42 -> DEPENDS_ON -> *"
+        }
+      ]
+    },
+    {
+      "name": "search_lex",
+      "description": "Return atoms whose indexed terms match the requested lexical term using the inverted index; this is exact term lookup, not semantic ranking.",
+      "input_schema": {
+        "examples": [
+          {
+            "domain_mask": 65535,
+            "min_trust": 1000,
+            "term": "memoryx"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "domain_mask": {
+            "type": "integer"
+          },
+          "min_trust": {
+            "type": "integer"
+          },
+          "term": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "term"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "f1b66aae90c5d9790de326a65b40310a86498989d5c190d9514ac9972efbda58",
+      "published_examples": [
+        {
+          "domain_mask": 65535,
+          "min_trust": 1000,
+          "term": "memoryx"
+        }
+      ]
+    },
+    {
+      "name": "search_semantic",
+      "description": "Perform ANN vector search over embeddings and return nearest atoms filtered by trust or domain mask; this is vector retrieval, not keyword lookup.",
+      "input_schema": {
+        "examples": [
+          {
+            "domain_mask": 65535,
+            "min_trust": 1000,
+            "vector": [
+              0.12,
+              -0.44,
+              0.88
+            ]
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "domain_mask": {
+            "type": "integer"
+          },
+          "min_trust": {
+            "type": "integer"
+          },
+          "vector": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vector"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "3659525c507e245e0ea5b05b136cc1af45bd61e0c3502155172de94813c362ff",
+      "published_examples": [
+        {
+          "domain_mask": 65535,
+          "min_trust": 1000,
+          "vector": [
+            0.12,
+            -0.44,
+            0.88
+          ]
+        }
+      ]
+    },
+    {
+      "name": "split_entity",
+      "description": "Create a new entity split from an existing source entity while preserving split lineage.",
+      "input_schema": {
+        "examples": [
+          {
+            "canonical_name": "MemoryX CLI",
+            "entity_type": "component",
+            "source_entity": 1
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "canonical_name": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "source_entity": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_entity",
+          "canonical_name",
+          "entity_type"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "601dbff440390fcd870ba461fe3f2993c79740b5048d79efe98ece06b4a0ff04",
+      "published_examples": [
+        {
+          "canonical_name": "MemoryX CLI",
+          "entity_type": "component",
+          "source_entity": 1
+        }
+      ]
+    },
+    {
+      "name": "supersede_claim",
+      "description": "Supersede a claim-bearing atom by writing a new atom version; this is the claim-level MCP alias for update_atom and preserves provenance.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "obj_tag": 0,
+                "obj_val": 8,
+                "pred": 2,
+                "qualifiers_mask": 0,
+                "subj": 1
+              }
+            ],
+            "symbols": [
+              "corrected",
+              "claim"
+            ]
+          }
+        ],
+        "properties": {
+          "atom_id": {
+            "type": "string"
+          },
+          "atom_type": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "claims": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "obj_tag": {
+                  "maximum": 8,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "obj_val": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pred": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "qualifiers_mask": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "subj": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "subj",
+                "pred",
+                "obj_tag",
+                "obj_val"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "atom_id",
+          "atom_type",
+          "claims"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "720433b72166ef72d9328dc6c269edc64cbb131b4981ea6f2ceb9a0750ece696",
+      "published_examples": [
+        {
+          "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "atom_type": "FACT",
+          "claims": [
+            {
+              "obj_tag": 0,
+              "obj_val": 8,
+              "pred": 2,
+              "qualifiers_mask": 0,
+              "subj": 1
+            }
+          ],
+          "symbols": [
+            "corrected",
+            "claim"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "switch_base",
+      "description": "Switch the active base_ref for subsequent MCP calls that omit base_ref.",
+      "input_schema": {
+        "examples": [
+          {
+            "base_ref": "project:client-a"
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_ref"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "db9b47c81ddb67e10080c7520b8a34c8bb39a0a9b22fbb1fe79a7d30b7256a34",
+      "published_examples": [
+        {
+          "base_ref": "project:client-a"
+        }
+      ]
+    },
+    {
+      "name": "transition_relation",
+      "description": "Replace one current relation value in a selected context while preserving the old relation as superseded history. The successor keeps the same subject and predicate, may accumulate registered source IDs, and becomes the only active value for that relation slot.",
+      "input_schema": {
+        "examples": [
+          {
+            "ctx_id": 0,
+            "new_object": 3,
+            "old_relation_id": 1,
+            "source_ids": [
+              1,
+              2
+            ]
+          }
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "integer"
+          },
+          "new_object": {
+            "type": "integer"
+          },
+          "old_relation_id": {
+            "type": "integer"
+          },
+          "source_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "old_relation_id",
+          "new_object"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "4f80422a41c5ac26dda93359fbc372abe04c31738efd4873840e8052f18c176a",
+      "published_examples": [
+        {
+          "ctx_id": 0,
+          "new_object": 3,
+          "old_relation_id": 1,
+          "source_ids": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "update_atom",
+      "description": "Create a new version of an existing atom id and preserve the old version as superseded provenance.",
+      "input_schema": {
+        "examples": [
+          {
+            "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "atom_type": "DECISION",
+            "claims": [
+              {
+                "obj_tag": 0,
+                "obj_val": 7,
+                "pred": 2,
+                "qualifiers_mask": 0,
+                "subj": 1
+              }
+            ],
+            "symbols": [
+              "memoryx",
+              "mcp"
+            ]
+          }
+        ],
+        "properties": {
+          "atom_id": {
+            "type": "string"
+          },
+          "atom_type": {
+            "type": "string"
+          },
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          },
+          "claims": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "obj_tag": {
+                  "maximum": 8,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "obj_val": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pred": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "qualifiers_mask": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "subj": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "subj",
+                "pred",
+                "obj_tag",
+                "obj_val"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "atom_id",
+          "atom_type",
+          "claims"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "ad3ef440a4299b2ddb1410d51b0ff46c7475f36a5b09411bdae71619515a6835",
+      "published_examples": [
+        {
+          "atom_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "atom_type": "DECISION",
+          "claims": [
+            {
+              "obj_tag": 0,
+              "obj_val": 7,
+              "pred": 2,
+              "qualifiers_mask": 0,
+              "subj": 1
+            }
+          ],
+          "symbols": [
+            "memoryx",
+            "mcp"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "validate_query_contract",
+      "description": "Validate a QueryContract object without executing it. Returns valid=true or a concrete validation error.",
+      "input_schema": {
+        "examples": [
+          {
+            "contract": {
+              "ambiguity_policy": {
+                "allow_ambiguous_targets": true,
+                "require_disambiguation_notes": true
+              },
+              "budgets": {
+                "max_atoms": 1,
+                "max_edges": 0,
+                "max_federated_calls": 0,
+                "max_io_bytes": 0,
+                "max_iterations": 1,
+                "max_time_ms": 0
+              },
+              "completeness_policy": {
+                "expose_unknowns": true,
+                "expose_unsatisfied_constraints": true,
+                "require_minimal_proof_subgraph": true
+              },
+              "conflict_policy": {
+                "fail_on_hard_conflict": false,
+                "include_conflicts": true,
+                "mode": "branch",
+                "prefer_latest_branch": false
+              },
+              "constraints": [],
+              "context_scope": {
+                "branch_ids": [],
+                "include_conflicting_branches": true
+              },
+              "evidence_policy": {
+                "allow_inferred_claims": true,
+                "include_rejected_candidates": true,
+                "min_evidence_items": 0,
+                "require_direct_evidence": false
+              },
+              "freshness_policy": {
+                "max_age_unix_ns": null,
+                "stale_behavior": "mark_stale"
+              },
+              "intent": "lookup",
+              "output_contract": {
+                "format": "structured_json",
+                "include_answer_graph": true,
+                "include_confidence": true,
+                "include_execution_trace": false,
+                "include_provenance": true,
+                "max_bytes": 2048,
+                "max_items": 1
+              },
+              "quantifiers": [],
+              "relations": [],
+              "source_policy": {
+                "allow_federated_sources": true,
+                "allowed_sources": [],
+                "forbidden_sources": [],
+                "require_provenance": true
+              },
+              "targets": [
+                {
+                  "label": "term:1"
+                }
+              ],
+              "temporal_scope": {
+                "require_current": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "contract": {
+            "$defs": {
+              "constraint_value": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bool": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "bool"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "number": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "number"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "time_range": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "from_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "to_unix_ns": {
+                            "minimum": 0,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "time_range"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "list": {
+                        "items": {
+                          "$ref": "#/$defs/constraint_value"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$id": "https://memoryx.local/schemas/query-contract-1.0.5.json",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "description": "Executable QueryContract. Omitted policy, output, and budget fields use documented MemoryX defaults.",
+            "properties": {
+              "ambiguity_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_ambiguous_targets": {
+                    "type": "boolean"
+                  },
+                  "require_disambiguation_notes": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allow_ambiguous_targets",
+                  "require_disambiguation_notes"
+                ],
+                "type": "object"
+              },
+              "budgets": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_atoms": {
+                    "maximum": 65536,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_context_branches": {
+                    "description": "Maximum transient conflict branches created inside the isolated query workspace; read queries never persist them.",
+                    "maximum": 65536,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_edges": {
+                    "maximum": 262144,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_federated_calls": {
+                    "description": "Maximum remote retrieval calls; local MCP query execution performs zero.",
+                    "maximum": 128,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_io_bytes": {
+                    "maximum": 1073741824,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_iterations": {
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "max_time_ms": {
+                    "maximum": 300000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "completeness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "expose_unknowns": {
+                    "type": "boolean"
+                  },
+                  "expose_unsatisfied_constraints": {
+                    "type": "boolean"
+                  },
+                  "require_minimal_proof_subgraph": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "require_minimal_proof_subgraph",
+                  "expose_unknowns",
+                  "expose_unsatisfied_constraints"
+                ],
+                "type": "object"
+              },
+              "conflict_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "fail_on_hard_conflict": {
+                    "type": "boolean"
+                  },
+                  "include_conflicts": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "enum": [
+                      "fail",
+                      "branch",
+                      "include_alternatives",
+                      "prefer_trusted",
+                      "prefer_recent"
+                    ],
+                    "type": "string"
+                  },
+                  "prefer_latest_branch": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "include_conflicts",
+                  "fail_on_hard_conflict",
+                  "prefer_latest_branch"
+                ],
+                "type": "object"
+              },
+              "constraints": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "operator": {
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "contains",
+                        "exists",
+                        "matches",
+                        "before",
+                        "after",
+                        "during",
+                        "within",
+                        "gte",
+                        "lte"
+                      ],
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "entity",
+                            "entity_type",
+                            "predicate",
+                            "relation",
+                            "source",
+                            "evidence",
+                            "time",
+                            "context",
+                            "domain",
+                            "numeric_metric",
+                            "text"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "custom": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "custom"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "$ref": "#/$defs/constraint_value"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "strength",
+                    "target",
+                    "operator",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1024,
+                "type": "array"
+              },
+              "context_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include_conflicting_branches": {
+                    "type": "boolean"
+                  },
+                  "policy_id": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "selectors": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "active",
+                            "user_global"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "named": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "named"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "branch": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "branch"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "project": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "project"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assumption_set": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "assumption_set"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "branch_ids",
+                  "include_conflicting_branches"
+                ],
+                "type": "object"
+              },
+              "evidence_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_inferred_claims": {
+                    "type": "boolean"
+                  },
+                  "include_rejected_candidates": {
+                    "type": "boolean"
+                  },
+                  "min_evidence_items": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "require_direct_evidence": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "min_evidence_items",
+                  "require_direct_evidence",
+                  "allow_inferred_claims",
+                  "include_rejected_candidates"
+                ],
+                "type": "object"
+              },
+              "freshness_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_age_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "stale_behavior": {
+                    "enum": [
+                      "allow",
+                      "mark_stale",
+                      "reject"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stale_behavior"
+                ],
+                "type": "object"
+              },
+              "intent": {
+                "enum": [
+                  "lookup",
+                  "verify",
+                  "explain",
+                  "derive",
+                  "compare",
+                  "plan",
+                  "define"
+                ],
+                "type": "string"
+              },
+              "output_contract": {
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "structured_json",
+                      "text_summary",
+                      "evidence_table",
+                      "minimal_graph"
+                    ],
+                    "type": "string"
+                  },
+                  "include_answer_graph": {
+                    "type": "boolean"
+                  },
+                  "include_confidence": {
+                    "type": "boolean"
+                  },
+                  "include_execution_trace": {
+                    "type": "boolean"
+                  },
+                  "include_provenance": {
+                    "type": "boolean"
+                  },
+                  "max_bytes": {
+                    "maximum": 8388608,
+                    "minimum": 2048,
+                    "type": "integer"
+                  },
+                  "max_items": {
+                    "maximum": 4096,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "quantifiers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "constraint_ids": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "quantifier": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "all",
+                            "any"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at_least": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "at_least"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exactly": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "exactly"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "quantifier",
+                    "constraint_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "object": {
+                      "type": "string"
+                    },
+                    "predicate": {
+                      "type": "string"
+                    },
+                    "strength": {
+                      "oneOf": [
+                        {
+                          "enum": [
+                            "must",
+                            "must_not"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "should": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "weight": {
+                                  "maximum": 1.0,
+                                  "minimum": 0.0,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "weight"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "should"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "subject": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "subject",
+                    "predicate",
+                    "object",
+                    "strength"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "semantic_vectors": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "source_policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_federated_sources": {
+                    "type": "boolean"
+                  },
+                  "allowed_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "forbidden_sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "require_provenance": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowed_sources",
+                  "forbidden_sources",
+                  "require_provenance",
+                  "allow_federated_sources"
+                ],
+                "type": "object"
+              },
+              "targets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "aliases": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "atom_id": {
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "domain_mask": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "entity_type": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "node_id": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "stable_key": {
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "symbol_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "term_id": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "temporal_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "after_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "before_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "latest_count": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "observed_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "require_current": {
+                    "type": "boolean"
+                  },
+                  "time_range": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "from_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "to_unix_ns": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "valid_at_unix_ns": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "intent"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "contract"
+        ],
+        "type": "object"
+      },
+      "schema_sha256": "05fd54538a05654cd2b80099c9394d367fc7a43f98f6721110240a696dad3225",
+      "published_examples": [
+        {
+          "contract": {
+            "ambiguity_policy": {
+              "allow_ambiguous_targets": true,
+              "require_disambiguation_notes": true
+            },
+            "budgets": {
+              "max_atoms": 1,
+              "max_edges": 0,
+              "max_federated_calls": 0,
+              "max_io_bytes": 0,
+              "max_iterations": 1,
+              "max_time_ms": 0
+            },
+            "completeness_policy": {
+              "expose_unknowns": true,
+              "expose_unsatisfied_constraints": true,
+              "require_minimal_proof_subgraph": true
+            },
+            "conflict_policy": {
+              "fail_on_hard_conflict": false,
+              "include_conflicts": true,
+              "mode": "branch",
+              "prefer_latest_branch": false
+            },
+            "constraints": [],
+            "context_scope": {
+              "branch_ids": [],
+              "include_conflicting_branches": true
+            },
+            "evidence_policy": {
+              "allow_inferred_claims": true,
+              "include_rejected_candidates": true,
+              "min_evidence_items": 0,
+              "require_direct_evidence": false
+            },
+            "freshness_policy": {
+              "max_age_unix_ns": null,
+              "stale_behavior": "mark_stale"
+            },
+            "intent": "lookup",
+            "output_contract": {
+              "format": "structured_json",
+              "include_answer_graph": true,
+              "include_confidence": true,
+              "include_execution_trace": false,
+              "include_provenance": true,
+              "max_bytes": 2048,
+              "max_items": 1
+            },
+            "quantifiers": [],
+            "relations": [],
+            "source_policy": {
+              "allow_federated_sources": true,
+              "allowed_sources": [],
+              "forbidden_sources": [],
+              "require_provenance": true
+            },
+            "targets": [
+              {
+                "label": "term:1"
+              }
+            ],
+            "temporal_scope": {
+              "require_current": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify_integrity",
+      "description": "Verify every non-tombstoned CAS atom through the process that already owns the base. Use this instead of starting another writer against a live base.",
+      "input_schema": {
+        "examples": [
+          {}
+        ],
+        "properties": {
+          "base_ref": {
+            "description": "Optional connected base_ref. Omit it to use the active base.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "published_examples": [
+        {}
+      ]
+    }
+  ],
+  "gate_passed": true
+}

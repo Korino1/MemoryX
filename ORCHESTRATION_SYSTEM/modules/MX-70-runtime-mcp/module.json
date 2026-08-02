@@ -1,0 +1,59 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-70",
+  "slug": "runtime-mcp",
+  "display_name": "MCP, CLI and Live Runtime",
+  "responsibility": "Own CLI and MCP transport, tool contracts, base selection, live-owner proxy, request bounds and exclusive writer lease behavior.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-70-runtime-mcp",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-70-runtime-mcp",
+    "path": ".memoryx/bases/mx-70-runtime-mcp",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/bin/memoryx.rs",
+      "src/store/base_lease.rs",
+      "docs/LIVE_OWNER_CONTROL.md"
+    ],
+    "shared_surfaces": [
+      "MCP-exposed store methods in src/store/api.rs",
+      "tool schemas with MX-80",
+      "runtime integration tests with MX-90"
+    ],
+    "forbidden_paths": [
+      "src/query/solver.rs",
+      "src/crdt/"
+    ]
+  },
+  "canonical_refs": [
+    "README.md",
+    "docs/LIVE_OWNER_CONTROL.md",
+    "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/MCP_PROTOCOL.md",
+    "DOSSIERS/LIVE_OWNER.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

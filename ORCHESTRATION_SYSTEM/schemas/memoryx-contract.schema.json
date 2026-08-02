@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memoryx.local/schemas/module-memoryx-contract.v1.json",
+  "title": "Strict module-local MemoryX contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module_id",
+    "physical_base",
+    "ownership",
+    "knowledge",
+    "evidence",
+    "query",
+    "conflicts",
+    "recovery",
+    "forbidden"
+  ],
+  "properties": {
+    "schema_version": {"const": "memoryx.module-contract.v1"},
+    "module_id": {"type": "string", "pattern": "^MX-(ROOT|[0-9]{2})$"},
+    "physical_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "path", "name"],
+      "properties": {
+        "scope": {"const": "project-local"},
+        "path": {"type": "string", "pattern": "^\\.memoryx/bases/[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_mutable_owners", "live_owner_required_for_shared_access", "implicit_second_writer_forbidden"],
+      "properties": {
+        "max_mutable_owners": {"const": 1},
+        "live_owner_required_for_shared_access": {"const": true},
+        "implicit_second_writer_forbidden": {"const": true}
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "rules_authority", "memoryx_role", "candidate_is_not_proof"],
+      "properties": {
+        "unit": {"const": "knowledge_atom"},
+        "rules_authority": {"const": "versioned_files"},
+        "memoryx_role": {"const": "structured_evidence_provenance_conflicts_query_recovery"},
+        "candidate_is_not_proof": {"const": true}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_registration_required", "provenance_required_for_acceptance", "unverified_model_output_is_not_evidence"],
+      "properties": {
+        "source_registration_required": {"const": true},
+        "provenance_required_for_acceptance": {"const": true},
+        "unverified_model_output_is_not_evidence": {"const": true}
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict_query_contract", "fixed_point_required_for_strict_answer", "answer_graph_required", "budgets_required"],
+      "properties": {
+        "strict_query_contract": {"const": true},
+        "fixed_point_required_for_strict_answer": {"const": true},
+        "answer_graph_required": {"const": true},
+        "budgets_required": {"const": true}
+      }
+    },
+    "conflicts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "branching_preserved", "unknowns_explicit"],
+      "properties": {
+        "policy": {"const": "fail-closed"},
+        "branching_preserved": {"const": true},
+        "unknowns_explicit": {"const": true}
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_contracts_are_primary", "history_required", "n5_status"],
+      "properties": {
+        "file_contracts_are_primary": {"const": true},
+        "history_required": {"const": true},
+        "n5_status": {"const": "open"}
+      }
+    },
+    "forbidden": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "allOf": [
+        {"contains": {"const": "user-scoped-base"}},
+        {"contains": {"const": "foreign-project-base"}},
+        {"contains": {"const": "unsourced-acceptance-evidence"}}
+      ],
+      "items": {"type": "string"}
+    }
+  }
+}

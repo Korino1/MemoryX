@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memoryx.local/schemas/session-registry.v1.json",
+  "title": "MemoryX orchestration session registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "recorded_at_utc", "entries"],
+  "properties": {
+    "schema_version": {"const": "memoryx.session-registry.v1"},
+    "recorded_at_utc": {"type": "string", "format": "date-time"},
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "module_id",
+          "slug",
+          "state",
+          "session_id",
+          "model",
+          "reasoning_effort",
+          "binding_file"
+        ],
+        "properties": {
+          "module_id": {"type": "string", "pattern": "^MX-(ROOT|[0-9]{2})$"},
+          "slug": {"type": "string", "minLength": 1},
+          "state": {"enum": ["UNBOUND", "BOUND"]},
+          "session_id": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+          },
+          "model": {"const": "gpt-5.6-sol"},
+          "reasoning_effort": {"const": "xhigh"},
+          "binding_file": {"type": "string", "minLength": 1}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"state": {"const": "UNBOUND"}}},
+            "then": {"properties": {"session_id": {"type": "null"}}}
+          },
+          {
+            "if": {"properties": {"state": {"const": "BOUND"}}},
+            "then": {"properties": {"session_id": {"type": "string"}}}
+          }
+        ]
+      }
+    }
+  }
+}

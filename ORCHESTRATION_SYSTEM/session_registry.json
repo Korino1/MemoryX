@@ -1,0 +1,18 @@
+{
+  "schema_version": "memoryx.session-registry.v1",
+  "recorded_at_utc": "2026-08-02T06:42:25.8931029Z",
+  "entries": [
+    {"module_id":"MX-ROOT","slug":"root-orchestrator","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"session_id.txt"},
+    {"module_id":"MX-00","slug":"concept-canon","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-00-concept-canon/session_id.txt"},
+    {"module_id":"MX-10","slug":"cas-storage","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-10-cas-storage/session_id.txt"},
+    {"module_id":"MX-20","slug":"journal-crash-recovery","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-20-journal-crash-recovery/session_id.txt"},
+    {"module_id":"MX-30","slug":"contexts-tms","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-30-contexts-tms/session_id.txt"},
+    {"module_id":"MX-40","slug":"query-proof","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-40-query-proof/session_id.txt"},
+    {"module_id":"MX-50","slug":"provenance-history","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-50-provenance-history/session_id.txt"},
+    {"module_id":"MX-60","slug":"graph-crdt-federation","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-60-graph-crdt-federation/session_id.txt"},
+    {"module_id":"MX-70","slug":"runtime-mcp","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-70-runtime-mcp/session_id.txt"},
+    {"module_id":"MX-80","slug":"schemas-migrations","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-80-schemas-migrations/session_id.txt"},
+    {"module_id":"MX-90","slug":"conformance-release","state":"UNBOUND","session_id":null,"model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-90-conformance-release/session_id.txt"},
+    {"module_id":"MX-95","slug":"full-cross-testing","state":"BOUND","session_id":"019fc0f9-f099-79a2-be80-ebe515628fa5","model":"gpt-5.6-sol","reasoning_effort":"xhigh","binding_file":"modules/MX-95-full-cross-testing/session_id.txt"}
+  ]
+}

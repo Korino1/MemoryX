@@ -1,0 +1,56 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-80",
+  "slug": "schemas-migrations",
+  "display_name": "Schemas, Migrations and Interoperability",
+  "responsibility": "Own published schemas, version compatibility, durable format validation, legacy migration contracts and interoperable import/export envelopes.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-80-schemas-migrations",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-80-schemas-migrations",
+    "path": ".memoryx/bases/mx-80-schemas-migrations",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "schemas/"
+    ],
+    "shared_surfaces": [
+      "serialization types across src",
+      "migration implementations with MX-10 and MX-20",
+      "MCP schemas with MX-70"
+    ],
+    "forbidden_paths": [
+      "src/query/solver.rs",
+      "src/context/manager.rs"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/SKF-1.1 Implementer-Ready Spec.txt",
+    "README.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/SCHEMA_COMPAT.md",
+    "DOSSIERS/MIGRATION.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

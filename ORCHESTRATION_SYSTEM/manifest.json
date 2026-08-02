@@ -1,0 +1,193 @@
+{
+  "schema_version": "memoryx.orchestration-manifest.v1",
+  "repository": "MemoryX",
+  "root_contour": {
+    "id": "MX-ROOT",
+    "path": ".",
+    "base_name": "memoryx",
+    "base_path": ".memoryx/bases/memoryx",
+    "session_file": "session_id.txt"
+  },
+  "execution_profile": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": ["max"],
+    "resume_command": "codex exec resume <UUID> -m gpt-5.6-sol -c model_reasoning_effort=\"xhigh\"",
+    "cache_policy": "stable_session_and_prefix_are_optimizations_not_guarantees"
+  },
+  "storage_policy": {
+    "scope": "project-local-only",
+    "base_root": ".memoryx/bases",
+    "mutable_owners_per_physical_base": 1,
+    "forbid_user_scope": true,
+    "forbid_foreign_bases": true
+  },
+  "modules": [
+    {
+      "id": "MX-00",
+      "slug": "concept-canon",
+      "display_name": "Concept and SKF Canon",
+      "base_name": "mx-00-concept-canon",
+      "responsibility": "Govern the frozen MemoryX concept and trace implementation claims to canonical requirements without editing production Rust.",
+      "owned_paths": ["Concept/", "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md"],
+      "shared_surfaces": ["README concept claims", "cross-module concept conformance decisions"],
+      "forbidden_paths": ["src/", "tests/"],
+      "canonical_refs": ["Concept/SKF.txt", "Concept/SKF-1.1 Implementer-Ready Spec.txt", "Concept/Расширение.txt", "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md"],
+      "dossiers": [
+        {"id": "SKF_CANON", "title": "SKF Concept Lock", "kind": "conceptual", "scope": "atoms, contexts, invariants, query proof, federation and durability invariants"},
+        {"id": "EXTENSION_BOUNDARY", "title": "Extension Non-Regression Boundary", "kind": "conceptual", "scope": "QueryContract extensions that must not bypass the SKF core"}
+      ]
+    },
+    {
+      "id": "MX-10",
+      "slug": "cas-storage",
+      "display_name": "CAS, Canonical IDs, Storage and Indexes",
+      "base_name": "mx-10-cas-storage",
+      "responsibility": "Own canonical identity, CAS encoding and IO, physical layout, location and retrieval indexes, compaction and portable storage performance.",
+      "owned_paths": ["src/cas/", "src/index/", "src/utils/io.rs", "src/utils/cpu.rs"],
+      "shared_surfaces": ["CAS evidence encoding with MX-50", "durability primitives with MX-20", "schema encodings with MX-80"],
+      "forbidden_paths": ["src/query/", "src/bin/memoryx.rs"],
+      "canonical_refs": ["Concept/SKF.txt", "Concept/SKF-1.1 Implementer-Ready Spec.txt", "docs/PORTABLE_CPU_BUILDS.md"],
+      "dossiers": [
+        {"id": "CANONICAL_IDS", "title": "Canonical Identity and Content Addressing", "kind": "mathematical", "scope": "canonical bytes, hash identity, collision and equality contracts"},
+        {"id": "CAS_LAYOUT", "title": "CAS and Index Durability", "kind": "technical", "scope": "segment layout, Bloom/location/inverted indexes, compaction and reopen"}
+      ]
+    },
+    {
+      "id": "MX-20",
+      "slug": "journal-crash-recovery",
+      "display_name": "Journal, Crash Recovery and N5",
+      "base_name": "mx-20-journal-crash-recovery",
+      "responsibility": "Own operation transaction generations, crash recovery, failpoints, migration of committed visibility and the open N5 proof program.",
+      "owned_paths": ["src/store/operation_txn.rs", "tests/crash_recovery/", "docs/crash-recovery/"],
+      "shared_surfaces": ["write transaction boundaries in src/store/api.rs", "platform durability helpers in src/utils/io.rs", "migration contracts with MX-80"],
+      "forbidden_paths": ["src/query/", "src/federation/"],
+      "canonical_refs": ["CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md#n5-operation-crash-atomicity", "AGENT_PROGRESS_LOG.md"],
+      "dossiers": [
+        {"id": "N5_GENERATIONS", "title": "N5 Immutable Operation Generations", "kind": "technical", "scope": "prepare, component hashes, commit visibility and parent chain"},
+        {"id": "CRASH_MODEL", "title": "Crash and Power-Loss Model", "kind": "mathematical", "scope": "pre-state or post-state invariant and failpoint matrix"}
+      ]
+    },
+    {
+      "id": "MX-30",
+      "slug": "contexts-tms",
+      "display_name": "Contexts, TMS, Claims and Conflicts",
+      "base_name": "mx-30-contexts-tms",
+      "responsibility": "Own context lineage, active claim projection, relation state, branching, conflict lifecycle, invariants and sourced transitions.",
+      "owned_paths": ["src/context/", "src/invariants/"],
+      "shared_surfaces": ["claim, relation and context methods in src/store/api.rs", "MCP context and relation tools with MX-70", "claim schemas with MX-80"],
+      "forbidden_paths": ["src/cas/io.rs", "src/federation/"],
+      "canonical_refs": ["Concept/SKF.txt#3-context-model", "Concept/SKF.txt#10-tms-conflicts-and-branches", "docs/LIVE_OWNER_CONTROL.md"],
+      "dossiers": [
+        {"id": "TMS_CONTEXT", "title": "Context and TMS State", "kind": "mathematical", "scope": "active claims, assumptions, lineage, retraction and branch semantics"},
+        {"id": "RELATION_TRANSITION", "title": "Relation Transition and Projection Invariant", "kind": "technical", "scope": "cardinality, current relation journals, context projection, audit and repair"}
+      ]
+    },
+    {
+      "id": "MX-40",
+      "slug": "query-proof",
+      "display_name": "Query Contracts and Proof Assembly",
+      "base_name": "mx-40-query-proof",
+      "responsibility": "Own QueryContract compilation, deterministic routing, backward-forward reasoning, fixed-point solving, budgets and minimal AnswerGraph construction.",
+      "owned_paths": ["src/query/"],
+      "shared_surfaces": ["MemoryX answer/query entrypoints in src/store/api.rs", "source-bearing graph projection with MX-50", "query JSON schemas with MX-80"],
+      "forbidden_paths": ["src/crdt/", "src/bin/memoryx.rs"],
+      "canonical_refs": ["Concept/SKF.txt#11-heptapod-style-two-way-reasoning", "Concept/SKF.txt#12-fixed-point-answering", "Concept/Расширение.txt"],
+      "dossiers": [
+        {"id": "QUERY_CONTRACT", "title": "QueryContract Semantics", "kind": "conceptual", "scope": "goal, evidence, contexts, constraints, budgets and output policy"},
+        {"id": "FIXED_POINT_GRAPH", "title": "Fixed-Point and Minimal AnswerGraph", "kind": "mathematical", "scope": "gap closure, deterministic set cover, proof steps and limitations"}
+      ]
+    },
+    {
+      "id": "MX-50",
+      "slug": "provenance-history",
+      "display_name": "Provenance, Evidence and History",
+      "base_name": "mx-50-provenance-history",
+      "responsibility": "Own source registration, evidence identity, multi-source atom attachment, provenance traversal, supersession, tombstones and durable history semantics.",
+      "owned_paths": ["src/ingest/"],
+      "shared_surfaces": ["source, provenance and history methods in src/store/api.rs", "src/cas/evidence.rs encoding with MX-10", "AnswerGraph evidence projection with MX-40"],
+      "forbidden_paths": ["src/context/", "src/crdt/"],
+      "canonical_refs": ["Concept/Расширение.txt", "Concept/SKF.txt#20-ingest"],
+      "dossiers": [
+        {"id": "EVIDENCE_IDENTITY", "title": "Evidence and Source Identity", "kind": "conceptual", "scope": "durable source contracts, timestamps, locations and deterministic evidence identity"},
+        {"id": "PROVENANCE_HISTORY", "title": "Provenance and History Semantics", "kind": "technical", "scope": "direct and derived paths, supersession, tombstones and audit retention"}
+      ]
+    },
+    {
+      "id": "MX-60",
+      "slug": "graph-crdt-federation",
+      "display_name": "Graph, CRDT and Federation",
+      "base_name": "mx-60-graph-crdt-federation",
+      "responsibility": "Own graph storage and traversal, CRDT convergence, replication, snapshots and federation over claims, provenance and metadata.",
+      "owned_paths": ["src/graph/", "src/crdt/", "src/federation/"],
+      "shared_surfaces": ["snapshot identity with MX-10 and MX-20", "federated QueryContract planning with MX-40", "wire schemas with MX-80"],
+      "forbidden_paths": ["src/bin/memoryx.rs", "src/context/"],
+      "canonical_refs": ["Concept/SKF.txt#16-federation", "Concept/SKF.txt#19-merkle-integrity-crdt-replication-and-repair", "Concept/SKF-1.1 Implementer-Ready Spec.txt"],
+      "dossiers": [
+        {"id": "GRAPH_GENERATIONS", "title": "Graph Generations and Traversal", "kind": "technical", "scope": "base plus deltas, deferred edges, compaction and deterministic traversal"},
+        {"id": "CRDT_FEDERATION", "title": "CRDT and Federation Contracts", "kind": "mathematical", "scope": "merge convergence, trust, snapshot binding and remote budgets"}
+      ]
+    },
+    {
+      "id": "MX-70",
+      "slug": "runtime-mcp",
+      "display_name": "MCP, CLI and Live Runtime",
+      "base_name": "mx-70-runtime-mcp",
+      "responsibility": "Own CLI and MCP transport, tool contracts, base selection, live-owner proxy, request bounds and exclusive writer lease behavior.",
+      "owned_paths": ["src/bin/memoryx.rs", "src/store/base_lease.rs", "docs/LIVE_OWNER_CONTROL.md"],
+      "shared_surfaces": ["MCP-exposed store methods in src/store/api.rs", "tool schemas with MX-80", "runtime integration tests with MX-90"],
+      "forbidden_paths": ["src/query/solver.rs", "src/crdt/"],
+      "canonical_refs": ["README.md", "docs/LIVE_OWNER_CONTROL.md", "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md"],
+      "dossiers": [
+        {"id": "MCP_PROTOCOL", "title": "MCP Protocol and Tool Surface", "kind": "technical", "scope": "initialize lifecycle, notifications, schemas, bounded JSON-RPC and tool parity"},
+        {"id": "LIVE_OWNER", "title": "Live Owner and Scoped Runtime", "kind": "technical", "scope": "single writer, proxy/client, project paths and machine-readable diagnostics"}
+      ]
+    },
+    {
+      "id": "MX-80",
+      "slug": "schemas-migrations",
+      "display_name": "Schemas, Migrations and Interoperability",
+      "base_name": "mx-80-schemas-migrations",
+      "responsibility": "Own published schemas, version compatibility, durable format validation, legacy migration contracts and interoperable import/export envelopes.",
+      "owned_paths": ["schemas/"],
+      "shared_surfaces": ["serialization types across src", "migration implementations with MX-10 and MX-20", "MCP schemas with MX-70"],
+      "forbidden_paths": ["src/query/solver.rs", "src/context/manager.rs"],
+      "canonical_refs": ["Concept/SKF-1.1 Implementer-Ready Spec.txt", "README.md"],
+      "dossiers": [
+        {"id": "SCHEMA_COMPAT", "title": "Schema and API Compatibility", "kind": "technical", "scope": "strict schemas, version negotiation, validation and backwards compatibility"},
+        {"id": "MIGRATION", "title": "Migration and Legacy Readability", "kind": "technical", "scope": "fail-closed migration, idempotence, rollback boundaries and fixture evidence"}
+      ]
+    },
+    {
+      "id": "MX-90",
+      "slug": "conformance-release",
+      "display_name": "Conformance, Benchmarks and Release",
+      "base_name": "mx-90-conformance-release",
+      "responsibility": "Own independent conformance suites, adversarial and migration fixtures, honest benchmarks, CI gates, packaging and release evidence without editing production Rust.",
+      "owned_paths": ["tests/conformance/", "benches/", "benchmarks/", ".github/workflows/", "CHANGELOG.md", "SECURITY.md"],
+      "shared_surfaces": ["repository test files remain owned by their production modules", "release documentation with MX-70 and MX-80"],
+      "forbidden_paths": ["src/"],
+      "canonical_refs": ["README.md", "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md", "ORCHESTRATION_PLAN.md"],
+      "dossiers": [
+        {"id": "CONFORMANCE", "title": "Concept and API Conformance", "kind": "technical", "scope": "traceable tests, adversarial fixtures and regression acceptance"},
+        {"id": "BENCH_RELEASE", "title": "Benchmark and Release Evidence", "kind": "conceptual", "scope": "reproducible metrics, no unsupported claims, CI and artifact provenance"}
+      ]
+    },
+    {
+      "id": "MX-95",
+      "slug": "full-cross-testing",
+      "display_name": "Full and Cross-Tool Testing",
+      "base_name": "mx-95-full-cross-testing",
+      "responsibility": "Own the fail-closed inventory and isolated direct/cross-tool runtime audit of every published MemoryX MCP operation without editing production Rust.",
+      "owned_paths": ["ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/"],
+      "shared_surfaces": ["MCP tool contracts with MX-70", "schemas and migrations with MX-80", "conformance and release handoff with MX-90"],
+      "forbidden_paths": ["src/", "tests/", "benches/", "benchmarks/", ".github/workflows/"],
+      "canonical_refs": ["Concept/SKF.txt", "Concept/SKF-1.1 Implementer-Ready Spec.txt", "Concept/Расширение.txt", "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md", "ORCHESTRATION_PLAN.md", "README.md", "docs/LIVE_OWNER_CONTROL.md"],
+      "dossiers": [
+        {"id": "TOOL_INVENTORY", "title": "MCP Tool Inventory and API Mapping", "kind": "technical", "scope": "authoritative tools/list discovery, MCP schema, CLI/library mapping and fail-closed coverage accounting"},
+        {"id": "CROSS_TOOL_MATRIX", "title": "Stateful Cross-Tool Test Matrix", "kind": "technical", "scope": "positive, negative, boundary, stateful, reopen, owner, concurrency, recovery, migration and idempotence sequences"},
+        {"id": "TEST_EVIDENCE", "title": "Test Evidence and Defect Handoff", "kind": "conceptual", "scope": "observed results, provenance, reproducibility, unresolved gaps and production-owner handoff"}
+      ]
+    }
+  ]
+}

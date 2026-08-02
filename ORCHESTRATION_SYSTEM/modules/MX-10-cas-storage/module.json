@@ -1,0 +1,60 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-10",
+  "slug": "cas-storage",
+  "display_name": "CAS, Canonical IDs, Storage and Indexes",
+  "responsibility": "Own canonical identity, CAS encoding and IO, physical layout, location and retrieval indexes, compaction and portable storage performance.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-10-cas-storage",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-10-cas-storage",
+    "path": ".memoryx/bases/mx-10-cas-storage",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/cas/",
+      "src/index/",
+      "src/utils/io.rs",
+      "src/utils/cpu.rs"
+    ],
+    "shared_surfaces": [
+      "CAS evidence encoding with MX-50",
+      "durability primitives with MX-20",
+      "schema encodings with MX-80"
+    ],
+    "forbidden_paths": [
+      "src/query/",
+      "src/bin/memoryx.rs"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/SKF.txt",
+    "Concept/SKF-1.1 Implementer-Ready Spec.txt",
+    "docs/PORTABLE_CPU_BUILDS.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/CANONICAL_IDS.md",
+    "DOSSIERS/CAS_LAYOUT.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

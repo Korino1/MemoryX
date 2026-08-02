@@ -1,0 +1,58 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-00",
+  "slug": "concept-canon",
+  "display_name": "Concept and SKF Canon",
+  "responsibility": "Govern the frozen MemoryX concept and trace implementation claims to canonical requirements without editing production Rust.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-00-concept-canon",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-00-concept-canon",
+    "path": ".memoryx/bases/mx-00-concept-canon",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "Concept/",
+      "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md"
+    ],
+    "shared_surfaces": [
+      "README concept claims",
+      "cross-module concept conformance decisions"
+    ],
+    "forbidden_paths": [
+      "src/",
+      "tests/"
+    ]
+  },
+  "canonical_refs": [
+    "Concept/SKF.txt",
+    "Concept/SKF-1.1 Implementer-Ready Spec.txt",
+    "Concept/Расширение.txt",
+    "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/SKF_CANON.md",
+    "DOSSIERS/EXTENSION_BOUNDARY.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

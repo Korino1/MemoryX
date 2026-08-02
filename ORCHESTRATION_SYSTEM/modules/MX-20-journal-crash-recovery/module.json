@@ -1,0 +1,58 @@
+{
+  "schema_version": "memoryx.orchestration-module.v1",
+  "id": "MX-20",
+  "slug": "journal-crash-recovery",
+  "display_name": "Journal, Crash Recovery and N5",
+  "responsibility": "Own operation transaction generations, crash recovery, failpoints, migration of committed visibility and the open N5 proof program.",
+  "path": "ORCHESTRATION_SYSTEM/modules/MX-20-journal-crash-recovery",
+  "base": {
+    "scope": "project-local",
+    "name": "mx-20-journal-crash-recovery",
+    "path": ".memoryx/bases/mx-20-journal-crash-recovery",
+    "max_mutable_owners": 1
+  },
+  "execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "forbidden_reasoning_effort": [
+      "max"
+    ],
+    "reassert_on_start_resume": true
+  },
+  "session": {
+    "binding_file": "session_id.txt",
+    "initial_state": "UNBOUND",
+    "resume_only_when_bound": true,
+    "never_synthesize_uuid": true
+  },
+  "ownership": {
+    "owned_paths": [
+      "src/store/operation_txn.rs",
+      "tests/crash_recovery/",
+      "docs/crash-recovery/"
+    ],
+    "shared_surfaces": [
+      "write transaction boundaries in src/store/api.rs",
+      "platform durability helpers in src/utils/io.rs",
+      "migration contracts with MX-80"
+    ],
+    "forbidden_paths": [
+      "src/query/",
+      "src/federation/"
+    ]
+  },
+  "canonical_refs": [
+    "CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md#n5-operation-crash-atomicity",
+    "AGENT_PROGRESS_LOG.md"
+  ],
+  "dossiers": [
+    "DOSSIERS/N5_GENERATIONS.md",
+    "DOSSIERS/CRASH_MODEL.md"
+  ],
+  "hooks": {
+    "session_start": "hooks/SessionStart.ps1",
+    "pre_compact": "hooks/PreCompact.ps1",
+    "post_compact": "hooks/PostCompact.ps1"
+  },
+  "evidence_return_schema": "../../schemas/evidence-return.schema.json"
+}

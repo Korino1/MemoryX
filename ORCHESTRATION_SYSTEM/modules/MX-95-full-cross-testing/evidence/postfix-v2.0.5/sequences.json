@@ -1,0 +1,270 @@
+{
+  "schema_version": "memoryx.mx95.cross-tool-sequences.v1",
+  "sequences": [
+    {
+      "id": "SQ-ATOM-LIFECYCLE",
+      "description": "batch ingest, update, supersede, correct, tombstone, and inspect durable history",
+      "tools": [
+        "batch_ingest",
+        "update_atom",
+        "supersede_claim",
+        "correct_claim",
+        "delete_atom",
+        "history"
+      ],
+      "observed_case_ids": [
+        "D-ATOM-002",
+        "D-ATOM-003",
+        "D-ATOM-004",
+        "D-ATOM-005",
+        "D-ATOM-006",
+        "D-ATOM-007"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-BASE",
+      "description": "discover active/known bases, connect a prepared project base, query it, switch, and restore the original active base",
+      "tools": [
+        "list_bases",
+        "active_base",
+        "connect_base",
+        "query_base",
+        "switch_base"
+      ],
+      "observed_case_ids": [
+        "D-BASE-001",
+        "D-BASE-002",
+        "D-BASE-003",
+        "D-BASE-004",
+        "D-BASE-005",
+        "X-BASE-006",
+        "X-BASE-007"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-CONFLICT",
+      "description": "assert a many-to-one value and require an incompatible replacement to fail closed",
+      "tools": [
+        "register_predicate",
+        "assert_relation"
+      ],
+      "observed_case_ids": [
+        "X-CF-001",
+        "X-CF-002",
+        "N-CF-003"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-CONTEXT",
+      "description": "create/list/branch contexts and inspect explicit conflicts",
+      "tools": [
+        "create_context",
+        "list_contexts",
+        "branch_context",
+        "list_conflicts"
+      ],
+      "observed_case_ids": [
+        "D-CTX-001",
+        "D-CTX-002",
+        "D-CTX-003",
+        "D-CTX-004"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-ENTITY",
+      "description": "create, list, alias, merge, split, and add an atom-backed entity claim",
+      "tools": [
+        "create_entity",
+        "list_entities",
+        "alias_entity",
+        "merge_entities",
+        "split_entity",
+        "add_claim"
+      ],
+      "observed_case_ids": [
+        "D-ENT-001",
+        "X-ENT-002",
+        "X-ENT-003",
+        "X-ENT-004",
+        "D-ENT-002",
+        "D-ENT-003",
+        "X-ENT-005",
+        "D-ENT-004",
+        "D-ENT-005",
+        "D-ENT-006"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-IDEMPOTENCE",
+      "description": "repeat source attachment and canonical ingest and require stable atom identity",
+      "tools": [
+        "attach_atom_source",
+        "ingest"
+      ],
+      "observed_case_ids": [
+        "I-PROV-001",
+        "I-ATOM-002"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-INTEGRITY",
+      "description": "inspect labelled stats and verify physical plus semantic integrity",
+      "tools": [
+        "get_stats",
+        "verify_integrity"
+      ],
+      "observed_case_ids": [
+        "D-CHK-001",
+        "D-CHK-002"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-LIVE-OWNER",
+      "description": "use a same-base proxy, mutate through the owner, reject a direct second writer, and observe the proxy write",
+      "tools": [
+        "get_stats",
+        "ingest",
+        "search_lex"
+      ],
+      "observed_case_ids": [
+        "O-OWNER-001",
+        "O-OWNER-002",
+        "O-OWNER-003"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-NEGATIVE-BOUNDARY",
+      "description": "exercise invalid QueryContract validation and minimum output/time budgets",
+      "tools": [
+        "validate_query_contract",
+        "query"
+      ],
+      "observed_case_ids": [
+        "N-QC-001",
+        "B-QC-002"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-PROVENANCE",
+      "description": "register a source, ingest an atom, attach the source, and retrieve its provenance path",
+      "tools": [
+        "register_source",
+        "list_sources",
+        "ingest",
+        "attach_atom_source",
+        "get_provenance_path"
+      ],
+      "observed_case_ids": [
+        "D-SRC-001",
+        "D-SRC-002",
+        "D-ATOM-001",
+        "D-SRC-003",
+        "D-SRC-004"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-QUERY-CONTRACT",
+      "description": "compile a natural query, validate the observed contract, execute it, and explain the resulting AnswerGraph",
+      "tools": [
+        "compile_query_contract",
+        "validate_query_contract",
+        "query",
+        "explain_answer_graph"
+      ],
+      "observed_case_ids": [
+        "D-QC-001",
+        "D-QC-002",
+        "D-QC-003",
+        "D-QC-004"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-RELATION",
+      "description": "register/resolve a predicate, assert/correct/transition a relation, then audit and dry-run repair",
+      "tools": [
+        "register_predicate",
+        "list_predicates",
+        "get_predicate",
+        "resolve_predicate",
+        "assert_relation",
+        "correct_relation",
+        "transition_relation",
+        "audit_relation_contexts",
+        "repair_relation_contexts"
+      ],
+      "observed_case_ids": [
+        "D-PRED-001",
+        "D-PRED-002",
+        "D-PRED-003",
+        "D-PRED-004",
+        "D-REL-001",
+        "D-REL-002",
+        "D-REL-003",
+        "D-REL-004",
+        "D-REL-005"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-REOPEN",
+      "description": "reopen the same base, observe persisted owner write, and verify integrity",
+      "tools": [
+        "get_stats",
+        "search_lex",
+        "verify_integrity"
+      ],
+      "observed_case_ids": [
+        "R-REOPEN-001",
+        "R-REOPEN-002",
+        "R-REOPEN-003"
+      ],
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "id": "SQ-SEARCH-GRAPH",
+      "description": "lexical/semantic/graph candidate search followed by graph neighborhood, walk, and subgraph extraction",
+      "tools": [
+        "search_lex",
+        "search_semantic",
+        "search_graph",
+        "graph_neighbors",
+        "graph_walk",
+        "extract_subgraph"
+      ],
+      "observed_case_ids": [
+        "D-SRCH-001",
+        "D-SRCH-002",
+        "D-SRCH-003",
+        "D-GRAPH-001",
+        "D-GRAPH-002",
+        "D-GRAPH-003"
+      ],
+      "status": "passed",
+      "failures": []
+    }
+  ]
+}
