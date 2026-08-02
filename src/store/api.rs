@@ -4113,7 +4113,7 @@ impl AnswerPack {
         // Incomplete evidence
         if coverage_ratio < 1.0 {
             let uncovered: Vec<GapId> = gaps.iter().filter(|g| !g.covered).map(|g| g.id).collect();
-            let gap_kinds: std::collections::HashSet<&str> = uncovered
+            let gap_kinds: std::collections::BTreeSet<&str> = uncovered
                 .iter()
                 .filter_map(|&gid| gaps.get(gid as usize))
                 .map(|g| match g.kind {
@@ -11017,6 +11017,27 @@ mod tests {
 
         let pack_from_solver = AnswerPack::from_solver(graph, 7, &[], &CostWeights::default());
         assert_eq!(pack_from_solver.selected_ctx, 7);
+    }
+
+    #[test]
+    fn test_answer_pack_incomplete_evidence_description_is_deterministic() {
+        let gaps = vec![
+            Gap::new(0, GapKind::NEED_EVIDENCE, ClaimPattern::default()),
+            Gap::new(1, GapKind::NEED_COUNTEREXAMPLE, ClaimPattern::default()),
+            Gap::new(2, GapKind::NEED_CONSTRAINTS, ClaimPattern::default()),
+        ];
+
+        let expected = "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}";
+        for _ in 0..32 {
+            let pack =
+                AnswerPack::from_solver(AnswerGraph::new(), 0, &gaps, &CostWeights::default());
+            let limitation = pack
+                .limitations
+                .iter()
+                .find(|limitation| limitation.code == LimitationCode::IncompleteEvidence)
+                .expect("incomplete evidence limitation must be present");
+            assert_eq!(limitation.description, expected);
+        }
     }
 
     #[test]
