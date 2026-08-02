@@ -171,6 +171,13 @@ superseded history, so it no longer appears as a parallel current claim. An
 equivalent atom with additional claims, a missing atom, a claim mismatch, or a
 conflicting active value fails closed instead of being guessed or overwritten.
 
+Bases written before commit `b2a6e41` (released in v1.0.4) may contain this
+legacy split projection: relation/CAS records were durable, but context changes
+were not persisted by the old authoring path. Current `assert_relation` writes
+the context durably and an exact duplicate initializer rerun reuses the existing
+relation and reconciles a repairable legacy projection instead of creating a
+parallel relation. This is a data migration boundary, not a new relation model.
+
 ## Connect MCP To Codex Or An IDE
 
 `memoryx serve --stdio` is the production MCP transport. `memoryx serve` without
@@ -308,8 +315,11 @@ Check and repair a project base with:
 & $exe --base-scope project repair --base default
 ```
 
-`verify-integrity` checks the stored data. `rebuild-index` rebuilds derived
-indexes. `repair` performs a safe repair sequence with a final integrity check.
+`verify-integrity` checks both physical CAS records and relation/context
+semantic consistency. Its structured result separates `storage_valid` from
+`semantic_integrity.relation_context`; the top-level `valid` value is true only
+when both pass. `rebuild-index` rebuilds derived indexes. `repair` performs a
+safe repair sequence with a final integrity check.
 `compact --dry-run` can be used to inspect compaction before changing storage.
 Maintenance commands need exclusive write access to the physical base.
 
@@ -321,8 +331,21 @@ through that owner:
 ```
 
 ```json
-{"name":"repair_relation_contexts","arguments":{}}
+{"name":"repair_relation_contexts","arguments":{"dry_run":true}}
 ```
+
+```json
+{"name":"repair_relation_contexts","arguments":{"relation_ids":[1,2,3]}}
+```
+
+Strict apply is the default and performs no mutation if any selected record is
+non-repairable. For a mixed base, an operator may explicitly set
+`"allow_partial":true`; every skipped record remains in `blocked_issues` and
+the final audit. Repeating a completed apply is a no-op. Context publication
+uses a durable temp/backup replacement, so interruption before publication
+retains the old state and interruption after publication is recovered by an
+idempotent rerun. This narrow guarantee does not claim completion of the wider
+N5 multi-file operation-atomicity roadmap gate.
 
 ## Reproducible Benchmark
 
@@ -536,6 +559,13 @@ $exe = ".\target\release\memoryx.exe"
 другое значение, операция завершается ошибкой и ничего не выбирает за
 пользователя.
 
+Базы, записанные до изменения `b2a6e41`, вошедшего в версию 1.0.4, могут
+содержать старое расхождение: связь и атом сохранялись, а изменение контекста
+старый путь записи не сохранял. Современный `assert_relation` сохраняет
+контекст сразу. Повторная точная инициализация использует существующую связь и
+восстанавливает однозначную старую проекцию, не создавая параллельную связь.
+Это граница миграции старых данных, а не новая модель связей.
+
 ## Подключение MCP к Codex или среде разработки
 
 `memoryx serve --stdio` — штатный транспорт MCP. `memoryx serve` без `--stdio`
@@ -674,8 +704,12 @@ $exe = ".\target\release\memoryx.exe"
 & $exe --base-scope project repair --base default
 ```
 
-`verify-integrity` проверяет сохранённые данные. `rebuild-index` заново строит
-производные индексы. `repair` выполняет безопасную последовательность
+`verify-integrity` проверяет физические записи CAS и смысловую согласованность
+связей с контекстами. В структурированном результате физический итог находится
+в `storage_valid`, проверка проекции — в
+`semantic_integrity.relation_context`, а общий `valid` равен `true` только при
+успехе обеих проверок. `rebuild-index` заново строит производные индексы.
+`repair` выполняет безопасную последовательность
 восстановления и завершается повторной проверкой целостности. Перед изменением
 хранилища можно выполнить `compact --dry-run`. Команды обслуживания требуют
 исключительного доступа к физической базе.
@@ -688,8 +722,21 @@ $exe = ".\target\release\memoryx.exe"
 ```
 
 ```json
-{"name":"repair_relation_contexts","arguments":{}}
+{"name":"repair_relation_contexts","arguments":{"dry_run":true}}
 ```
+
+```json
+{"name":"repair_relation_contexts","arguments":{"relation_ids":[1,2,3]}}
+```
+
+По умолчанию применение строгое: если хотя бы одна выбранная запись не может
+быть безопасно восстановлена, база не изменяется. Для смешанной базы оператор
+может явно указать `"allow_partial":true`; пропущенные записи остаются в
+`blocked_issues` и итоговом отчёте. Повторное применение после успешной
+миграции ничего не меняет. Публикация `contexts.json` использует временный файл
+и резервную копию: прерывание до публикации оставляет старое состояние, после
+публикации достаточно идемпотентного повторного запуска. Это узкая гарантия и
+не означает завершение общего этапа N5 по атомарности многофайловых операций.
 
 ## Воспроизводимая проверка
 

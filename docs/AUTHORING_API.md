@@ -43,6 +43,11 @@ Assert relation:
 {"name":"assert_relation","arguments":{"subject":1,"predicate":8,"object":2,"ctx_id":0}}
 ```
 
+An exact rerun with the same subject, predicate, object, context, and evidence
+is idempotent. It returns the existing relation/atom and, when safe, restores a
+missing legacy context projection. Different evidence or a contract conflict
+fails closed; no parallel relation is created.
+
 Correct relation:
 
 ```json
