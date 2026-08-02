@@ -4,7 +4,7 @@
   "title": "MemoryX orchestration manifest registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "repository", "root_contour", "execution_profile", "storage_policy", "modules"],
+  "required": ["schema_version", "repository", "root_contour", "execution_profile", "communication_policy", "storage_policy", "modules"],
   "properties": {
     "schema_version": {"const": "memoryx.orchestration-manifest.v1"},
     "repository": {"const": "MemoryX"},
@@ -30,6 +30,19 @@
         "forbidden_reasoning_effort": {"type": "array", "contains": {"const": "max"}, "items": {"type": "string"}},
         "resume_command": {"type": "string", "pattern": "^codex exec resume <UUID>"},
         "cache_policy": {"const": "stable_session_and_prefix_are_optimizations_not_guarantees"}
+      }
+    },
+    "communication_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inter_agent_language", "user_facing_language", "lexical_gate", "technical_literal_allowlist"],
+      "properties": {
+        "inter_agent_language": {"const": "English"},
+        "user_facing_language": {"const": "user-selected"},
+        "lexical_gate": {"const": "ascii-english-with-explicit-technical-literals"},
+        "technical_literal_allowlist": {
+          "const": ["Concept/Расширение.txt"]
+        }
       }
     },
     "storage_policy": {

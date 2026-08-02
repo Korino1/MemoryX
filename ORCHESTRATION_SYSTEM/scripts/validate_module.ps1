@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $systemRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $systemRoot
 $manifest = Get-Content -LiteralPath (Join-Path $systemRoot 'manifest.json') -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'interagent_language.ps1')
 $errors = [Collections.Generic.List[string]]::new()
 $checks = [Collections.Generic.List[string]]::new()
 
@@ -75,6 +76,9 @@ $requiredFiles = @(
     'hooks/PreCompact.ps1',
     'hooks/PostCompact.ps1'
 )
+if ([IO.Path]::GetFullPath($contourRoot) -eq [IO.Path]::GetFullPath($systemRoot)) {
+    $requiredFiles += 'INTER_AGENT_COMMUNICATION.md'
+}
 $requiredDirectories = @('DOSSIERS', 'state', 'evidence', 'logs', 'hooks')
 
 foreach ($relative in $requiredFiles) {
@@ -202,17 +206,22 @@ if ($null -ne $contract -and $null -ne $moduleJson) {
 
 if ($null -ne $recovery) {
     Add-Check 'recovery schema version' ($recovery.schema_version -eq 'memoryx.compact-recovery.v1') 'Unexpected recovery schema version.'
+    Add-Check 'recovery language contract' ($recovery.inter_agent_language -eq 'English') 'Recovery record must declare English inter-agent instructions.'
     Add-Check 'recovery does not fabricate session' (-not ($recovery.session_state -eq 'BOUND' -and $null -eq $recovery.session_id)) 'Recovery record has a fabricated bound session state.'
 }
 
 if ($null -ne $evidenceReturn -and $null -ne $moduleJson) {
-    Test-ExactProperties $evidenceReturn @('schema_version', 'module', 'session', 'execution', 'task', 'gates', 'changed_artifacts', 'commands', 'memoryx', 'unresolved_conflicts', 'unknowns', 'next_step') 'EvidenceReturn example'
+    Test-ExactProperties $evidenceReturn @('schema_version', 'module', 'session', 'execution', 'communication', 'task', 'gates', 'changed_artifacts', 'commands', 'memoryx', 'unresolved_conflicts', 'unknowns', 'next_step') 'EvidenceReturn example'
     Add-Check 'EvidenceReturn schema version' ($evidenceReturn.schema_version -eq 'memoryx.evidence-return.v1') 'Unexpected EvidenceReturn schema version.'
     Add-Check 'EvidenceReturn module binding' ($evidenceReturn.module.id -eq $moduleJson.id -and $evidenceReturn.module.slug -eq $moduleJson.slug) 'EvidenceReturn example module mismatch.'
     Add-Check 'EvidenceReturn execution profile' ($evidenceReturn.execution.model -eq 'gpt-5.6-sol' -and $evidenceReturn.execution.reasoning_effort -eq 'xhigh') 'EvidenceReturn example execution profile mismatch.'
+    Add-Check 'EvidenceReturn language contract' ($evidenceReturn.communication.inter_agent_language -eq 'English') 'EvidenceReturn example must declare English inter-agent communication.'
     Add-Check 'EvidenceReturn base binding' ($evidenceReturn.memoryx.base_path -eq $moduleJson.base.path) 'EvidenceReturn example base mismatch.'
     Add-Check 'EvidenceReturn initial epistemic state' ($evidenceReturn.session.state -eq 'UNBOUND' -and $null -eq $evidenceReturn.session.id -and $evidenceReturn.gates[0].status -eq 'not_run') 'EvidenceReturn example overclaims initial state.'
 }
+
+$languageResult = Test-MemoryXContourEnglishContract -ContourRoot $contourRoot -SystemRoot $systemRoot
+Add-Check 'English-only inter-agent communication surfaces' $languageResult.passed $(if ($languageResult.passed) { "checked=$($languageResult.files_checked)" } else { $languageResult.violations -join '; ' })
 
 foreach ($hookName in @('SessionStart.ps1', 'PreCompact.ps1', 'PostCompact.ps1')) {
     $hookPath = Join-Path $contourRoot "hooks/$hookName"

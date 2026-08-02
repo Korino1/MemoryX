@@ -17,6 +17,8 @@ Current state: `STRUCTURAL_ACCEPT`
   ownership checks, invocation dry-run, and base-required aggregate validation
   passed.
 - [x] A real MX-95 Codex session was activated and resumed through the wrapper.
+- [x] English-only inter-agent policy, inheritance, prompt rejection, persisted
+  narrative scan, and lifecycle declarations pass focused and aggregate gates.
 - [ ] A real platform hook lifecycle has not been observed.
 - [ ] A real compact/resume has not been performed.
 - [ ] Cache reuse and model quality are neither guaranteed nor tested.

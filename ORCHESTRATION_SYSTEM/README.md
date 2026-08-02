@@ -5,10 +5,26 @@ observed session binding state and must match every `session_id.txt` exactly.
 `ARCHITECTURE.md` defines authority, ownership, sessions, recovery, storage,
 EvidenceReturn, and validation limits.
 
+## Inter-Agent Language
+
+`INTER_AGENT_COMMUNICATION.md` is the authoritative language contract.
+Prompts sent to contours, task/plan/progress/decision packets, handoffs,
+EvidenceReturn narratives, lifecycle recovery instructions, and stable
+prefixes are English-only. User-facing responses may follow the user's
+language, but the root orchestrator translates the bounded task before it is
+persisted or sent to another agent.
+
+The invocation wrapper rejects a supplied non-English-script prompt before
+starting Codex. Module and aggregate validators scan persisted communication
+surfaces and require explicit English declarations. The deterministic lexical
+gate does not claim semantic detection of arbitrary ASCII languages; that
+remains an acceptance-review responsibility.
+
 ## Build Or Check The Contours
 
-Materialize only missing files. Existing task, plan, progress, decision, and
-acceptance files are never overwritten:
+Materialize missing files and synchronize only canonical lifecycle-hook copies.
+Existing task, plan, progress, decision, and acceptance files are never
+overwritten:
 
 ```powershell
 pwsh -NoLogo -File ORCHESTRATION_SYSTEM/scripts/build_scheme.ps1
@@ -48,6 +64,13 @@ Validate the full registry and every physical base declaration:
 ```powershell
 pwsh -NoLogo -File ORCHESTRATION_SYSTEM/scripts/run_all_validations.ps1 `
   -RequireBases
+```
+
+Run the focused language gate and its negative controls directly:
+
+```powershell
+pwsh -NoLogo -File ORCHESTRATION_SYSTEM/scripts/validate_interagent_english.ps1
+pwsh -NoLogo -File ORCHESTRATION_SYSTEM/scripts/test_interagent_english_fail_closed.ps1
 ```
 
 Add `-IncludeCargoGates` only after shared-host coordination permits heavy

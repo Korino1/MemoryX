@@ -14,8 +14,9 @@ When instructions conflict, modules stop and report the conflict in
 2. `Concept/Расширение.txt` for the accepted extension direction.
 3. `CONCEPT_EXTENSION_IMPLEMENTATION_PLAN.md`, including the open N5 gates.
 4. Repository `AGENTS.md` and the root orchestration contracts.
-5. `ORCHESTRATION_SYSTEM/manifest.json` and this architecture.
-6. The selected module's canonical packet, task, plan, decisions, and dossier.
+5. `ORCHESTRATION_SYSTEM/INTER_AGENT_COMMUNICATION.md`.
+6. `ORCHESTRATION_SYSTEM/manifest.json` and this architecture.
+7. The selected module's canonical packet, task, plan, decisions, and dossier.
 
 No orchestration artifact may silently change a higher-level authority. A
 required concept change is a separate proposal and blocks implementation until
@@ -42,6 +43,19 @@ Every registry module is a complete autonomous contour. It has its own:
 Modules may be invoked independently, but they cannot expand their ownership
 or mutate another module's base. Cross-module work is split into explicit
 handoffs recorded by both affected modules and the root orchestrator.
+
+## Inter-Agent Communication Contract
+
+All autonomous-contour prompts, task packets, plans, progress and decision
+narratives, cross-module handoffs, EvidenceReturn narratives, lifecycle-hook
+recovery instructions, and wrapper stable prefixes are written in English.
+User-facing language is independent and may follow the user; the orchestrator
+must translate a bounded task before persisting or forwarding it.
+
+The exact rule, technical-literal allowlist, deterministic lexical boundary,
+and validation limitations are defined by `INTER_AGENT_COMMUNICATION.md`.
+This communication policy is additive and does not alter model/session,
+ownership, storage, evidence, concept, or roadmap authority.
 
 ## Ownership Boundaries
 

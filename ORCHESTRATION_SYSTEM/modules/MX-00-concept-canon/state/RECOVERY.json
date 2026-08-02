@@ -1,5 +1,6 @@
 {
   "schema_version": "memoryx.compact-recovery.v1",
+  "inter_agent_language": "English",
   "status": "never_compacted",
   "recorded_at_utc": null,
   "session_state": "UNBOUND",

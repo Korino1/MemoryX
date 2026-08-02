@@ -10,6 +10,9 @@ if (-not (Test-Path -LiteralPath $recoveryPath -PathType Leaf)) {
 }
 
 $recovery = Get-Content -LiteralPath $recoveryPath -Raw | ConvertFrom-Json
+if ($recovery.inter_agent_language -ne 'English') {
+    throw 'Recovery record does not declare English inter-agent instructions.'
+}
 if ($recovery.status -ne 'ready_for_compact') {
     throw "Recovery record is not compact-ready: $($recovery.status)"
 }
@@ -33,13 +36,14 @@ foreach ($property in $recovery.document_hashes.PSObject.Properties) {
 
 [ordered]@{
     schema_version = 'memoryx.hook-post-compact.v1'
+    inter_agent_language = 'English'
     recovery_recorded_at_utc = $recovery.recorded_at_utc
     session_state = $recovery.session_state
     session_id = $recovery.session_id
     acceptance_state = $recovery.acceptance_state
     recovery_sources = $recovery.recovery_sources
     compact_context = (Get-Content -LiteralPath $compactContextPath -Raw)
-    statement = 'Restored only from the saved recovery record and compact context.'
+    statement = 'Restored only English inter-agent instructions from the saved recovery record and compact context.'
     live_compact_proven = $false
     cache_reuse_proven = $false
     model_quality_proven = $false

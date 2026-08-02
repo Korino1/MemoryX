@@ -15,6 +15,12 @@
     "resume_command": "codex exec resume <UUID> -m gpt-5.6-sol -c model_reasoning_effort=\"xhigh\"",
     "cache_policy": "stable_session_and_prefix_are_optimizations_not_guarantees"
   },
+  "communication_policy": {
+    "inter_agent_language": "English",
+    "user_facing_language": "user-selected",
+    "lexical_gate": "ascii-english-with-explicit-technical-literals",
+    "technical_literal_allowlist": ["Concept/Расширение.txt"]
+  },
   "storage_policy": {
     "scope": "project-local-only",
     "base_root": ".memoryx/bases",

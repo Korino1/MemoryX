@@ -57,3 +57,18 @@ proof of total concept completion, platform hook behavior, or N5.
 session authority. Aggregate validation compares every entry to the real
 `session_id.txt`, immutable model and reasoning profile, and manifest domain.
 Any mismatch fails closed.
+
+## D-009: English Is The Inter-Agent Protocol Language
+
+All prompts, task packets, plans, progress and decision narratives, handoffs,
+EvidenceReturn narratives, recovery instructions, and stable prefixes shared
+between agents use English. User-facing language remains user-selected; the
+root orchestrator translates before persistence or delegation.
+
+The machine gate rejects non-ASCII letters and combining marks except the
+single immutable technical path listed in `INTER_AGENT_COMMUNICATION.md`, and
+requires explicit English declarations. This deterministic check does not
+claim semantic classification of arbitrary ASCII prose. The policy changes no
+MemoryX runtime, session, ownership, base, concept, or roadmap invariant.
+Negative persisted-surface tests use only verified temporary paths below the
+ignored repository `target/` directory and remove only their owned fixture.

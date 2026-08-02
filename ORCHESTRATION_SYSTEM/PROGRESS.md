@@ -1,6 +1,6 @@
 # Progress
 
-State: `MX95_PASSED_WITH_LIMITATIONS`; root session: `UNBOUND`
+State: `ENGLISH_CONTRACT_VALIDATED`; root session: `UNBOUND`
 
 - Added the root architecture, manifest and session registries, five strict
   schemas, root contour, ten autonomous product-domain contours, and the
@@ -21,8 +21,18 @@ State: `MX95_PASSED_WITH_LIMITATIONS`; root session: `UNBOUND`
 - Shared-host lease acquire/release smoke passed and left no lock. A root
   pre-compact recovery checkpoint was recorded after task/plan/progress/
   decisions were updated; no compact or PostCompact event is claimed.
-- Runtime work through the published 2.0.5 patch and untracked
-  `Исправить.txt` were preserved.
+- Runtime work through the published 2.0.5 patch and the user-owned untracked
+  file were preserved.
+- Added an authoritative English-only inter-agent communication contract,
+  invocation-time prompt/stable-prefix enforcement, generated inheritance,
+  EvidenceReturn/recovery declarations, and focused fail-closed validation.
+- The focused scan passed 12 contours and 203 persisted communication files.
+  Seven negative controls passed, including real temporary-contour rejection
+  and wrapper rejection before Codex.
+- Root and MX-95 base-required validation passed with the original session
+  states; aggregate validation passed 12/12 contours with zero failures.
+- `build_scheme.ps1 -Check` reported 11 modules, 345 verified artifacts, and
+  zero created artifacts after canonical hook synchronization.
 
 Unverified live gates remain: real platform compact/resume hooks, cache reuse,
 model quality, total MemoryX semantic acceptance, and N5 completion.

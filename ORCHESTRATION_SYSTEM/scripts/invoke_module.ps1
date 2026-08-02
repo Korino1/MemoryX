@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 $systemRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $systemRoot
 $manifest = Get-Content -LiteralPath (Join-Path $systemRoot 'manifest.json') -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'interagent_language.ps1')
 
 if ($Module -eq 'root' -or $Module -eq 'MX-ROOT') {
     $contourRoot = $systemRoot
@@ -50,9 +51,15 @@ $null = $hookOutput | ConvertFrom-Json
 if (-not $Prompt) {
     $Prompt = Get-Content -LiteralPath (Join-Path $contourRoot 'TASK.md') -Raw
 }
+Assert-MemoryXEnglishInterAgentText -Text $Prompt -Label "task prompt for $($moduleJson.id)"
 
 $stablePrefix = @"
 You are the permanently assigned developer for MemoryX module $($moduleJson.id) ($($moduleJson.display_name)).
+Inter-agent language: English only. Write every task packet, handoff, progress
+or evidence narrative, and compact recovery instruction in English. Translate
+user requests into English before persisting or forwarding them. User-facing
+responses may follow the user's language, but untranslated user-facing text
+must not enter inter-agent artifacts.
 Before acting, read these durable module contracts from ${contourRoot}:
 CANONICAL_PACKET.md, TASK.md, PLAN.md, PROGRESS.md, DECISIONS.md, ACCEPTANCE.md,
 COMPACT_CONTEXT.md, MEMORYX_CONTRACT.json, state/RECOVERY.json, and DOSSIERS/INDEX.md.
@@ -67,6 +74,7 @@ model quality, MemoryX semantic acceptance, or N5 completion.
 Current task packet:
 $Prompt
 "@
+Assert-MemoryXEnglishInterAgentText -Text $stablePrefix -Label "stable prefix for $($moduleJson.id)"
 
 $configOverride = 'model_reasoning_effort="xhigh"'
 $execPrefix = @('exec')

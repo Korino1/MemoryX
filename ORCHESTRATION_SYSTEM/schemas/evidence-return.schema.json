@@ -9,6 +9,7 @@
     "module",
     "session",
     "execution",
+    "communication",
     "task",
     "gates",
     "changed_artifacts",
@@ -45,6 +46,14 @@
       "properties": {
         "model": {"const": "gpt-5.6-sol"},
         "reasoning_effort": {"const": "xhigh"}
+      }
+    },
+    "communication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inter_agent_language"],
+      "properties": {
+        "inter_agent_language": {"const": "English"}
       }
     },
     "task": {"type": "string", "minLength": 1},

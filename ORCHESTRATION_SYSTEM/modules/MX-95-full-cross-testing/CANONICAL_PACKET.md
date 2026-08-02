@@ -2,6 +2,16 @@
 
 Module: **Full and Cross-Tool Testing**
 
+## Inter-Agent Communication
+
+Inter-agent language: English only.
+
+Prompts, task packets, plans, progress and decision narratives, handoffs,
+EvidenceReturn narratives, and compact recovery instructions must be English.
+User-facing text may follow the user's language but must be translated before
+it enters an inter-agent artifact. Exact technical identifiers listed by the
+root language contract remain unchanged.
+
 ## Responsibility
 
 Own the fail-closed inventory and isolated direct/cross-tool runtime audit of every published MemoryX MCP operation without editing production Rust.

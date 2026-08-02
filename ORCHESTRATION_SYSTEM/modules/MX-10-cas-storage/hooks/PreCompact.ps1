@@ -42,6 +42,7 @@ if (-not (Test-Path -LiteralPath $compactContext -PathType Leaf) -or (Get-Item -
 $sessionText = [IO.File]::ReadAllText((Join-Path $moduleRoot 'session_id.txt')).Trim()
 $record = [ordered]@{
     schema_version = 'memoryx.compact-recovery.v1'
+    inter_agent_language = 'English'
     status = 'ready_for_compact'
     recorded_at_utc = [DateTime]::UtcNow.ToString('o')
     session_state = if ($sessionText.Length -eq 0) { 'UNBOUND' } else { 'BOUND' }
@@ -59,7 +60,7 @@ $record = [ordered]@{
         'COMPACT_CONTEXT.md',
         'MEMORYX_CONTRACT.json'
     )
-    statement = 'This record contains only hashes and references to state saved before compact.'
+    statement = 'This record contains only hashes and references to English inter-agent state saved before compact.'
 }
 
 $json = $record | ConvertTo-Json -Depth 10

@@ -28,6 +28,7 @@ $recovery = Get-Content -LiteralPath $recoveryPath -Raw | ConvertFrom-Json
 
 [ordered]@{
     schema_version = 'memoryx.hook-session-start.v1'
+    inter_agent_language = 'English'
     module_id = $module.id
     session_state = if ($sessionText.Length -eq 0) { 'UNBOUND' } else { 'BOUND' }
     session_id = if ($sessionText.Length -eq 0) { $null } else { $sessionText }
@@ -36,5 +37,5 @@ $recovery = Get-Content -LiteralPath $recoveryPath -Raw | ConvertFrom-Json
     recovery_status = $recovery.status
     recovery_record = 'state/RECOVERY.json'
     compact_context = 'COMPACT_CONTEXT.md'
-    statement = 'Only durably saved file and MemoryX state has been loaded.'
+    statement = 'Only durably saved English inter-agent instructions and MemoryX state have been loaded.'
 } | ConvertTo-Json -Depth 8

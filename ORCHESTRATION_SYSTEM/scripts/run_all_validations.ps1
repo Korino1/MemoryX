@@ -44,7 +44,7 @@ foreach ($schemaName in @('manifest.schema.json', 'module.schema.json', 'memoryx
     }
 }
 
-$rootControlFiles = @('ARCHITECTURE.md', 'README.md', 'CANONICAL_PACKET.md', 'TASK.md', 'PLAN.md', 'PROGRESS.md', 'DECISIONS.md', 'ACCEPTANCE.md', 'COMPACT_CONTEXT.md', 'session_registry.json')
+$rootControlFiles = @('ARCHITECTURE.md', 'README.md', 'INTER_AGENT_COMMUNICATION.md', 'CANONICAL_PACKET.md', 'TASK.md', 'PLAN.md', 'PROGRESS.md', 'DECISIONS.md', 'ACCEPTANCE.md', 'COMPACT_CONTEXT.md', 'session_registry.json')
 $missingRootControlFiles = @($rootControlFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $systemRoot $_) -PathType Leaf) })
 Add-Observation 'root control-plane files' ($missingRootControlFiles.Count -eq 0) $(if ($missingRootControlFiles.Count -eq 0) { "present=$($rootControlFiles.Count)" } else { $missingRootControlFiles -join ',' })
 
@@ -60,6 +60,7 @@ if ($null -ne $manifest) {
     Add-Observation 'immutable manifest model' ($manifest.execution_profile.model -eq 'gpt-5.6-sol') $manifest.execution_profile.model
     Add-Observation 'immutable manifest reasoning' ($manifest.execution_profile.reasoning_effort -eq 'xhigh') $manifest.execution_profile.reasoning_effort
     Add-Observation 'manifest max forbidden' (@($manifest.execution_profile.forbidden_reasoning_effort) -contains 'max') (@($manifest.execution_profile.forbidden_reasoning_effort) -join ',')
+    Add-Observation 'manifest English-only inter-agent policy' ($manifest.communication_policy.inter_agent_language -eq 'English' -and $manifest.communication_policy.user_facing_language -eq 'user-selected' -and $manifest.communication_policy.lexical_gate -eq 'ascii-english-with-explicit-technical-literals') ($manifest.communication_policy | ConvertTo-Json -Compress)
     Add-Observation 'manifest project-local only' ($manifest.storage_policy.scope -eq 'project-local-only' -and $manifest.storage_policy.forbid_user_scope -eq $true -and $manifest.storage_policy.forbid_foreign_bases -eq $true) ($manifest.storage_policy | ConvertTo-Json -Compress)
     Add-Observation 'manifest one mutable owner' ([int]$manifest.storage_policy.mutable_owners_per_physical_base -eq 1) ([string]$manifest.storage_policy.mutable_owners_per_physical_base)
 
@@ -169,6 +170,20 @@ foreach ($scriptFile in $scriptFiles) {
     }
 }
 Add-Observation 'PowerShell syntax' ($scriptErrors.Count -eq 0) $(if ($scriptErrors.Count -eq 0) { "parsed=$($scriptFiles.Count)" } else { $scriptErrors -join '; ' })
+
+try {
+    $languageValidation = & (Join-Path $systemRoot 'scripts/validate_interagent_english.ps1') | ConvertFrom-Json
+    Add-Observation 'English-only inter-agent validation' ($languageValidation.passed -eq $true) "contours=$($languageValidation.contours_checked), files=$($languageValidation.files_checked)"
+} catch {
+    Add-Observation 'English-only inter-agent validation' $false $_.Exception.Message
+}
+
+try {
+    $languageControls = & (Join-Path $systemRoot 'scripts/test_interagent_english_fail_closed.ps1') | ConvertFrom-Json
+    Add-Observation 'English-only fail-closed controls' ($languageControls.passed -eq $true) "controls=$($languageControls.controls.Count)"
+} catch {
+    Add-Observation 'English-only fail-closed controls' $false $_.Exception.Message
+}
 
 $selectors = @('root')
 if ($null -ne $manifest) {

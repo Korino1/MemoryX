@@ -1,6 +1,6 @@
 # Plan
 
-Status: `COMPLETED_WITH_LIVE_GAPS`
+Status: `ENGLISH_CONTRACT_VALIDATED`
 
 1. [x] Read the MemoryX concept, implementer-ready specification, extension,
    orchestration context, roadmap, N5 status, and relation/context candidate.
@@ -20,3 +20,12 @@ Status: `COMPLETED_WITH_LIVE_GAPS`
    resource-coordination observations were durably recorded.
 10. [ ] Observe a real platform compact hook lifecycle and post-compact resume;
     direct hook execution and manual recovery records do not close this gate.
+11. [x] Define the authoritative English-only inter-agent contract and its
+    explicit technical-literal exception boundary.
+12. [x] Wire prompt/stable-prefix validation, generated inheritance,
+    EvidenceReturn declarations, and lifecycle recovery declarations.
+13. [x] Run focused fail-closed controls, including isolated temporary-contour
+    mutations, plus build check, module and aggregate validators, syntax
+    checks, and diff audit.
+14. [x] Prepare this orchestration-only packet as a separate scoped commit that
+    is safe to push to `main` without force.

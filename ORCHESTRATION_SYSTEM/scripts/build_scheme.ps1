@@ -9,6 +9,7 @@ $repoRoot = Split-Path -Parent $systemRoot
 $manifestPath = Join-Path $systemRoot 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $created = [Collections.Generic.List[string]]::new()
+$synchronized = [Collections.Generic.List[string]]::new()
 $verified = [Collections.Generic.List[string]]::new()
 
 function Ensure-Directory {
@@ -103,6 +104,7 @@ function New-MemoryXContract {
 function New-RecoveryRecord {
     [ordered]@{
         schema_version = 'memoryx.compact-recovery.v1'
+        inter_agent_language = 'English'
         status = 'never_compacted'
         recorded_at_utc = $null
         session_state = 'UNBOUND'
@@ -189,6 +191,7 @@ function Materialize-Contour {
         module = [ordered]@{ id = $Definition.id; slug = $Definition.slug }
         session = [ordered]@{ state = 'UNBOUND'; id = $null }
         execution = [ordered]@{ model = 'gpt-5.6-sol'; reasoning_effort = 'xhigh' }
+        communication = [ordered]@{ inter_agent_language = 'English' }
         task = 'No active task.'
         gates = @([ordered]@{ name = 'module_acceptance'; status = 'not_run'; evidence = 'No task has been activated.' })
         changed_artifacts = @()
@@ -210,7 +213,17 @@ function Materialize-Contour {
             Copy-Item -LiteralPath $sourceHook -Destination $targetHook
             $created.Add($targetHook)
         } else {
-            $verified.Add((Resolve-Path -LiteralPath $targetHook).Path)
+            $sameHook = (Get-FileHash -LiteralPath $sourceHook -Algorithm SHA256).Hash -eq
+                (Get-FileHash -LiteralPath $targetHook -Algorithm SHA256).Hash
+            if (-not $sameHook) {
+                if ($Check) {
+                    throw "Module hook differs from canonical hook: $targetHook"
+                }
+                Copy-Item -LiteralPath $sourceHook -Destination $targetHook -Force
+                $synchronized.Add($targetHook)
+            } else {
+                $verified.Add((Resolve-Path -LiteralPath $targetHook).Path)
+            }
         }
     }
 
@@ -223,6 +236,16 @@ function Materialize-Contour {
 # $($Definition.id) Canonical Packet
 
 Module: **$($Definition.display_name)**
+
+## Inter-Agent Communication
+
+Inter-agent language: English only.
+
+Prompts, task packets, plans, progress and decision narratives, handoffs,
+EvidenceReturn narratives, and compact recovery instructions must be English.
+User-facing text may follow the user's language but must be translated before
+it enters an inter-agent artifact. Exact technical identifiers listed by the
+root language contract remain unchanged.
 
 ## Responsibility
 
@@ -420,6 +443,7 @@ recovery boundary, not a claim of implementation completeness.
 foreach ($controlFile in @(
     'ARCHITECTURE.md',
     'README.md',
+    'INTER_AGENT_COMMUNICATION.md',
     'manifest.json',
     'session_registry.json',
     'schemas/manifest.schema.json',
@@ -427,6 +451,9 @@ foreach ($controlFile in @(
     'schemas/memoryx-contract.schema.json',
     'schemas/evidence-return.schema.json',
     'schemas/session-registry.schema.json',
+    'scripts/interagent_language.ps1',
+    'scripts/validate_interagent_english.ps1',
+    'scripts/test_interagent_english_fail_closed.ps1',
     'hooks/SessionStart.ps1',
     'hooks/PreCompact.ps1',
     'hooks/PostCompact.ps1'
@@ -470,10 +497,12 @@ foreach ($module in $manifest.modules) {
 
 [ordered]@{
     schema_version = 'memoryx.build-scheme-result.v1'
-    mode = if ($Check) { 'check' } else { 'materialize_missing_only' }
+    mode = if ($Check) { 'check' } else { 'materialize_missing_and_sync_canonical_hooks' }
     module_count = $manifest.modules.Count
     created_count = $created.Count
+    synchronized_count = $synchronized.Count
     verified_count = $verified.Count
     created = @($created)
-    statement = 'Existing progress and decision files were not overwritten.'
+    synchronized = @($synchronized)
+    statement = 'Existing progress and decision files were not overwritten; only canonical hook copies may be synchronized.'
 } | ConvertTo-Json -Depth 6

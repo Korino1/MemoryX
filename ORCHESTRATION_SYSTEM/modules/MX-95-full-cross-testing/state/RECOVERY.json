@@ -1,5 +1,6 @@
 {
   "schema_version": "memoryx.compact-recovery.v1",
+  "inter_agent_language": "English",
   "status": "ready_for_compact",
   "recorded_at_utc": "2026-08-02T06:42:25.8931029Z",
   "session_state": "BOUND",
