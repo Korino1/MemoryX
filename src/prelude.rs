@@ -195,6 +195,8 @@ pub use crate::store::api::Qualifier;
 pub use crate::store::api::RelationContextAuditReport;
 pub use crate::store::api::RelationContextIssue;
 pub use crate::store::api::RelationContextIssueKind;
+pub use crate::store::api::RelationContextMigrationReport;
+pub use crate::store::api::RelationContextRepairOptions;
 pub use crate::store::api::RelationContextRepairReport;
 pub use crate::store::api::RelationRecord;
 pub use crate::store::api::SourceId;

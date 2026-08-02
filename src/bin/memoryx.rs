@@ -3663,11 +3663,33 @@ fn cmd_verify_integrity(base: &Path, format: OutputFormat) -> CliResult<()> {
             "  Missing atoms: {}",
             summary.missing_atoms.to_string().red()
         );
-        if summary.errors.is_empty() {
+        println!(
+            "  Storage valid: {}",
+            summary.is_storage_valid().to_string().cyan()
+        );
+        println!(
+            "  Relation/context consistent: {}",
+            summary
+                .relation_context_audit
+                .is_consistent()
+                .to_string()
+                .cyan()
+        );
+        println!(
+            "  Semantic issues: {}",
+            summary.relation_context_audit.issues.len()
+        );
+        if summary.is_valid() {
             print_success("Integrity verification passed");
         } else {
             for error in &summary.errors {
                 print_error(error);
+            }
+            for issue in &summary.relation_context_audit.issues {
+                print_error(&format!(
+                    "relation {} context {}: {:?}: {}",
+                    issue.relation_id, issue.context, issue.kind, issue.detail
+                ));
             }
         }
     }
@@ -5576,12 +5598,30 @@ async fn process_mcp_request(state: &mut McpServerState, request: &str) -> Optio
                                     },
                                     {
                                         "name": "repair_relation_contexts",
-                                        "description": "Safely and idempotently restore current relation atoms missing from context active_claims. A distinct equivalent single-claim atom is preserved as superseded history and reported in retired_parallel_atom_ids, so it no longer remains a parallel current claim. Multi-claim, ambiguous, missing-atom, claim-mismatch, and conflicting-value cases fail closed. CAS atoms, source attachments, and relation history are preserved.",
+                                        "description": "Plan or apply a safe, idempotent migration of current relation atoms into context active_claims. Empty arguments preserve strict apply behavior. Set dry_run=true for a non-mutating report, relation_ids to select current relations, and allow_partial=true explicitly to repair eligible records while reporting blocked records. Missing atoms, claim mismatches, contract/cardinality violations, ambiguity, and conflicting values are never silently repaired. CAS atoms, sources, relation records, and history are preserved.",
                                         "inputSchema": {
                                             "type": "object",
-                                            "properties": {},
+                                            "properties": {
+                                                "dry_run": {
+                                                    "type": "boolean",
+                                                    "default": false
+                                                },
+                                                "allow_partial": {
+                                                    "type": "boolean",
+                                                    "default": false
+                                                },
+                                                "relation_ids": {
+                                                    "type": "array",
+                                                    "items": { "type": "integer", "minimum": 1 },
+                                                    "maxItems": 4096,
+                                                    "uniqueItems": true
+                                                }
+                                            },
+                                            "additionalProperties": false,
                                             "examples": [
-                                                {}
+                                                { "dry_run": true },
+                                                { "dry_run": false, "relation_ids": [1, 2, 3] },
+                                                { "dry_run": false, "allow_partial": true }
                                             ]
                                         }
                                     },
@@ -7163,8 +7203,10 @@ fn mcp_verify_integrity_response(
         Ok(summary) => mcp_structured_result(
             id,
             format!(
-                "Integrity verification\nValid: {}\nChecked: {}\nInvalid: {}\nMissing: {}",
+                "Integrity verification\nValid: {}\nStorage valid: {}\nRelation/context consistent: {}\nChecked: {}\nInvalid: {}\nMissing: {}",
                 summary.is_valid(),
+                summary.is_storage_valid(),
+                summary.relation_context_audit.is_consistent(),
                 summary.checked_atoms,
                 summary.invalid_atoms,
                 summary.missing_atoms
@@ -7172,6 +7214,10 @@ fn mcp_verify_integrity_response(
             serde_json::json!({
                 "operation": "verify_integrity",
                 "valid": summary.is_valid(),
+                "storage_valid": summary.is_storage_valid(),
+                "semantic_integrity": {
+                    "relation_context": relation_context_audit_json(&summary.relation_context_audit)
+                },
                 "summary": summary
             }),
         ),
@@ -7954,14 +8000,78 @@ fn mcp_audit_relation_contexts_response(
 fn mcp_repair_relation_contexts_response(
     store: &mut MemoryX,
     id: serde_json::Value,
-    _arguments: Option<&serde_json::Value>,
+    arguments: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    match store.repair_relation_contexts() {
+    let args = match mcp_arguments_object(id.clone(), arguments) {
+        Ok(args) => args,
+        Err(error) => return error,
+    };
+    let parse_bool = |name: &str| -> Result<bool, serde_json::Value> {
+        match args.get(name) {
+            None => Ok(false),
+            Some(serde_json::Value::Bool(value)) => Ok(*value),
+            Some(_) => Err(mcp_error(
+                id.clone(),
+                -32602,
+                format!("Field '{name}' must be a boolean"),
+            )),
+        }
+    };
+    let dry_run = match parse_bool("dry_run") {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let allow_partial = match parse_bool("allow_partial") {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let relation_ids = match args.get("relation_ids") {
+        None => Vec::new(),
+        Some(serde_json::Value::Array(values))
+            if values.len() <= memoryx::store::api::MAX_RELATION_CONTEXT_REPAIR_SELECTION =>
+        {
+            let mut ids = Vec::with_capacity(values.len());
+            for value in values {
+                let Some(relation_id) = value.as_u64().filter(|value| *value > 0) else {
+                    return mcp_error(
+                        id,
+                        -32602,
+                        "Field 'relation_ids' must contain positive integers",
+                    );
+                };
+                ids.push(relation_id);
+            }
+            ids
+        }
+        Some(serde_json::Value::Array(_)) => {
+            return mcp_error(
+                id,
+                -32602,
+                format!(
+                    "Field 'relation_ids' exceeds {} entries",
+                    memoryx::store::api::MAX_RELATION_CONTEXT_REPAIR_SELECTION
+                ),
+            );
+        }
+        Some(_) => {
+            return mcp_error(id, -32602, "Field 'relation_ids' must be an array");
+        }
+    };
+    let options = RelationContextRepairOptions {
+        dry_run,
+        allow_partial,
+        relation_ids,
+    };
+
+    match store.migrate_relation_contexts(options) {
         Ok(report) => mcp_structured_result(
             id,
             format!(
-                "Relation context repair\nIssues before: {}\nRepaired relations: {}\nRetired parallel atoms: {}\nIssues after: {}",
+                "Relation context migration\nMode: {}\nIssues before: {}\nEligible relations: {}\nBlocked relations: {}\nRepaired relations: {}\nRetired parallel atoms: {}\nIssues after: {}",
+                if report.dry_run { "dry_run" } else { "apply" },
                 report.before.issues.len(),
+                report.eligible_relation_ids.len(),
+                report.blocked_issues.len(),
                 report.repaired_relation_ids.len(),
                 report.retired_parallel_atom_ids.len(),
                 report.after.issues.len()
@@ -7969,6 +8079,18 @@ fn mcp_repair_relation_contexts_response(
             serde_json::json!({
                 "operation": "repair_relation_contexts",
                 "before": relation_context_audit_json(&report.before),
+                "dry_run": report.dry_run,
+                "allow_partial": report.allow_partial,
+                "selected_relation_ids": report.selected_relation_ids,
+                "eligible_relation_ids": report.eligible_relation_ids,
+                "blocked_issues": report.blocked_issues.iter().map(|issue| serde_json::json!({
+                    "relation_id": issue.relation_id,
+                    "atom_id": hex::encode(issue.atom_id),
+                    "ctx_id": issue.context,
+                    "kind": issue.kind,
+                    "repairable": issue.repairable,
+                    "detail": issue.detail
+                })).collect::<Vec<_>>(),
                 "repaired_relation_ids": report.repaired_relation_ids,
                 "retired_parallel_atom_ids": report.retired_parallel_atom_ids
                     .iter()
@@ -7976,7 +8098,8 @@ fn mcp_repair_relation_contexts_response(
                     .collect::<Vec<_>>(),
                 "after": relation_context_audit_json(&report.after),
                 "preserved": ["cas_atoms", "relation_journal", "source_attachments", "history"],
-                "durability": "committed"
+                "mutated": !report.dry_run && !report.repaired_relation_ids.is_empty(),
+                "durability": if report.dry_run { "not_applicable" } else { "committed" }
             }),
         ),
         Err(error) => mcp_error(
@@ -10138,13 +10261,70 @@ mod tests {
             hex::encode(relation_atom)
         );
 
+        let integrity_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 701,
+            "method": "tools/call",
+            "params": {
+                "name": "verify_integrity",
+                "arguments": {}
+            }
+        })
+        .to_string();
+        let integrity_response = process_mcp_request(&mut state, &integrity_request).await;
+        let integrity: serde_json::Value = serde_json::from_str(&integrity_response).unwrap();
+        assert_eq!(
+            integrity["result"]["structuredContent"]["storage_valid"],
+            true
+        );
+        assert_eq!(integrity["result"]["structuredContent"]["valid"], false);
+        assert_eq!(
+            integrity["result"]["structuredContent"]["semantic_integrity"]["relation_context"]["issue_count"],
+            1
+        );
+
+        let dry_run_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 702,
+            "method": "tools/call",
+            "params": {
+                "name": "repair_relation_contexts",
+                "arguments": {
+                    "dry_run": true,
+                    "relation_ids": [relation_id]
+                }
+            }
+        })
+        .to_string();
+        let dry_run_response = process_mcp_request(&mut state, &dry_run_request).await;
+        let dry_run: serde_json::Value = serde_json::from_str(&dry_run_response).unwrap();
+        assert_eq!(dry_run["result"]["structuredContent"]["dry_run"], true);
+        assert_eq!(
+            dry_run["result"]["structuredContent"]["eligible_relation_ids"],
+            serde_json::json!([relation_id])
+        );
+        assert_eq!(
+            dry_run["result"]["structuredContent"]["repaired_relation_ids"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            test_mcp_active_store_mut(&mut state)
+                .audit_relation_contexts()
+                .unwrap()
+                .issues
+                .len(),
+            1
+        );
+
         let repair_request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 71,
             "method": "tools/call",
             "params": {
                 "name": "repair_relation_contexts",
-                "arguments": {}
+                "arguments": {
+                    "relation_ids": [relation_id]
+                }
             }
         })
         .to_string();
@@ -10161,6 +10341,12 @@ mod tests {
         assert_eq!(
             repair["result"]["structuredContent"]["after"]["consistent"],
             true
+        );
+        let idempotent_response = process_mcp_request(&mut state, &repair_request).await;
+        let idempotent: serde_json::Value = serde_json::from_str(&idempotent_response).unwrap();
+        assert_eq!(
+            idempotent["result"]["structuredContent"]["repaired_relation_ids"],
+            serde_json::json!([])
         );
         drop(state);
 

@@ -96,6 +96,7 @@ fn normalized_lexical_terms(values: impl IntoIterator<Item = String>) -> Vec<Str
 
 const MAX_NEW_JOURNAL_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_SOURCES_PER_ATOM: usize = 256;
+pub const MAX_RELATION_CONTEXT_REPAIR_SELECTION: usize = 4096;
 
 fn read_recovering_jsonl<T: DeserializeOwned>(
     path: &std::path::Path,
@@ -1827,6 +1828,8 @@ pub enum RelationContextIssueKind {
     MissingContext,
     RelationAtomUnavailable,
     RelationAtomClaimMismatch,
+    PredicateContractUnavailable,
+    RelationContractViolation,
     MissingActiveClaim,
     ActiveClaimAtomMismatch,
     NonCanonicalActiveClaim,
@@ -1845,7 +1848,7 @@ pub struct RelationContextIssue {
 }
 
 /// Cross-projection consistency report for current relation records.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationContextAuditReport {
     pub current_relation_count: usize,
     pub active_relation_claim_count: usize,
@@ -1866,6 +1869,32 @@ pub struct RelationContextRepairReport {
     pub repaired_relation_ids: Vec<u64>,
     /// Equivalent non-canonical atoms retained in CAS/history but excluded
     /// from the current knowledge view through durable `SUPERSEDES` edges.
+    pub retired_parallel_atom_ids: Vec<AtomId>,
+    pub after: RelationContextAuditReport,
+}
+
+/// Selection and safety policy for an explicit relation/context migration.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationContextRepairOptions {
+    /// Report the exact plan without mutating the base.
+    pub dry_run: bool,
+    /// Apply repairable selected records even when other selected records are
+    /// non-repairable. The blocked records remain visible in `after`.
+    pub allow_partial: bool,
+    /// Empty means every current relation; otherwise only these current ids.
+    pub relation_ids: Vec<u64>,
+}
+
+/// Machine-readable report for dry-run, selected, and partial migrations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationContextMigrationReport {
+    pub before: RelationContextAuditReport,
+    pub dry_run: bool,
+    pub allow_partial: bool,
+    pub selected_relation_ids: Vec<u64>,
+    pub eligible_relation_ids: Vec<u64>,
+    pub blocked_issues: Vec<RelationContextIssue>,
+    pub repaired_relation_ids: Vec<u64>,
     pub retired_parallel_atom_ids: Vec<AtomId>,
     pub after: RelationContextAuditReport,
 }
@@ -5346,6 +5375,10 @@ pub struct StoreIntegritySummary {
     pub invalid_atoms: usize,
     pub missing_atoms: usize,
     pub errors: Vec<String>,
+    /// Semantic cross-check between current relation records and their
+    /// context projections. This is additive to physical CAS verification.
+    #[serde(default)]
+    pub relation_context_audit: RelationContextAuditReport,
 }
 
 /// Logical and physical counts with explicit, stable metric semantics.
@@ -5375,8 +5408,13 @@ pub struct StoreStatistics {
 
 impl StoreIntegritySummary {
     #[inline]
-    pub fn is_valid(&self) -> bool {
+    pub fn is_storage_valid(&self) -> bool {
         self.invalid_atoms == 0 && self.missing_atoms == 0 && self.errors.is_empty()
+    }
+
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.is_storage_valid() && self.relation_context_audit.is_consistent()
     }
 }
 
@@ -7301,6 +7339,62 @@ impl MemoryX {
         }
     }
 
+    fn relation_contract_issue(
+        &self,
+        relation: &RelationRecord,
+        current_relations: &[RelationRecord],
+    ) -> Result<Option<RelationContextIssue>, StoreError> {
+        let predicate = self.get_predicate(relation.predicate)?;
+        let Some(predicate) = predicate else {
+            return Ok((relation.predicate >= MANAGED_PREDICATE_ID_START).then(|| {
+                RelationContextIssue {
+                    relation_id: relation.relation_id,
+                    atom_id: relation.atom_id,
+                    context: relation.context,
+                    kind: RelationContextIssueKind::PredicateContractUnavailable,
+                    repairable: false,
+                    detail: format!(
+                        "managed predicate {} has no durable contract",
+                        relation.predicate
+                    ),
+                }
+            }));
+        };
+
+        for other in current_relations {
+            if other.relation_id == relation.relation_id || other.predicate != relation.predicate {
+                continue;
+            }
+            let duplicate = other.subject == relation.subject && other.object == relation.object;
+            let reciprocal_duplicate = predicate.contract.direction
+                == PredicateDirection::Symmetric
+                && other.subject == relation.object
+                && other.object == relation.subject;
+            let cardinality_conflict = match predicate.contract.cardinality {
+                PredicateCardinality::OneToOne => {
+                    other.subject == relation.subject || other.object == relation.object
+                }
+                PredicateCardinality::OneToMany => other.object == relation.object,
+                PredicateCardinality::ManyToOne => other.subject == relation.subject,
+                PredicateCardinality::ManyToMany => false,
+            };
+            if duplicate || reciprocal_duplicate || cardinality_conflict {
+                return Ok(Some(RelationContextIssue {
+                    relation_id: relation.relation_id,
+                    atom_id: relation.atom_id,
+                    context: relation.context,
+                    kind: RelationContextIssueKind::RelationContractViolation,
+                    repairable: false,
+                    detail: format!(
+                        "current relation {} conflicts with current relation {} under {:?} cardinality",
+                        relation.relation_id, other.relation_id, predicate.contract.cardinality
+                    ),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     fn validate_parallel_relation_projection(
         &self,
         manager: &CtxManager,
@@ -7352,6 +7446,10 @@ impl MemoryX {
         for relation in &relations {
             let claim = Self::relation_claim(relation);
             if let Err(issue) = self.validate_relation_atom_claim(relation, &claim) {
+                issues.push(issue);
+                continue;
+            }
+            if let Some(issue) = self.relation_contract_issue(relation, &relations)? {
                 issues.push(issue);
                 continue;
             }
@@ -7570,10 +7668,9 @@ impl MemoryX {
     /// Safely restore current relation atoms missing from their context
     /// projection. The operation is idempotent and fails closed on ambiguity.
     pub fn repair_relation_contexts(&mut self) -> Result<RelationContextRepairReport, StoreError> {
-        let before = self.audit_relation_contexts()?;
-        let relations = self.current_relation_records()?;
-        let repaired = self.reconcile_relation_records(&relations, "explicit_repair")?;
-        let after = self.audit_relation_contexts()?;
+        let migration = self.migrate_relation_contexts(RelationContextRepairOptions::default())?;
+        let before = migration.before;
+        let after = migration.after;
         if !after.is_consistent() {
             return Err(StoreError::Context(
                 "relation context repair completed with unresolved issues".to_owned(),
@@ -7581,6 +7678,133 @@ impl MemoryX {
         }
         Ok(RelationContextRepairReport {
             before,
+            repaired_relation_ids: migration.repaired_relation_ids,
+            retired_parallel_atom_ids: migration.retired_parallel_atom_ids,
+            after,
+        })
+    }
+
+    /// Plan or apply a bounded relation/context migration.
+    ///
+    /// The default policy is strict: any selected non-repairable issue aborts
+    /// before mutation. `allow_partial` must be explicit and leaves every
+    /// blocked issue visible in the returned `after` audit.
+    pub fn migrate_relation_contexts(
+        &mut self,
+        mut options: RelationContextRepairOptions,
+    ) -> Result<RelationContextMigrationReport, StoreError> {
+        options.relation_ids.sort_unstable();
+        options.relation_ids.dedup();
+        if options.relation_ids.len() > MAX_RELATION_CONTEXT_REPAIR_SELECTION {
+            return Err(StoreError::Context(format!(
+                "relation context repair selection exceeds {MAX_RELATION_CONTEXT_REPAIR_SELECTION} ids"
+            )));
+        }
+
+        let before = self.audit_relation_contexts()?;
+        let current_relations = self.current_relation_records()?;
+        let current_ids = current_relations
+            .iter()
+            .map(|relation| relation.relation_id)
+            .collect::<HashSet<_>>();
+        let selected_relation_ids = if options.relation_ids.is_empty() {
+            let mut ids = current_ids.iter().copied().collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids
+        } else {
+            let unknown = options
+                .relation_ids
+                .iter()
+                .copied()
+                .filter(|relation_id| !current_ids.contains(relation_id))
+                .collect::<Vec<_>>();
+            if !unknown.is_empty() {
+                return Err(StoreError::Context(format!(
+                    "relation context repair selected non-current relation ids: {}",
+                    unknown
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )));
+            }
+            options.relation_ids.clone()
+        };
+        let selected = selected_relation_ids
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let blocked_issues = before
+            .issues
+            .iter()
+            .filter(|issue| selected.contains(&issue.relation_id) && !issue.repairable)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut eligible_relation_ids = before
+            .issues
+            .iter()
+            .filter(|issue| selected.contains(&issue.relation_id) && issue.repairable)
+            .map(|issue| issue.relation_id)
+            .collect::<Vec<_>>();
+        eligible_relation_ids.sort_unstable();
+        eligible_relation_ids.dedup();
+
+        if options.dry_run {
+            return Ok(RelationContextMigrationReport {
+                after: before.clone(),
+                before,
+                dry_run: true,
+                allow_partial: options.allow_partial,
+                selected_relation_ids,
+                eligible_relation_ids,
+                blocked_issues,
+                repaired_relation_ids: Vec::new(),
+                retired_parallel_atom_ids: Vec::new(),
+            });
+        }
+        if !options.allow_partial && !blocked_issues.is_empty() {
+            return Err(StoreError::Context(format!(
+                "relation context repair blocked by non-repairable records: {}",
+                blocked_issues
+                    .iter()
+                    .map(|issue| format!(
+                        "{} ({:?}: {})",
+                        issue.relation_id, issue.kind, issue.detail
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )));
+        }
+
+        let eligible = eligible_relation_ids
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let planned_relations = current_relations
+            .iter()
+            .filter(|relation| eligible.contains(&relation.relation_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let repaired = self.reconcile_relation_records(&planned_relations, "explicit_migration")?;
+        let after = self.audit_relation_contexts()?;
+        let unresolved_selected = after
+            .issues
+            .iter()
+            .filter(|issue| selected.contains(&issue.relation_id))
+            .collect::<Vec<_>>();
+        if !options.allow_partial && !unresolved_selected.is_empty() {
+            return Err(StoreError::Context(
+                "relation context repair completed with unresolved selected issues".to_owned(),
+            ));
+        }
+
+        Ok(RelationContextMigrationReport {
+            before,
+            dry_run: false,
+            allow_partial: options.allow_partial,
+            selected_relation_ids,
+            eligible_relation_ids,
+            blocked_issues,
             repaired_relation_ids: repaired.repaired_relation_ids,
             retired_parallel_atom_ids: repaired.retired_parallel_atom_ids,
             after,
@@ -7765,6 +7989,33 @@ impl MemoryX {
         }
         if self.get_entity(object)?.is_none() {
             return Err(StoreError::Io(format!("entity {} not found", object)));
+        }
+        self.require_managed_predicate(predicate)?;
+        if let Some(existing) = self
+            .current_relation_records()?
+            .into_iter()
+            .find(|relation| {
+                relation.subject == subject
+                    && relation.predicate == predicate
+                    && relation.object == object
+                    && relation.context == ctx_id
+            })
+        {
+            if existing.evidence != evidence {
+                return Err(StoreError::Io(
+                    "duplicate relation carries different evidence; use correction or transition"
+                        .to_owned(),
+                ));
+            }
+            self.reconcile_relation_records(
+                std::slice::from_ref(&existing),
+                "duplicate_assertion",
+            )?;
+            return Ok(AuthoringResult {
+                atom_id: existing.atom_id,
+                relation_id: Some(existing.relation_id),
+                ctx_id: existing.context,
+            });
         }
         self.validate_relation_contract(subject, predicate, object, None)?;
         self.ensure_authoring_context(ctx_id)?;
@@ -8237,6 +8488,8 @@ impl MemoryX {
                 }
             }
         }
+
+        summary.relation_context_audit = self.audit_relation_contexts()?;
 
         Ok(summary)
     }
@@ -14209,6 +14462,556 @@ mod tests {
                 .values()
                 .any(|active| active.atom_id == relation.atom_id)
         );
+    }
+
+    #[test]
+    fn relation_assertion_reopen_and_duplicate_initializer_rerun_are_idempotent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("initializer-rerun"));
+        let relation_id;
+        let relation_atom;
+        let predicate_id;
+        let subject;
+        let object;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            predicate_id = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap()
+                .predicate_id;
+            subject = store
+                .create_entity("kpa-mod-700", "module")
+                .unwrap()
+                .entity_id;
+            object = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap()
+                .entity_id;
+            let authored = store
+                .assert_relation(subject, predicate_id, object, 0, Vec::new())
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            store.flush().unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        let duplicate = reopened
+            .assert_relation(subject, predicate_id, object, 0, Vec::new())
+            .unwrap();
+        assert_eq!(duplicate.relation_id, Some(relation_id));
+        assert_eq!(duplicate.atom_id, relation_atom);
+        assert_eq!(reopened.read_relations().unwrap().len(), 1);
+        assert!(reopened.verify_integrity().unwrap().is_valid());
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        assert_eq!(reopened_again.read_relations().unwrap().len(), 1);
+        assert!(
+            reopened_again
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+    }
+
+    #[test]
+    fn duplicate_initializer_repairs_legacy_projection_before_transition() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("legacy-initializer-rerun"));
+        let relation_id;
+        let relation_atom;
+        let predicate_id;
+        let subject;
+        let initial;
+        let bound;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            predicate_id = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap()
+                .predicate_id;
+            subject = store
+                .create_entity("kpa-mod-700", "module")
+                .unwrap()
+                .entity_id;
+            initial = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap()
+                .entity_id;
+            bound = store
+                .create_entity("real-session-uuid", "session_state")
+                .unwrap()
+                .entity_id;
+            let authored = store
+                .assert_relation(subject, predicate_id, initial, 0, Vec::new())
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            store
+                .mutate_contexts(|manager| {
+                    manager
+                        .get_ctx_mut(0)
+                        .ok_or(StoreError::ContextNotFound)?
+                        .active_claims
+                        .retain(|_, active| active.atom_id != relation_atom);
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        assert_eq!(reopened.audit_relation_contexts().unwrap().issues.len(), 1);
+        let duplicate = reopened
+            .assert_relation(subject, predicate_id, initial, 0, Vec::new())
+            .unwrap();
+        assert_eq!(duplicate.relation_id, Some(relation_id));
+        assert_eq!(duplicate.atom_id, relation_atom);
+        assert_eq!(reopened.read_relations().unwrap().len(), 1);
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        assert!(reopened.history(20).unwrap().iter().any(|entry| {
+            entry.operation == HistoryOperation::Repair
+                && entry.details.get("trigger").map(String::as_str) == Some("duplicate_assertion")
+        }));
+
+        let transitioned = reopened
+            .transition_relation(relation_id, bound, 0, Vec::new(), Vec::new())
+            .unwrap();
+        assert_eq!(transitioned.previous_atom_id, relation_atom);
+        assert!(reopened.audit_relation_contexts().unwrap().is_consistent());
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        assert!(
+            reopened_again
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+        assert!(
+            reopened_again
+                .read_relations()
+                .unwrap()
+                .iter()
+                .any(|relation| {
+                    relation.relation_id == transitioned.relation_id
+                        && relation.supersedes == Some(relation_id)
+                })
+        );
+    }
+
+    #[test]
+    fn relation_context_migration_dry_run_apply_and_reopen_preserve_provenance() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("migration-modes"));
+        let relation_id;
+        let relation_atom;
+        let source_ids;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let object = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let source_a = store
+                .register_source(
+                    SourceKind::File,
+                    "module registry",
+                    SourceLocation {
+                        path: Some("MODULES.md".to_owned()),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            let source_b = store
+                .register_source(
+                    SourceKind::File,
+                    "session registry",
+                    SourceLocation {
+                        path: Some("SESSIONS.md".to_owned()),
+                        ..SourceLocation::default()
+                    },
+                )
+                .unwrap();
+            source_ids = vec![source_a.source_id, source_b.source_id];
+            let authored = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            for source_id in &source_ids {
+                store.set_atom_source(relation_atom, *source_id).unwrap();
+            }
+            store
+                .mutate_contexts(|manager| {
+                    manager
+                        .get_ctx_mut(0)
+                        .ok_or(StoreError::ContextNotFound)?
+                        .active_claims
+                        .clear();
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        let mut reopened = MemoryX::new(config.clone()).unwrap();
+        let dry_run = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: true,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+            })
+            .unwrap();
+        assert_eq!(dry_run.eligible_relation_ids, vec![relation_id]);
+        assert!(dry_run.repaired_relation_ids.is_empty());
+        assert_eq!(reopened.audit_relation_contexts().unwrap().issues.len(), 1);
+
+        let applied = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+            })
+            .unwrap();
+        assert_eq!(applied.repaired_relation_ids, vec![relation_id]);
+        assert!(applied.after.is_consistent());
+        assert_eq!(
+            reopened.list_atom_source_ids(&relation_atom).unwrap(),
+            source_ids
+        );
+
+        let idempotent = reopened
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id, relation_id],
+            })
+            .unwrap();
+        assert!(idempotent.eligible_relation_ids.is_empty());
+        assert!(idempotent.repaired_relation_ids.is_empty());
+        drop(reopened);
+
+        let reopened_again = MemoryX::new(config).unwrap();
+        assert!(reopened_again.verify_integrity().unwrap().is_valid());
+        assert_eq!(
+            reopened_again.list_atom_source_ids(&relation_atom).unwrap(),
+            source_ids
+        );
+    }
+
+    #[test]
+    fn mixed_relation_context_migration_requires_explicit_partial_apply() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("mixed-migration"));
+        let mut store = MemoryX::new(config).unwrap();
+        let predicate = store
+            .register_predicate(managed_contract(
+                "related_to",
+                PredicateCardinality::ManyToMany,
+            ))
+            .unwrap();
+        let subject = store.create_entity("subject", "node").unwrap();
+        let object = store.create_entity("object", "node").unwrap();
+        let unavailable_subject = store.create_entity("missing-subject", "node").unwrap();
+        let unavailable_object = store.create_entity("missing-object", "node").unwrap();
+        let source = store
+            .register_source(
+                SourceKind::File,
+                "migration source",
+                SourceLocation {
+                    path: Some("migration.md".to_owned()),
+                    ..SourceLocation::default()
+                },
+            )
+            .unwrap();
+        let repairable = store
+            .assert_relation(
+                subject.entity_id,
+                predicate.predicate_id,
+                object.entity_id,
+                0,
+                Vec::new(),
+            )
+            .unwrap();
+        let repairable_id = repairable.relation_id.unwrap();
+        store
+            .set_atom_source(repairable.atom_id, source.source_id)
+            .unwrap();
+        store
+            .mutate_contexts(|manager| {
+                manager
+                    .get_ctx_mut(0)
+                    .ok_or(StoreError::ContextNotFound)?
+                    .active_claims
+                    .clear();
+                Ok(())
+            })
+            .unwrap();
+        let unavailable_id = repairable_id + 1;
+        store
+            .append_relation(&RelationRecord {
+                relation_id: unavailable_id,
+                subject: unavailable_subject.entity_id,
+                predicate: predicate.predicate_id,
+                object: unavailable_object.entity_id,
+                atom_id: [0xA5; 32],
+                evidence: Vec::new(),
+                valid_time: None,
+                context: 0,
+                confidence: 5000,
+                supersedes: None,
+                deprecated: false,
+                updated_at_unix_ns: current_unix_ns(),
+            })
+            .unwrap();
+
+        let dry_run = store
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: true,
+                allow_partial: false,
+                relation_ids: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(dry_run.eligible_relation_ids, vec![repairable_id]);
+        assert_eq!(dry_run.blocked_issues.len(), 1);
+        assert_eq!(
+            dry_run.blocked_issues[0].kind,
+            RelationContextIssueKind::RelationAtomUnavailable
+        );
+
+        let strict = store.migrate_relation_contexts(RelationContextRepairOptions::default());
+        assert!(strict.is_err());
+        assert_eq!(store.audit_relation_contexts().unwrap().issues.len(), 2);
+
+        let partial = store
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: true,
+                relation_ids: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(partial.repaired_relation_ids, vec![repairable_id]);
+        assert_eq!(partial.after.issues.len(), 1);
+        assert_eq!(
+            partial.after.issues[0].kind,
+            RelationContextIssueKind::RelationAtomUnavailable
+        );
+        assert_eq!(
+            store.list_atom_source_ids(&repairable.atom_id).unwrap(),
+            vec![source.source_id]
+        );
+        let integrity = store.verify_integrity().unwrap();
+        assert!(integrity.is_storage_valid());
+        assert!(!integrity.is_valid());
+        assert_eq!(integrity.relation_context_audit.issues.len(), 1);
+    }
+
+    #[test]
+    fn relation_context_migration_fails_closed_on_managed_cardinality_conflicts() {
+        for cardinality in [
+            PredicateCardinality::ManyToOne,
+            PredicateCardinality::OneToOne,
+        ] {
+            let temp = tempfile::TempDir::new().unwrap();
+            let config = StoreConfig::new(temp.path().join(format!("{cardinality:?}")));
+            let mut store = MemoryX::new(config).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract("state_slot", cardinality))
+                .unwrap();
+            let subject_a = store.create_entity("subject-a", "node").unwrap();
+            let subject_b = store.create_entity("subject-b", "node").unwrap();
+            let object_a = store.create_entity("object-a", "node").unwrap();
+            let object_b = store.create_entity("object-b", "node").unwrap();
+            let first = store
+                .assert_relation(
+                    subject_a.entity_id,
+                    predicate.predicate_id,
+                    object_a.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            let (second_subject, second_object) = match cardinality {
+                PredicateCardinality::ManyToOne => (subject_a.entity_id, object_b.entity_id),
+                PredicateCardinality::OneToOne => (subject_b.entity_id, object_a.entity_id),
+                _ => unreachable!(),
+            };
+            let second_claim = ClaimData {
+                subj: second_subject,
+                pred: u64::from(predicate.predicate_id),
+                obj_tag: ObjTag::NODENUM.to_u8(),
+                obj_val: second_object,
+                qualifiers_mask: 0,
+            };
+            let payload = build_authoring_payload(
+                AtomType::FACT,
+                std::slice::from_ref(&second_claim),
+                &["legacy-cardinality-conflict".to_owned()],
+            )
+            .unwrap();
+            let second_atom = store
+                .ingest(
+                    &payload,
+                    AtomType::FACT,
+                    std::slice::from_ref(&second_claim),
+                    &[],
+                )
+                .unwrap();
+            store
+                .append_relation(&RelationRecord {
+                    relation_id: first.relation_id.unwrap() + 1,
+                    subject: second_subject,
+                    predicate: predicate.predicate_id,
+                    object: second_object,
+                    atom_id: second_atom,
+                    evidence: Vec::new(),
+                    valid_time: None,
+                    context: 0,
+                    confidence: 5000,
+                    supersedes: None,
+                    deprecated: false,
+                    updated_at_unix_ns: current_unix_ns(),
+                })
+                .unwrap();
+
+            let before = serde_json::to_value(store.list_contexts()).unwrap();
+            let audit = store.audit_relation_contexts().unwrap();
+            assert_eq!(audit.issues.len(), 2);
+            assert!(audit.issues.iter().all(|issue| {
+                issue.kind == RelationContextIssueKind::RelationContractViolation
+                    && !issue.repairable
+            }));
+            assert!(store.repair_relation_contexts().is_err());
+            let partial = store
+                .migrate_relation_contexts(RelationContextRepairOptions {
+                    dry_run: false,
+                    allow_partial: true,
+                    relation_ids: Vec::new(),
+                })
+                .unwrap();
+            assert!(partial.repaired_relation_ids.is_empty());
+            assert_eq!(partial.blocked_issues.len(), 2);
+            assert_eq!(serde_json::to_value(store.list_contexts()).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn relation_context_repair_recovers_both_context_publish_interruption_states() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = StoreConfig::new(temp.path().join("repair-interruption"));
+        let relation_id;
+        let relation_atom;
+        let missing_bytes;
+        let repaired_bytes;
+        {
+            let mut store = MemoryX::new(config.clone()).unwrap();
+            let predicate = store
+                .register_predicate(managed_contract(
+                    "has_session_state",
+                    PredicateCardinality::ManyToOne,
+                ))
+                .unwrap();
+            let subject = store.create_entity("module", "component").unwrap();
+            let object = store
+                .create_entity("NOT_ACTIVATED", "session_state")
+                .unwrap();
+            let authored = store
+                .assert_relation(
+                    subject.entity_id,
+                    predicate.predicate_id,
+                    object.entity_id,
+                    0,
+                    Vec::new(),
+                )
+                .unwrap();
+            relation_id = authored.relation_id.unwrap();
+            relation_atom = authored.atom_id;
+            let relation = store.current_relation_records().unwrap().remove(0);
+            let claim = MemoryX::relation_claim(&relation);
+            store
+                .mutate_contexts(|manager| {
+                    manager
+                        .get_ctx_mut(0)
+                        .ok_or(StoreError::ContextNotFound)?
+                        .active_claims
+                        .clear();
+                    Ok(())
+                })
+                .unwrap();
+            missing_bytes = fs::read(config.contexts_path()).unwrap();
+            let mut repaired = store.ctx_manager.lock().clone();
+            repaired
+                .reconcile_claim_with_atom_id(0, &claim, relation_atom)
+                .unwrap();
+            repaired_bytes = serde_json::to_vec(&repaired).unwrap();
+        }
+
+        let contexts_path = config.contexts_path();
+        let backup_path = MemoryX::contexts_backup_path(&contexts_path);
+        let temp_path = contexts_path.with_extension("json.tmp");
+        fs::rename(&contexts_path, &backup_path).unwrap();
+        fs::write(&temp_path, &repaired_bytes).unwrap();
+
+        let mut before_publish = MemoryX::new(config.clone()).unwrap();
+        assert_eq!(
+            before_publish
+                .audit_relation_contexts()
+                .unwrap()
+                .issues
+                .len(),
+            1
+        );
+        let applied = before_publish
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+            })
+            .unwrap();
+        assert_eq!(applied.repaired_relation_ids, vec![relation_id]);
+        assert!(applied.after.is_consistent());
+        drop(before_publish);
+
+        fs::write(&backup_path, &missing_bytes).unwrap();
+        let mut after_publish = MemoryX::new(config.clone()).unwrap();
+        assert!(
+            after_publish
+                .audit_relation_contexts()
+                .unwrap()
+                .is_consistent()
+        );
+        let idempotent = after_publish
+            .migrate_relation_contexts(RelationContextRepairOptions {
+                dry_run: false,
+                allow_partial: false,
+                relation_ids: vec![relation_id],
+            })
+            .unwrap();
+        assert!(idempotent.repaired_relation_ids.is_empty());
+        drop(after_publish);
+
+        let reopened = MemoryX::new(config).unwrap();
+        assert!(reopened.verify_integrity().unwrap().is_valid());
+        assert!(reopened.get_atom(&relation_atom).is_ok());
     }
 
     #[test]

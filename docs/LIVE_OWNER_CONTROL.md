@@ -55,15 +55,28 @@ memoryx --format json client `
   --arguments '{}'
 ```
 
-If every reported issue is explicitly marked `repairable: true`, reconcile
-the durable relation atoms through the same live owner:
+First obtain a non-mutating migration plan through the same live owner:
 
 ```powershell
 memoryx --format json client `
   --base E:\project\.memoryx\bases\project `
   --tool repair_relation_contexts `
-  --arguments '{}'
+  --arguments '{"dry_run":true}'
 ```
+
+Apply only reviewed current relation ids:
+
+```powershell
+memoryx --format json client `
+  --base E:\project\.memoryx\bases\project `
+  --tool repair_relation_contexts `
+  --arguments '{"relation_ids":[1,2,3]}'
+```
+
+Empty arguments retain the compatible strict-apply behavior. Strict apply
+does not mutate anything when a selected issue is non-repairable. A mixed base
+can be processed only by explicitly passing `allow_partial:true`; blocked
+records remain machine-readable in `blocked_issues` and the final audit.
 
 The repair is idempotent. It replaces an equivalent active claim's atom
 identity with the current relation journal atom and records a normal `repair`
@@ -74,6 +87,20 @@ from the current view and normal retrieval. The structured result lists it in
 detach sources. Missing relation atoms, multi-claim parallel atoms, atom/claim
 mismatches, unavailable non-default contexts, and conflicting active values
 fail closed.
+
+The historical cause is bounded: authoring before commit `b2a6e41` mutated the
+in-memory context but did not persist context state during `save`/`flush`.
+Relation journal and CAS records therefore survived a reopen without their
+projection. The durable context path shipped in v1.0.4 and later. Current exact
+duplicate relation assertions are idempotent and reconcile only an unambiguous
+legacy projection; different evidence, cardinality conflicts, and unavailable
+atoms still fail closed.
+
+Context migration publishes `contexts.json` through a synchronized temp file
+and backup replacement. A restart before publication observes the old state;
+a restart after publication observes the repaired state, and reapplying is a
+no-op. This is not a claim of atomicity across arbitrary CAS, graph, relation,
+source, and history writes; the broader N5 gate remains open.
 
 ### Relation/Context Non-Regression Contract
 
@@ -108,8 +135,11 @@ object. The command returns the complete MCP JSON-RPC response.
   the count of current relation atoms actually active in their contexts;
 - `physical_graph_*`: stored topology, including historical nodes and edges.
 
-`verify_integrity` verifies every non-tombstoned CAS atom through the process
-that already owns the base.
+`verify_integrity` verifies every non-tombstoned CAS atom and runs the
+relation/context semantic audit through the process that already owns the
+base. `storage_valid` reports physical CAS validity,
+`semantic_integrity.relation_context` reports projection consistency, and the
+top-level `valid` is false if either fails.
 
 ## Diagnostics
 
