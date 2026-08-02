@@ -1,0 +1,11 @@
+{
+  "schema_version": "memoryx.mx95.provenance-summary.v1",
+  "run_id": "20260802T085223672Z",
+  "base_path": ".memoryx/bases/mx-95-full-cross-testing",
+  "atom_id": "d476c5593e6bfdff38215e7e3f8bd162ca08609fad809ead9ae6913751ad40ad",
+  "registered_source_ids": [30, 31, 32, 33, 34, 35],
+  "integrity_valid": true,
+  "process_exit_code": 0,
+  "foreign_process_action": "none",
+  "raw_registration_evidence": "local-only"
+}

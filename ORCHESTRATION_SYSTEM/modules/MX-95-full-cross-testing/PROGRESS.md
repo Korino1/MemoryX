@@ -2,6 +2,25 @@
 
 State: `PASSED_WITH_LIMITATIONS`
 
+- MemoryX 2.0.6 run `20260802T085223672Z` is now authoritative.
+- Candidate identity passed: 6,298,112 bytes, SHA-256
+  `D9B07DB4F64610A4117AFBB4D4BA498A45398C9F35CB36AB06741B4463A01703`.
+- Lifecycle discovery passed with 47 unique tools for `2025-11-25`,
+  `2025-06-18`, and `2024-11-05`; every owned child exited cleanly.
+- Core coverage passed 47/47 direct tools, 66 calls, and 14 cross-tool
+  sequences. Eighteen resilience cases passed.
+- The new disposable tombstone fixture observed
+  `relation_atom_tombstoned`, rejected unresolved apply, kept dry-run
+  mutation-free, created and validated backup/replay evidence, applied an
+  explicit restore once, repeated idempotently, and reopened consistently.
+- Determinism remained one semantic result and one `IncompleteEvidence`
+  description across 32+1 queries. Nine validator controls passed.
+- Durable evidence atom
+  `d476c5593e6bfdff38215e7e3f8bd162ca08609fad809ead9ae6913751ad40ad`
+  is linked to source IDs 30-35; module-base integrity passed.
+- This run does not choose recovery semantics for KPA records and does not
+  close N5 or the existing live limitations.
+
 - Post-fix run `20260802T062756339Z` is authoritative for MemoryX 2.0.5.
 - Binary identity passed: version 2.0.5, 6,165,504 bytes, SHA-256
   `7E9B26731625830B1A715429DE87D502FD9169B7F8E1FF3E8969939BBBD7A969`.

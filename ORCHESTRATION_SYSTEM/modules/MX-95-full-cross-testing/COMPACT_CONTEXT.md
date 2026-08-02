@@ -1,5 +1,18 @@
 # Compact Context
 
+## Current Authoritative State
+
+- Run: `20260802T085223672Z` against MemoryX 2.0.6.
+- Result: `PASSED_WITH_LIMITATIONS`.
+- Evidence: `evidence/postfix-v2.0.6` and durable atom
+  `d476c5593e6bfdff38215e7e3f8bd162ca08609fad809ead9ae6913751ad40ad`.
+- Coverage: 47/47 direct tools, 66 calls, 14 cross-tool sequences, 18
+  resilience cases, deterministic 32+1 query gate, nine validator controls.
+- Tombstone boundary: technical recovery mechanics passed only on disposable
+  bases. Production restore versus retirement remains an operator decision.
+- N5, real hook/compact execution, cache reuse, model quality, and total
+  semantic acceptance remain open.
+
 Module: `MX-95` / `full-cross-testing`
 Session: `019fc0f9-f099-79a2-be80-ebe515628fa5` (`BOUND`)
 Model: `gpt-5.6-sol`

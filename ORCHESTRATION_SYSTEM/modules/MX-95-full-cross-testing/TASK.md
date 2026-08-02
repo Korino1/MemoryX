@@ -2,6 +2,20 @@
 
 Status: `COMPLETE`
 
+## MemoryX 2.0.6 Tombstone-Recovery Reactivation
+
+- Authoritative run: `20260802T085223672Z`.
+- Checked release candidate: MemoryX 2.0.6, 6,298,112 bytes, SHA-256
+  `D9B07DB4F64610A4117AFBB4D4BA498A45398C9F35CB36AB06741B4463A01703`.
+- Preserve the 47-tool direct/cross-tool gate and add an executable disposable
+  fixture for a current relation backed by an explicitly tombstoned exact CAS
+  atom.
+- Require fail-closed apply without an operator decision, mutation-free
+  dry-run, verified backup/replay, idempotent explicit restore, clean reopen,
+  and valid integrity.
+- Do not infer that restore or retirement is correct for a real KPA relation.
+  N5 and all previously stated live limitations remain open.
+
 ## Post-Fix Reactivation
 
 - Resume the bound session after the root developer's `MX95-001` correction.

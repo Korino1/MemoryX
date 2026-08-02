@@ -2,6 +2,18 @@
 
 Current state: `PASSED_WITH_LIMITATIONS`
 
+MemoryX 2.0.6 reactivation:
+
+- [x] Exact 2.0.6 candidate identity was captured.
+- [x] All 47 discovered tools retained direct and cross-tool evidence.
+- [x] The explicit relation-tombstone fixture failed closed without a decision.
+- [x] Tombstone dry-run wrote no journal or backup.
+- [x] Explicit restore created verified backup/replay evidence and was
+      idempotent across repeat and reopen.
+- [x] Determinism and nine fail-closed validator controls remained passing.
+- [ ] No KPA restore/retire decision is made by this acceptance record.
+- [ ] N5 and previously declared live gates remain open.
+
 - [x] Real module session is observed and bound by `invoke_module.ps1`.
 - [x] Runtime `tools/list` is captured and contains 47 unique tools.
 - [x] Inventory contains exactly the discovered tool set and schema digests.

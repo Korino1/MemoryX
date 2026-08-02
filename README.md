@@ -146,8 +146,10 @@ For example, a project base named `default` is stored in:
 
 The command-line interface and MCP open the same durable store. `update_atom`
 creates a new version linked with `SUPERSEDES`; `delete_atom` creates a
-tombstone instead of physically erasing the old atom. Successful mutations are
-recorded in `meta/history.log`.
+tombstone instead of physically erasing the old atom. A current relation atom
+cannot be deleted directly: transition or correct the relation first.
+Ingestion also refuses to silently reactivate a tombstoned canonical identity.
+Successful mutations are recorded in `meta/history.log`.
 
 One physical base may have only one process holding the write lease at a time.
 Do not point two independent writers at the same directory. A running
@@ -173,6 +175,16 @@ conflicting active value fails closed instead of being guessed or overwritten.
 Repair and managed relation authoring follow the registered predicate
 cardinality, so valid `one_to_many` and `many_to_many` relations are not
 mistaken for state-slot conflicts.
+
+Older bases can also contain a current relation whose exact CAS bytes are still
+present but explicitly tombstoned. The audit reports this separately as
+`relation_atom_tombstoned`; it is not called missing and is never repaired
+automatically. The operator must review the durable delete history and choose
+one action for each affected relation: `restore_atom` reactivates the same
+content-addressed AtomId, while `retire_relation` keeps the atom deleted and
+appends a deprecated `supersedes` relation record. Both actions preserve the
+old atom, tombstone, sources, and history. A physically unavailable atom remains
+`relation_atom_unavailable` and cannot use this path.
 
 Bases written before commit `b2a6e41` (released in v1.0.4) may contain this
 legacy split projection: relation/CAS records were durable, but context changes
@@ -341,14 +353,27 @@ through that owner:
 {"name":"repair_relation_contexts","arguments":{"relation_ids":[1,2,3]}}
 ```
 
+For an explicitly tombstoned current relation, first dry-run a reviewed action:
+
+```json
+{"name":"repair_relation_contexts","arguments":{"dry_run":true,"relation_ids":[7],"tombstone_resolutions":[{"relation_id":7,"action":"restore_atom","reason":"Reviewed deletion was erroneous; restore the exact canonical atom"}]}}
+```
+
+Use `"action":"retire_relation"` instead only when the durable deletion is
+authoritative and the relation must no longer be current. Removing `dry_run`
+commits the reviewed decision. MemoryX creates a hashed state backup under
+`meta/relation-tombstone-backups/<batch-id>` and then appends a synced replay
+record to `meta/relation_tombstone_resolutions.jsonl`. Reopen finishes a
+committed operation idempotently. Keep these backups with the base.
+
 Strict apply is the default and performs no mutation if any selected record is
 non-repairable. For a mixed base, an operator may explicitly set
 `"allow_partial":true`; every skipped record remains in `blocked_issues` and
-the final audit. Repeating a completed apply is a no-op. Context publication
-uses a durable temp/backup replacement, so interruption before publication
-retains the old state and interruption after publication is recovered by an
-idempotent rerun. This narrow guarantee does not claim completion of the wider
-N5 multi-file operation-atomicity roadmap gate.
+the final audit. Repeating a completed apply is a no-op. Context and
+tombstone-resolution projection files use synchronized replacement, and
+committed tombstone decisions use append-only replay. These bounded guarantees
+do not claim completion of the wider N5 multi-file operation-atomicity roadmap
+gate.
 
 ## Reproducible Benchmark
 
@@ -534,8 +559,11 @@ $exe = ".\target\release\memoryx.exe"
 
 Командная строка и MCP открывают одно и то же постоянное хранилище.
 `update_atom` создаёт новую версию со связью `SUPERSEDES`, а `delete_atom`
-создаёт метку удаления вместо физического стирания старого атома. Успешные
-изменения записываются в `meta/history.log`.
+создаёт метку удаления вместо физического стирания старого атома. Атом текущей
+связи нельзя удалить напрямую: сначала связь надо заменить или исправить.
+Повторная загрузка также не может незаметно вернуть удалённый атом с тем же
+каноническим идентификатором. Успешные изменения записываются в
+`meta/history.log`.
 
 В одной физической базе одновременно может быть только один процесс,
 удерживающий право записи. Не направляйте два независимых процесса записи в
@@ -564,6 +592,17 @@ $exe = ".\target\release\memoryx.exe"
 При восстановлении и записи управляемых связей учитывается зарегистрированная
 кардинальность предиката: допустимые связи «один ко многим» и «многие ко многим»
 не считаются конфликтом состояния.
+
+В старой базе может встретиться текущая связь, точные байты атома которой
+сохранились в CAS, но сам атом был явно помечен как удалённый. Проверка сообщает
+об этом отдельным видом `relation_atom_tombstoned`; такой атом не называется
+отсутствующим и никогда не возвращается автоматически. После изучения истории
+удаления пользователь выбирает действие для каждой связи: `restore_atom`
+возвращает тот же атом с тем же идентификатором, а `retire_relation` оставляет
+его удалённым и добавляет обычную историческую запись замещения связи. В обоих
+случаях сохраняются исходный атом, метка удаления, источники и история.
+Физически отсутствующий атом остаётся `relation_atom_unavailable` и этим путём
+не восстанавливается.
 
 Базы, записанные до изменения `b2a6e41`, вошедшего в версию 1.0.4, могут
 содержать старое расхождение: связь и атом сохранялись, а изменение контекста
@@ -735,14 +774,29 @@ $exe = ".\target\release\memoryx.exe"
 {"name":"repair_relation_contexts","arguments":{"relation_ids":[1,2,3]}}
 ```
 
+Для текущей связи с явно удалённым атомом сначала выполните проверку выбранного
+решения без записи:
+
+```json
+{"name":"repair_relation_contexts","arguments":{"dry_run":true,"relation_ids":[7],"tombstone_resolutions":[{"relation_id":7,"action":"restore_atom","reason":"Удаление проверено и признано ошибочным; вернуть точный канонический атом"}]}}
+```
+
+Если удаление было правильным и связь больше не должна быть текущей, укажите
+`"action":"retire_relation"`. Для применения уберите `dry_run`. Перед записью
+MemoryX создаёт проверяемую резервную копию в
+`meta/relation-tombstone-backups/<идентификатор-пакета>`, затем синхронно
+добавляет решение в `meta/relation_tombstone_resolutions.jsonl`. После сбоя
+повторное открытие завершает уже подтверждённое действие идемпотентно. Эти
+резервные копии надо хранить вместе с базой.
+
 По умолчанию применение строгое: если хотя бы одна выбранная запись не может
 быть безопасно восстановлена, база не изменяется. Для смешанной базы оператор
 может явно указать `"allow_partial":true`; пропущенные записи остаются в
 `blocked_issues` и итоговом отчёте. Повторное применение после успешной
-миграции ничего не меняет. Публикация `contexts.json` использует временный файл
-и резервную копию: прерывание до публикации оставляет старое состояние, после
-публикации достаточно идемпотентного повторного запуска. Это узкая гарантия и
-не означает завершение общего этапа N5 по атомарности многофайловых операций.
+миграции ничего не меняет. Файлы проекций записываются через синхронную замену,
+а подтверждённые решения по удалённым атомам имеют журнал повторного
+воспроизведения. Эти узкие гарантии не означают завершение общего этапа N5 по
+атомарности многофайловых операций.
 
 ## Воспроизводимая проверка
 

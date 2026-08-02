@@ -32,6 +32,9 @@ def main() -> int:
     parser.add_argument("--repo-root", required=True, type=Path)
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--memoryx-version", required=True)
+    parser.add_argument("--determinism-dir", default="determinism-postfix")
+    parser.add_argument("--validator-controls-dir", default="validator-controls")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
@@ -47,8 +50,8 @@ def main() -> int:
         "coverage-ledger.accepted.json",
         "postfix-run-summary.json",
         "resilience-attempt-01/resilience-report.json",
-        "determinism-postfix-attempt-02/determinism-report.json",
-        "validator-controls-attempt-02/mutation-control-report.json",
+        f"{args.determinism_dir}/determinism-report.json",
+        f"{args.validator_controls_dir}/mutation-control-report.json",
     ]
     source_specs = []
     for relative in relative_sources:
@@ -108,15 +111,15 @@ def main() -> int:
             {
                 "atom_type": "FACT",
                 "claims": [
-                    {"subj": 95002005, "pred": 95, "obj_tag": 3, "obj_val": 47},
-                    {"subj": 95002005, "pred": 96, "obj_tag": 3, "obj_val": 0},
+                    {"subj": 95002006, "pred": 95, "obj_tag": 3, "obj_val": 47},
+                    {"subj": 95002006, "pred": 96, "obj_tag": 3, "obj_val": 0},
                 ],
                 "symbols": [
                     f"mx95_run_{args.run_id}",
-                    "memoryx_2_0_5",
+                    f"memoryx_{args.memoryx_version.replace('.', '_')}",
                     "observed_tools_47",
                     "direct_tools_47_of_47",
-                    "mx95_001_postfix_semantic_determinism_passed",
+                    "relation_tombstone_resolution_cross_test_passed",
                 ],
             },
             "MX95-EVIDENCE-ATOM",

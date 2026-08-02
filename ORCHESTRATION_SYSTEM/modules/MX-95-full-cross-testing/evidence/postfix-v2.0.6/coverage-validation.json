@@ -1,0 +1,14 @@
+{
+  "schema_version": "memoryx.mx95.coverage-validation.v1",
+  "authoritative_tool_count": 47,
+  "ledger_tool_count": 47,
+  "call_count": 66,
+  "sequence_count": 14,
+  "resilience_case_count": 18,
+  "determinism_same_process_repetitions": 32,
+  "determinism_after_reopen_repetitions": 1,
+  "determinism_unique_semantic_results": 1,
+  "determinism_unique_descriptions": 1,
+  "failures": [],
+  "passed": true
+}

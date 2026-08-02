@@ -1,5 +1,20 @@
 # Plan
 
+## MemoryX 2.0.6 Reactivation
+
+1. **Completed:** capture the fresh 47-tool surface for all three supported MCP
+   protocol versions.
+2. **Completed:** execute 47 direct tools, 66 observed calls, and 14 meaningful
+   cross-tool sequences on isolated project-local bases.
+3. **Completed:** execute 18 resilience cases, including explicit
+   relation-tombstone decision, backup, replay, repeat, and reopen behavior.
+4. **Completed:** require 32 same-process deterministic queries plus one reopen
+   query and run nine fail-closed validator mutation controls.
+5. **Completed:** register source-backed evidence in the durable MX-95 base and
+   preserve the bounded evidence bundle under `evidence/postfix-v2.0.6`.
+6. **Open outside this packet:** N5 in-flight crash-boundary proof, real hook
+   lifecycle, cache reuse, model quality, and operator decisions for KPA data.
+
 Status: `COMPLETE`
 
 1. **Completed:** re-read the bound module packet, canonical concept/roadmap references, and all three dossiers.

@@ -1,0 +1,203 @@
+{
+  "schema_version": "memoryx.mx95.resilience-audit.v1",
+  "run_id": "20260802T085223672Z",
+  "attempt": 1,
+  "observed_at_utc": "2026-08-02T08:52:54.466725+00:00",
+  "cases": [
+    {
+      "name": "source_backed_provenance",
+      "passed": true,
+      "evidence": {
+        "source_id": 1,
+        "path": "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/TASK.md",
+        "direct_case": "D-SRC-004"
+      }
+    },
+    {
+      "name": "same_process_deterministic_query",
+      "passed": true,
+      "evidence": {
+        "first_sha256": "31de7e4820bb2b696fe1699328160cc962f4818043860ad55238daf7ff3fc755",
+        "second_sha256": "31de7e4820bb2b696fe1699328160cc962f4818043860ad55238daf7ff3fc755"
+      }
+    },
+    {
+      "name": "query_response_limit_enforced",
+      "passed": true,
+      "evidence": {
+        "bytes_truncated": true,
+        "emitted_bytes": 1131,
+        "items_truncated": true,
+        "max_bytes": 2048,
+        "max_items": 1,
+        "original_bytes": 2917,
+        "original_items": 11,
+        "retained_items": 0
+      }
+    },
+    {
+      "name": "determinism_first_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "cross_reopen_deterministic_query",
+      "passed": true,
+      "evidence": {
+        "before_sha256": "31de7e4820bb2b696fe1699328160cc962f4818043860ad55238daf7ff3fc755",
+        "after_sha256": "31de7e4820bb2b696fe1699328160cc962f4818043860ad55238daf7ff3fc755"
+      }
+    },
+    {
+      "name": "clean_base_integrity_after_reopen",
+      "passed": true,
+      "evidence": {
+        "operation": "verify_integrity",
+        "schema_version": "memoryx.tool-result.v1",
+        "semantic_integrity": {
+          "relation_context": {
+            "active_relation_claim_count": 2,
+            "consistent": true,
+            "current_relation_count": 2,
+            "issue_count": 0,
+            "issues": []
+          }
+        },
+        "status": "ok",
+        "storage_valid": true,
+        "summary": {
+          "checked_atoms": 16,
+          "errors": [],
+          "invalid_atoms": 0,
+          "missing_atoms": 0,
+          "relation_context_audit": {
+            "active_relation_claim_count": 2,
+            "current_relation_count": 2,
+            "issues": []
+          },
+          "valid_atoms": 16
+        },
+        "valid": true
+      }
+    },
+    {
+      "name": "determinism_reopen_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "migration_seed_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0,
+        "relation_id": 1
+      }
+    },
+    {
+      "name": "relation_context_migration_and_idempotence",
+      "passed": true,
+      "evidence": {
+        "before_issue_count": 1,
+        "eligible_relation_ids": [
+          1
+        ],
+        "applied_mutated": true,
+        "final_consistent": true,
+        "repeat_mutated": false,
+        "fixture_before_sha256": "998b75a445901fea15e5360e5520b53591aac6011c53147940eab733d5875a71",
+        "fixture_damaged_sha256": "b4db0e80c52e2a235c0a87de3e73e0dc0a9472d5bebe1131b635e04977335ffb"
+      }
+    },
+    {
+      "name": "migration_process_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "tombstone_seed_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0,
+        "relation_atom_id": "de6574fb9ad4e1a801871b2394f201637d2760883329a95242fb115744715810",
+        "tombstone_atom_id": "c3436eca9a2d5a321d4a0e608a4c0b36cd0eb9cddbc289365271e63781f20cf8"
+      }
+    },
+    {
+      "name": "explicit_tombstone_resolution_is_fail_closed_and_idempotent",
+      "passed": true,
+      "evidence": {
+        "issue_kind": "relation_atom_tombstoned",
+        "unresolved_error": {},
+        "dry_run_mutated": false,
+        "dry_run_wrote_journal": false,
+        "apply_mutated": true,
+        "backup_dir": "meta/relation-tombstone-backups/0939ff6cf52bb9a052a596e5583082401954aeda137921ffcad9a44180879fa0",
+        "final_consistent": true,
+        "repeat_mutated": false,
+        "repeat_already_applied": true,
+        "legacy_relation_journal_sha256": "3292d9d81a37035a81679617a6cd8b1e71613ee65bf69fe7eb155ae6ad633890"
+      }
+    },
+    {
+      "name": "tombstone_apply_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "tombstone_resolution_survives_reopen",
+      "passed": true,
+      "evidence": {
+        "audit_consistent": true,
+        "integrity_valid": true
+      }
+    },
+    {
+      "name": "tombstone_reopen_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "owned_process_forced_exit",
+      "passed": true,
+      "evidence": {
+        "child_pid": 20188,
+        "exit_code": 1,
+        "committed_atom": "1b50c2cc178b58c5ebdc46d7900a63127848fff1b01cd6437545fc5b69c3c3a8",
+        "foreign_process_action": "none"
+      }
+    },
+    {
+      "name": "committed_state_recovered_after_process_death",
+      "passed": true,
+      "evidence": {
+        "atom_id": "1b50c2cc178b58c5ebdc46d7900a63127848fff1b01cd6437545fc5b69c3c3a8",
+        "lookup_count_one": true,
+        "integrity_valid": true,
+        "checked_atoms": 1
+      }
+    },
+    {
+      "name": "crash_recovery_clean_exit",
+      "passed": true,
+      "evidence": {
+        "exit_code": 0
+      }
+    }
+  ],
+  "limitations": [
+    "The forced process death occurs after a committed response; it is not an in-flight persistence-boundary matrix.",
+    "The migration fixture is deliberately damaged and is excluded from clean-base integrity claims until repair completes.",
+    "These structural scenarios do not close N5 operation crash atomicity or prove hooks, compact/resume, cache reuse, or model quality."
+  ],
+  "passed": true
+}

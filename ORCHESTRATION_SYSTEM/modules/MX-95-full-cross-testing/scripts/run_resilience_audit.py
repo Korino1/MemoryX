@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -201,6 +202,156 @@ def main() -> int:
         migration_exit = migration_check.close()
         migration_check.write_logs(output, "migration-apply")
     case(cases, "migration_process_clean_exit", migration_exit == 0, {"exit_code": migration_exit})
+
+    # Reproduce the legacy state where a relation journal record still names an
+    # exact CAS atom that carries explicit durable delete history. The fixture
+    # is built only in this disposable module base: delete the relation-shaped
+    # atom first, then append the legacy relation record while no owner is open.
+    tombstone_name = f"mx-95-disposable-{args.run_id}-{attempt_suffix}-relation-tombstone"
+    tombstone_seed = McpProcess(binary, repo, tombstone_name)
+    try:
+        init_client(tombstone_seed)
+        tombstone_predicate = audit.call(tombstone_seed, "register_predicate", {
+            "stable_key": "mx95:legacy_tombstone_relation",
+            "canonical_name": "mx95_legacy_tombstone_relation",
+            "description": "Disposable MX-95 legacy tombstone fixture.",
+            "direction": "directed", "cardinality": "many_to_many",
+        }, "E-TOMB-001", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        tombstone_predicate_id = require_int(tombstone_predicate, "predicate_id")
+        tombstone_left = require_int(audit.call(tombstone_seed, "create_entity", {
+            "canonical_name": "MX95 Tombstone Left", "entity_type": "fixture",
+        }, "E-TOMB-002", "SQ-TOMBSTONE-MIGRATION", direct=False), "entity_id")
+        tombstone_right = require_int(audit.call(tombstone_seed, "create_entity", {
+            "canonical_name": "MX95 Tombstone Right", "entity_type": "fixture",
+        }, "E-TOMB-003", "SQ-TOMBSTONE-MIGRATION", direct=False), "entity_id")
+        relation_atom = audit.call(tombstone_seed, "add_claim", {
+            "entity_id": tombstone_left,
+            "predicate": tombstone_predicate_id,
+            "object": tombstone_right,
+            "object_tag": "NODENUM",
+            "ctx_id": 0,
+        }, "E-TOMB-004", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        relation_atom_id = require_str(relation_atom, "atom_id")
+        deleted = audit.call(tombstone_seed, "delete_atom", {
+            "atom_id": relation_atom_id, "reason": "Obsolete",
+        }, "E-TOMB-005", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        tombstone_atom_id = require_str(deleted, "tombstone_id")
+    finally:
+        tombstone_seed_exit = tombstone_seed.close()
+        tombstone_seed.write_logs(output, "tombstone-seed")
+    case(cases, "tombstone_seed_clean_exit", tombstone_seed_exit == 0, {
+        "exit_code": tombstone_seed_exit,
+        "relation_atom_id": relation_atom_id,
+        "tombstone_atom_id": tombstone_atom_id,
+    })
+
+    tombstone_base = repo / ".memoryx" / "bases" / tombstone_name
+    relation_journal = tombstone_base / "meta" / "relations.jsonl"
+    legacy_relation_id = 1
+    legacy_record = {
+        "relation_id": legacy_relation_id,
+        "subject": tombstone_left,
+        "predicate": tombstone_predicate_id,
+        "object": tombstone_right,
+        "atom_id": list(bytes.fromhex(relation_atom_id)),
+        "evidence": [],
+        "valid_time": None,
+        "context": 0,
+        "confidence": 5000,
+        "supersedes": None,
+        "deprecated": False,
+        "updated_at_unix_ns": time.time_ns(),
+    }
+    relation_journal.parent.mkdir(parents=True, exist_ok=True)
+    with relation_journal.open("a", encoding="utf-8", newline="\n") as journal:
+        journal.write(json.dumps(legacy_record, separators=(",", ":")) + "\n")
+        journal.flush()
+        os.fsync(journal.fileno())
+    legacy_journal_sha256 = sha_file(relation_journal)
+
+    resolution = {
+        "relation_id": legacy_relation_id,
+        "action": "restore_atom",
+        "reason": "MX-95 fixture owner confirms the deletion was erroneous",
+    }
+    tombstone_check = McpProcess(binary, repo, tombstone_name, allow_existing=True)
+    try:
+        init_client(tombstone_check)
+        tombstone_audit = audit.call(tombstone_check, "audit_relation_contexts", {},
+                                     "E-TOMB-006", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        unresolved = audit.call(tombstone_check, "repair_relation_contexts", {
+            "relation_ids": [legacy_relation_id],
+        }, "E-TOMB-007", "SQ-TOMBSTONE-MIGRATION", expect_error=True, direct=False)
+        tombstone_dry = audit.call(tombstone_check, "repair_relation_contexts", {
+            "dry_run": True,
+            "relation_ids": [legacy_relation_id],
+            "tombstone_resolutions": [resolution],
+        }, "E-TOMB-008", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        resolution_journal = tombstone_base / "meta" / "relation_tombstone_resolutions.jsonl"
+        dry_run_wrote_journal = resolution_journal.exists()
+        tombstone_applied = audit.call(tombstone_check, "repair_relation_contexts", {
+            "relation_ids": [legacy_relation_id],
+            "tombstone_resolutions": [resolution],
+        }, "E-TOMB-009", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        tombstone_final = audit.call(tombstone_check, "audit_relation_contexts", {},
+                                     "E-TOMB-010", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        tombstone_repeat = audit.call(tombstone_check, "repair_relation_contexts", {
+            "relation_ids": [legacy_relation_id],
+            "tombstone_resolutions": [resolution],
+        }, "E-TOMB-011", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        backup_dir = find_first(tombstone_applied, "backup_dir")
+        tombstone_ok = (
+            find_first(tombstone_audit, "consistent") is False
+            and find_first(tombstone_audit, "kind") == "relation_atom_tombstoned"
+            and find_first(unresolved, "isError") is not False
+            and legacy_relation_id in (find_first(tombstone_dry, "eligible_relation_ids") or [])
+            and find_first(tombstone_dry, "mutated") is False
+            and not dry_run_wrote_journal
+            and find_first(tombstone_applied, "mutated") is True
+            and isinstance(backup_dir, str)
+            and (tombstone_base / backup_dir / "manifest.json").is_file()
+            and resolution_journal.is_file()
+            and find_first(tombstone_final, "consistent") is True
+            and find_first(tombstone_repeat, "mutated") is False
+            and find_first(tombstone_repeat, "already_applied") is True
+        )
+        case(cases, "explicit_tombstone_resolution_is_fail_closed_and_idempotent", tombstone_ok, {
+            "issue_kind": find_first(tombstone_audit, "kind"),
+            "unresolved_error": unresolved,
+            "dry_run_mutated": find_first(tombstone_dry, "mutated"),
+            "dry_run_wrote_journal": dry_run_wrote_journal,
+            "apply_mutated": find_first(tombstone_applied, "mutated"),
+            "backup_dir": backup_dir,
+            "final_consistent": find_first(tombstone_final, "consistent"),
+            "repeat_mutated": find_first(tombstone_repeat, "mutated"),
+            "repeat_already_applied": find_first(tombstone_repeat, "already_applied"),
+            "legacy_relation_journal_sha256": legacy_journal_sha256,
+        })
+    finally:
+        tombstone_apply_exit = tombstone_check.close()
+        tombstone_check.write_logs(output, "tombstone-apply")
+    case(cases, "tombstone_apply_clean_exit", tombstone_apply_exit == 0,
+         {"exit_code": tombstone_apply_exit})
+
+    tombstone_reopen = McpProcess(binary, repo, tombstone_name, allow_existing=True)
+    try:
+        init_client(tombstone_reopen)
+        reopened_audit = audit.call(tombstone_reopen, "audit_relation_contexts", {},
+                                    "E-TOMB-012", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        reopened_integrity = audit.call(tombstone_reopen, "verify_integrity", {},
+                                        "E-TOMB-013", "SQ-TOMBSTONE-MIGRATION", direct=False)
+        case(cases, "tombstone_resolution_survives_reopen", (
+            find_first(reopened_audit, "consistent") is True
+            and find_first(reopened_integrity, "valid") is True
+        ), {
+            "audit_consistent": find_first(reopened_audit, "consistent"),
+            "integrity_valid": find_first(reopened_integrity, "valid"),
+        })
+    finally:
+        tombstone_reopen_exit = tombstone_reopen.close()
+        tombstone_reopen.write_logs(output, "tombstone-reopen")
+    case(cases, "tombstone_reopen_clean_exit", tombstone_reopen_exit == 0,
+         {"exit_code": tombstone_reopen_exit})
 
     # Structural process-death recovery: kill only the child created here after a
     # committed response, then require lease release, persisted lookup, and clean

@@ -88,6 +88,38 @@ detach sources. Missing relation atoms, multi-claim parallel atoms, atom/claim
 mismatches, unavailable non-default contexts, and conflicting active values
 fail closed.
 
+A legacy current relation can instead reference an atom whose canonical CAS
+body is intact but whose location state and history contain an explicit
+tombstone. `audit_relation_contexts` reports this as
+`relation_atom_tombstoned`, not `relation_atom_unavailable`. It remains blocked
+until the operator supplies exactly one reviewed decision:
+
+```powershell
+memoryx --format json client `
+  --base E:\project\.memoryx\bases\project `
+  --tool repair_relation_contexts `
+  --arguments '{"dry_run":true,"relation_ids":[7],"tombstone_resolutions":[{"relation_id":7,"action":"restore_atom","reason":"Reviewed deletion was erroneous"}]}'
+```
+
+`restore_atom` clears only the derived deletion projection, validates the exact
+CAS hash and claim, restores the durable trust value from the same atom body,
+and reconciles the declared context under the registered cardinality contract.
+`retire_relation` leaves the atom tombstoned, removes its active context
+projections, and appends a deprecated relation record that supersedes the old
+current relation. Neither action deletes the atom, tombstone, source links, or
+history. A missing CAS body, shared relation atom, absent delete history,
+cardinality conflict, claim mismatch, or unknown relation remains
+unrecoverable through this API.
+
+Apply creates a content-hashed backup under
+`meta/relation-tombstone-backups/<batch-id>` before appending the synced
+operator decision to `meta/relation_tombstone_resolutions.jsonl`. The journal
+is the bounded commit/replay point. Reopen validates the relation snapshot, CAS
+identity, delete history, backup manifest, and journal identity before
+finishing a committed decision. Torn final journal records are truncated;
+complete corrupt or conflicting records block open. Backups are part of the
+durable recovery evidence and must be retained.
+
 The historical cause is bounded: authoring before commit `b2a6e41` mutated the
 in-memory context but did not persist context state during `save`/`flush`.
 Relation journal and CAS records therefore survived a reopen without their
@@ -102,11 +134,11 @@ multiple permitted targets active in one context; `many_to_one` and
 `one_to_one` still reject incompatible current values. A missing managed
 predicate contract is never guessed.
 
-Context migration publishes `contexts.json` through a synchronized temp file
-and backup replacement. A restart before publication observes the old state;
-a restart after publication observes the repaired state, and reapplying is a
-no-op. This is not a claim of atomicity across arbitrary CAS, graph, relation,
-source, and history writes; the broader N5 gate remains open.
+Context migration publishes derived state through synchronized replacement.
+Explicit tombstone decisions additionally use backup-first append-only replay.
+These are bounded recovery guarantees, not a claim of atomicity across
+arbitrary CAS, graph, relation, source, and history writes; the broader N5 gate
+remains open.
 
 ### Relation/Context Non-Regression Contract
 
@@ -115,7 +147,8 @@ non-deprecated relation journal record has its canonical relation atom in the
 declared context's `active_claims`. They do not introduce a new relation model.
 
 - Existing base formats and relation/context semantics remain readable. Audit
-  is read-only; no migration or repair is performed implicitly on open.
+  is read-only; no new migration decision is made implicitly on open. Reopen
+  may only replay a previously committed explicit tombstone decision.
 - Repair is an additive, explicit operator action. It is idempotent,
   provenance/history preserving, and fail-closed on missing, ambiguous,
   conflicting, multi-claim, or mismatched data.

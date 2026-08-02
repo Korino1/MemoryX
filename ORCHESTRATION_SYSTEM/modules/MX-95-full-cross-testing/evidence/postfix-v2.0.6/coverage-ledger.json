@@ -1,0 +1,2271 @@
+{
+  "schema_version": "memoryx.mx95.coverage-ledger.v1",
+  "run_id": "20260802T085223672Z",
+  "authoritative_surface_sha256": "23bcea0f7646d49c7f522076cd2e72b2fe2c254fedb44d0265590a1f1fdfe947",
+  "observed_tool_count": 47,
+  "tools": [
+    {
+      "name": "active_base",
+      "schema_sha256": "778439a11331c1620b38c9e6fd4c4951941eaecc96194bd79d36fc8520f72a4e",
+      "purpose": "Return the currently active base_ref used by tools when base_ref is omitted.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-BASE-002-2",
+        "method": "tools/call",
+        "params": {
+          "name": "active_base",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool active_base --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "transport_only",
+        "source_anchor": "src/bin/memoryx.rs:5804",
+        "rationale": "Session registry operation"
+      },
+      "direct_case_id": "D-BASE-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-BASE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "add_claim",
+      "schema_sha256": "0869af9ac79b9be4e69aaecd17d28d78822aa190a4c8ca50c8ba7fdcd60e7c64",
+      "purpose": "Add a semi-structured atom-backed claim to an existing high-level entity; this writes an atom and asserts it in the selected context.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ENT-006-30",
+        "method": "tools/call",
+        "params": {
+          "name": "add_claim",
+          "arguments": {
+            "entity_id": 1,
+            "predicate": 2513725359,
+            "object": 9504,
+            "object_tag": "U64",
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx add-entity-claim"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5954",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ENT-006",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ENTITY"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "alias_entity",
+      "schema_sha256": "feab1085a0c3c0edc223a2ab6a89b2a23ceeff8084ebb4ce8c038f853641c556",
+      "purpose": "Add an alias to an existing high-level entity record.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ENT-003-26",
+        "method": "tools/call",
+        "params": {
+          "name": "alias_entity",
+          "arguments": {
+            "entity_id": 1,
+            "alias": "mx95-a"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool alias_entity --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5942",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ENT-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ENTITY"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "assert_relation",
+      "schema_sha256": "a9964cffc8dbe17de1174e10435f664bf4ac8c618bfe93ccad92ba82ed81c53d",
+      "purpose": "Create an atom-backed relation claim between two high-level entities and assert it in a context.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-REL-001-31",
+        "method": "tools/call",
+        "params": {
+          "name": "assert_relation",
+          "arguments": {
+            "subject": 1,
+            "predicate": 2513725359,
+            "object": 2,
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx create-relation"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5957",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-REL-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-CONFLICT",
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation",
+        "conflict"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "attach_atom_source",
+      "schema_sha256": "3043b23d775aef8f04b713d7d8a6e6f9c216fe4dfe2d8f6d62c756fd00b69207",
+      "purpose": "Accumulate one existing registered source id on an atom. Distinct sources are preserved durably; repeating the same atom/source pair is idempotent and never replaces prior attachments.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRC-003-15",
+        "method": "tools/call",
+        "params": {
+          "name": "attach_atom_source",
+          "arguments": {
+            "atom_id": "30ef317e2b66b2ba65cd7bf70abfd37aa38d8118ee6729f08e024ef54dbf9d10",
+            "source_id": 1
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool attach_atom_source --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5900",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRC-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-IDEMPOTENCE",
+        "SQ-PROVENANCE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation",
+        "provenance"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "audit_relation_contexts",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "Audit the durable projection from every current relation journal record to its declared context active_claims. This read-only check reports missing contexts, missing relation atoms, atom/claim mismatches, non-canonical equivalent claims, and conflicting active values without changing the base.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-REL-004-34",
+        "method": "tools/call",
+        "params": {
+          "name": "audit_relation_contexts",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool audit_relation_contexts --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5975",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-REL-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "integrity",
+        "reopen"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "batch_ingest",
+      "schema_sha256": "739083b3edeb4cd26ccfc1c075684827abb989b4020887e4f7ba551f03c10a4f",
+      "purpose": "Create multiple atoms in one call; each batch item uses the same payload shape as ingest and becomes a separate stored atom.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-002-40",
+        "method": "tools/call",
+        "params": {
+          "name": "batch_ingest",
+          "arguments": {
+            "atoms": [
+              {
+                "atom_type": "FACT",
+                "claims": [
+                  {
+                    "subj": 9510,
+                    "pred": 9511,
+                    "obj_tag": 3,
+                    "obj_val": 9512
+                  }
+                ],
+                "symbols": [
+                  "mx95_batch_one"
+                ]
+              },
+              {
+                "atom_type": "DECISION",
+                "claims": [
+                  {
+                    "subj": 9520,
+                    "pred": 9521,
+                    "obj_tag": 3,
+                    "obj_val": 9522
+                  }
+                ],
+                "symbols": [
+                  "mx95_batch_two"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx ingest (file may contain multiple atoms)"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5864",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ATOM-LIFECYCLE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "branch_context",
+      "schema_sha256": "e1d4bd378fd6b2a05e0afa603280d6f3d491b281fe1d88921887c9514e41ee22",
+      "purpose": "Create a child context from an existing live parent context id and optionally assign a new policy id and branch reason.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-CTX-003-38",
+        "method": "tools/call",
+        "params": {
+          "name": "branch_context",
+          "arguments": {
+            "parent_ctx": 1,
+            "policy_id": 96,
+            "reason": "MX-95 branch"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool branch_context --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5999",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-CTX-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-CONTEXT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "compile_query_contract",
+      "schema_sha256": "4c5c9116ff9fa9835668b3369b39087ecc2d3d28fc6f6e3a15c252c6de979b4b",
+      "purpose": "Compile natural-language query_text into the explicit QueryContract JSON that an agent can inspect, edit, validate, and pass back to query.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-QC-001-8",
+        "method": "tools/call",
+        "params": {
+          "name": "compile_query_contract",
+          "arguments": {
+            "query_text": "Explain mx95 provenance and require provenance"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx query --emit-contract"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5831",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-QC-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-QUERY-CONTRACT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "connect_base",
+      "schema_sha256": "6ce9cd1a2a06a696d596e1f83aa5d9926eb8fd1e38f3105670440d373f8469d5",
+      "purpose": "Connect a project/user/path base to this MCP process. Use base_ref later to query or write that base without starting another MCP server.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-BASE-003-3",
+        "method": "tools/call",
+        "params": {
+          "name": "connect_base",
+          "arguments": {
+            "base_ref": "project:mx-95-disposable-20260802T085223672Z-secondary",
+            "scope": "project",
+            "name": "mx-95-disposable-20260802T085223672Z-secondary"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool connect_base --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "transport_only",
+        "source_anchor": "src/bin/memoryx.rs:5805",
+        "rationale": "Session registry operation"
+      },
+      "direct_case_id": "D-BASE-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-BASE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "correct_claim",
+      "schema_sha256": "034fccb318a927bb9354337542872d686901e83b6955973b0152197129d2b9ce",
+      "purpose": "Correct a claim-bearing atom by writing a superseding atom version; no old content is erased.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-005-43",
+        "method": "tools/call",
+        "params": {
+          "name": "correct_claim",
+          "arguments": {
+            "atom_id": "cab5a8988a6825661a3c6438910ead2159e95783f8406640ca549b87bc713e6b",
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "subj": 9550,
+                "pred": 1,
+                "obj_tag": 3,
+                "obj_val": 9551
+              }
+            ],
+            "symbols": [
+              "mx95_correct_new"
+            ]
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool correct_claim --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5873",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-005",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ATOM-LIFECYCLE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "correct_relation",
+      "schema_sha256": "c69fb459d3dc130051357b772dce9d07e707199256199fef42885126a461576b",
+      "purpose": "Correct an existing relation by writing a superseding atom-backed relation.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-REL-002-32",
+        "method": "tools/call",
+        "params": {
+          "name": "correct_relation",
+          "arguments": {
+            "relation_id": 1,
+            "subject": 1,
+            "predicate": 2513725359,
+            "object": 3,
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool correct_relation --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5963",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-REL-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "create_context",
+      "schema_sha256": "e2c74a7e7ed91a7f0f9076ac282dac64e23135f2a2fa6685e565f804cdf1e849",
+      "purpose": "Create a new context in the active base, optionally using the provided policy id when you need a specific policy branch.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-CTX-001-36",
+        "method": "tools/call",
+        "params": {
+          "name": "create_context",
+          "arguments": {
+            "policy_id": 95
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool create_context --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5987",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-CTX-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-CONTEXT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "create_entity",
+      "schema_sha256": "5338d84b4a1afad40129b266b398dd1cecaf34a99ade072ce4f535378b7dd682",
+      "purpose": "Create a high-level entity record for authoring knowledge without manually constructing atoms.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ENT-001-21",
+        "method": "tools/call",
+        "params": {
+          "name": "create_entity",
+          "arguments": {
+            "canonical_name": "MX95 Entity A",
+            "entity_type": "audit_fixture"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx create-entity"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5930",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ENT-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ENTITY"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "delete_atom",
+      "schema_sha256": "0adf24f7db4174770fa2b23408358849adcd5face4731a3c4c49f8e085bd1785",
+      "purpose": "Create a tombstone for the given atom id and preserve deletion provenance instead of physically erasing the atom.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-006-44",
+        "method": "tools/call",
+        "params": {
+          "name": "delete_atom",
+          "arguments": {
+            "atom_id": "92e08effa7568552502f8d6e5f8b6272d89caa05cda28bde5a5382ad670b42a4",
+            "reason": "MX-95 fixture"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool delete_atom --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5876",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-006",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ATOM-LIFECYCLE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "explain_answer_graph",
+      "schema_sha256": "cd8ce85f8858339fa2ee3cbd0b5c7541a17b85494bc88b15261fc17bfdd5c670",
+      "purpose": "Execute query_text or contract and return only the answer graph explanation fields: status, snapshot, graph counts, branch lineage, coverage, retrieval trace, and rejected candidates.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-QC-004-11",
+        "method": "tools/call",
+        "params": {
+          "name": "explain_answer_graph",
+          "arguments": {
+            "query_text": "mx95 initial no match",
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool explain_answer_graph --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5837",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-QC-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-QUERY-CONTRACT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "extract_subgraph",
+      "schema_sha256": "7825cbea36c22aef4a23612a68eef4d652de608ceb2b4736e6f78c1996b980ff",
+      "purpose": "Extract the bounded neighborhood around one center node using graph traversal within the requested radius.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-GRAPH-003-51",
+        "method": "tools/call",
+        "params": {
+          "name": "extract_subgraph",
+          "arguments": {
+            "center_node": 0,
+            "radius": 2
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool extract_subgraph --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:6020",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-GRAPH-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-SEARCH-GRAPH"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "get_predicate",
+      "schema_sha256": "b8ab5bbecbe0290c14f1054f0f15d3d1706f6d40c3581a6bc5d695449af1fccf",
+      "purpose": "Inspect one managed predicate contract by its durable numeric predicate ID before using add_claim or assert_relation.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-PRED-003-19",
+        "method": "tools/call",
+        "params": {
+          "name": "get_predicate",
+          "arguments": {
+            "predicate_id": 2513725359
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool get_predicate --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5918",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-PRED-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "get_provenance_path",
+      "schema_sha256": "5534cb3d51f7e7efd35549bda4d65c4e25fe48b0d24d921a1aab80dd4fd72a2e",
+      "purpose": "Return the proof-grade ProvenanceChain for one atom_id, including derivation nodes, DERIVED_FROM edges, direct evidence links, confidence, and trust.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRC-004-16",
+        "method": "tools/call",
+        "params": {
+          "name": "get_provenance_path",
+          "arguments": {
+            "atom_id": "30ef317e2b66b2ba65cd7bf70abfd37aa38d8118ee6729f08e024ef54dbf9d10"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool get_provenance_path --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5843",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRC-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-PROVENANCE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "provenance"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "get_stats",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "Return stable base statistics. CAS live counts include non-tombstoned superseded history; current counts exclude superseded atoms; physical graph counts include historical nodes and edges.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-CHK-001-52",
+        "method": "tools/call",
+        "params": {
+          "name": "get_stats",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx stats"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5882",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-CHK-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-INTEGRITY",
+        "SQ-LIVE-OWNER",
+        "SQ-REOPEN"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "integrity",
+        "reopen"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "graph_neighbors",
+      "schema_sha256": "6934689204b3418b18de9f72b7e04703d514714e4731bc3b097f0952fee95e60",
+      "purpose": "Return the direct incoming and outgoing neighbors of one graph node, optionally filtered by edge type; this is a one-hop query only.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-GRAPH-001-49",
+        "method": "tools/call",
+        "params": {
+          "name": "graph_neighbors",
+          "arguments": {
+            "node_num": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool graph_neighbors --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:6011",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-GRAPH-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-SEARCH-GRAPH"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "graph_walk",
+      "schema_sha256": "7de52f7382d1322894ed85259128bbf9887c4e72847e261296001a5eec823d05",
+      "purpose": "Traverse the graph from the provided seed nodes up to the requested depth and return visited edges; this is multi-hop traversal, not subgraph extraction.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-GRAPH-002-50",
+        "method": "tools/call",
+        "params": {
+          "name": "graph_walk",
+          "arguments": {
+            "seed_nodes": [
+              0
+            ],
+            "depth": 2
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool graph_walk --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:6017",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-GRAPH-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-SEARCH-GRAPH"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "history",
+      "schema_sha256": "62b441b82ecc82a8d09c710e5927581b4ccaa85feee0da10e737669f344e339f",
+      "purpose": "Return newest-first durable write-operation history from the active base; use this to inspect recent ingest, update, delete, repair, and rebuild actions.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-007-45",
+        "method": "tools/call",
+        "params": {
+          "name": "history",
+          "arguments": {
+            "limit": 20
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx history"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5879",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-007",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ATOM-LIFECYCLE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "ingest",
+      "schema_sha256": "98d792945366b406ef336b6f5c55d3d9247dc0700bb1ab4c0403d9870bd66a54",
+      "purpose": "Create one atom from claim tuples and write it to the current base; each claim must use numeric fields {subj, pred, obj_tag, obj_val, qualifiers_mask}.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-001-14",
+        "method": "tools/call",
+        "params": {
+          "name": "ingest",
+          "arguments": {
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "subj": 9501,
+                "pred": 9502,
+                "obj_tag": 3,
+                "obj_val": 9503,
+                "qualifiers_mask": 0
+              }
+            ],
+            "symbols": [
+              "mx95_provenance_marker",
+              "persistence"
+            ],
+            "domain_mask": 65535,
+            "trust_level": 5000
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx ingest"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5861",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-IDEMPOTENCE",
+        "SQ-LIVE-OWNER",
+        "SQ-PROVENANCE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "list_bases",
+      "schema_sha256": "778439a11331c1620b38c9e6fd4c4951941eaecc96194bd79d36fc8520f72a4e",
+      "purpose": "List project/user bases visible to this MCP process plus bases already connected in the multi-base registry.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-BASE-001-1",
+        "method": "tools/call",
+        "params": {
+          "name": "list_bases",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool list_bases --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "transport_only",
+        "source_anchor": "src/bin/memoryx.rs:5803",
+        "rationale": "Session registry operation"
+      },
+      "direct_case_id": "D-BASE-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-BASE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "list_conflicts",
+      "schema_sha256": "071f291212f0cbbbcd44f6a8b66b4298c109d81e837c1b5ac3d2e462b9619b75",
+      "purpose": "Return all conflict records for the requested context id, or for the active context when ctx_id is omitted.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-CTX-004-39",
+        "method": "tools/call",
+        "params": {
+          "name": "list_conflicts",
+          "arguments": {
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool list_conflicts --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:6005",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-CTX-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-CONTEXT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "conflict"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "list_contexts",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "Return every context in the base with its id, parent, policy, state, and claim counts.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-CTX-002-37",
+        "method": "tools/call",
+        "params": {
+          "name": "list_contexts",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool list_contexts --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5993",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-CTX-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-CONTEXT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "list_entities",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "List latest high-level entity records with canonical names, aliases, type, and merge/split lineage.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ENT-002-25",
+        "method": "tools/call",
+        "params": {
+          "name": "list_entities",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool list_entities --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5936",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ENT-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ENTITY"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "list_predicates",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "List every managed predicate ID and its complete immutable semantic contract in the selected base.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-PRED-002-18",
+        "method": "tools/call",
+        "params": {
+          "name": "list_predicates",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool list_predicates --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5912",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-PRED-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "list_sources",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "List durable provenance sources registered in the active base with their exact location/version metadata.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRC-002-13",
+        "method": "tools/call",
+        "params": {
+          "name": "list_sources",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool list_sources --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5897",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRC-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-PROVENANCE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "provenance"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "merge_entities",
+      "schema_sha256": "c2a44391772176ef97beba6f1d86e15c7c8968beeb18772ef5c93344eff3882b",
+      "purpose": "Merge a source entity into a target entity, preserving aliases, claims, and merge lineage.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ENT-004-28",
+        "method": "tools/call",
+        "params": {
+          "name": "merge_entities",
+          "arguments": {
+            "target_entity": 1,
+            "source_entity": 5
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool merge_entities --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5945",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ENT-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ENTITY"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "query",
+      "schema_sha256": "fcc5d620ca2dc2c9d0a70f0c08a82224e1c434aa74ee7ba4f7bd10cf878c0ac0",
+      "purpose": "Run the fixed-point solver against the active base or a base selected by optional base_ref. Input must provide either query_text/question for natural-language compilation or contract for strict QueryContract execution. Returns an AnswerPack-shaped JSON payload, not a free-form text answer.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-QC-003-10",
+        "method": "tools/call",
+        "params": {
+          "name": "query",
+          "arguments": {
+            "query_text": "mx95 initial no match",
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx query"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5807",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-QC-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-NEGATIVE-BOUNDARY",
+        "SQ-QUERY-CONTRACT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "negative",
+        "boundary",
+        "query_contract",
+        "response_limit"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "query_base",
+      "schema_sha256": "947caf6dfff6658d676164214eede40747b34daea9ad8e338ae5678caa5b0e5e",
+      "purpose": "Explicit multi-base query. Requires base_ref and otherwise accepts the same arguments as query.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-BASE-004-4",
+        "method": "tools/call",
+        "params": {
+          "name": "query_base",
+          "arguments": {
+            "base_ref": "project:mx-95-disposable-20260802T085223672Z-secondary",
+            "query_text": "mx95_secondary_marker",
+            "ctx_id": 0
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool query_base --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5811",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-BASE-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-BASE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "register_predicate",
+      "schema_sha256": "c423d3df3dc6fcdc6a4e3384746f20efa5fc70521abfea8b9d9cda8584178f21",
+      "purpose": "Register an immutable project predicate contract and return its durable managed numeric ID. Repeating the identical contract is idempotent; reusing its stable key or canonical name with different semantics fails closed.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-PRED-001-17",
+        "method": "tools/call",
+        "params": {
+          "name": "register_predicate",
+          "arguments": {
+            "stable_key": "mx95:depends_on",
+            "canonical_name": "mx95_depends_on",
+            "description": "MX-95 disposable dependency relation.",
+            "direction": "directed",
+            "cardinality": "many_to_many"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool register_predicate --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5906",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-PRED-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-CONFLICT",
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "register_source",
+      "schema_sha256": "caeedb838b5be8e8cb2c029617e65d985d9f26a9a8c113e8af2ca17de2e60376",
+      "purpose": "Register a durable provenance source such as a file, page, repository, commit, API response, message, table, measurement, human, or agent.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRC-001-12",
+        "method": "tools/call",
+        "params": {
+          "name": "register_source",
+          "arguments": {
+            "kind": "file",
+            "label": "MX-95 generated source",
+            "path": "ORCHESTRATION_SYSTEM/modules/MX-95-full-cross-testing/TASK.md",
+            "line_start": 1,
+            "line_end": 20,
+            "source_version": "audit-run"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool register_source --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5891",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRC-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-PROVENANCE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation",
+        "provenance"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "repair_relation_contexts",
+      "schema_sha256": "307187ef46a5fa12c182d6e62e1f0158aabd2328ee4b24745616c62a6f9d9ae9",
+      "purpose": "Plan or apply a safe, idempotent relation/context migration. Ordinary unambiguous missing projections can be repaired directly. A current relation backed by an explicitly tombstoned but byte-identical CAS atom remains blocked unless tombstone_resolutions supplies a reviewed per-relation restore_atom or retire_relation decision with a reason. restore_atom reactivates the same canonical atom; retire_relation appends standard supersedes history and keeps the atom deleted. Missing CAS bodies, claim mismatches, contract/cardinality violations, ambiguity, and conflicts always fail closed. Apply creates a verified state backup and an append-only replay record before mutation.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-REL-005-35",
+        "method": "tools/call",
+        "params": {
+          "name": "repair_relation_contexts",
+          "arguments": {
+            "dry_run": true
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool repair_relation_contexts --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5981",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-REL-005",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "resolve_predicate",
+      "schema_sha256": "bc3d2579a65620f666422a462c6259b2d4295b7f4dd07dbf97023938b2688b0f",
+      "purpose": "Resolve an exact stable key or canonical predicate name to its durable numeric ID and full contract; this operation never creates a predicate.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-PRED-004-20",
+        "method": "tools/call",
+        "params": {
+          "name": "resolve_predicate",
+          "arguments": {
+            "name_or_key": "mx95:depends_on"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool resolve_predicate --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5924",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-PRED-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "search_graph",
+      "schema_sha256": "bc1acad386eaa55804859412e8f9823cb8b44bd446a11d1e654c5672a3df184d",
+      "purpose": "Match graph edges against the literal pattern 'src -> EDGE_TYPE -> dst', where either node id or the edge type can be '*' as a wildcard.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRCH-003-48",
+        "method": "tools/call",
+        "params": {
+          "name": "search_graph",
+          "arguments": {
+            "pattern": "9501 -> * -> *",
+            "limit": 10
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool search_graph --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5852",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRCH-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-SEARCH-GRAPH"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "search_lex",
+      "schema_sha256": "f1b66aae90c5d9790de326a65b40310a86498989d5c190d9514ac9972efbda58",
+      "purpose": "Return atoms whose indexed terms match the requested lexical term using the inverted index; this is exact term lookup, not semantic ranking.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRCH-001-46",
+        "method": "tools/call",
+        "params": {
+          "name": "search_lex",
+          "arguments": {
+            "term": "mx95_provenance_marker"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool search_lex --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5849",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRCH-001",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-LIVE-OWNER",
+        "SQ-REOPEN",
+        "SQ-SEARCH-GRAPH"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "search_semantic",
+      "schema_sha256": "3659525c507e245e0ea5b05b136cc1af45bd61e0c3502155172de94813c362ff",
+      "purpose": "Perform ANN vector search over embeddings and return nearest atoms filtered by trust or domain mask; this is vector retrieval, not keyword lookup.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-SRCH-002-47",
+        "method": "tools/call",
+        "params": {
+          "name": "search_semantic",
+          "arguments": {
+            "vector": [
+              0.12,
+              -0.44,
+              0.88
+            ]
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool search_semantic --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5855",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-SRCH-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-SEARCH-GRAPH"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "split_entity",
+      "schema_sha256": "601dbff440390fcd870ba461fe3f2993c79740b5048d79efe98ece06b4a0ff04",
+      "purpose": "Create a new entity split from an existing source entity while preserving split lineage.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ENT-005-29",
+        "method": "tools/call",
+        "params": {
+          "name": "split_entity",
+          "arguments": {
+            "source_entity": 1,
+            "canonical_name": "MX95 Split Child",
+            "entity_type": "audit_fixture"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool split_entity --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5951",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ENT-005",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ENTITY"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "supersede_claim",
+      "schema_sha256": "720433b72166ef72d9328dc6c269edc64cbb131b4981ea6f2ceb9a0750ece696",
+      "purpose": "Supersede a claim-bearing atom by writing a new atom version; this is the claim-level MCP alias for update_atom and preserves provenance.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-004-42",
+        "method": "tools/call",
+        "params": {
+          "name": "supersede_claim",
+          "arguments": {
+            "atom_id": "75bc066ddbc00e05483d932bf76f1441d4f6f4752d6bff681a0e05c8cc490bb9",
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "subj": 9540,
+                "pred": 1,
+                "obj_tag": 3,
+                "obj_val": 9541
+              }
+            ],
+            "symbols": [
+              "mx95_supersede_new"
+            ]
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool supersede_claim --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5870",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-004",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ATOM-LIFECYCLE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "switch_base",
+      "schema_sha256": "db9b47c81ddb67e10080c7520b8a34c8bb39a0a9b22fbb1fe79a7d30b7256a34",
+      "purpose": "Switch the active base_ref for subsequent MCP calls that omit base_ref.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-BASE-005-5",
+        "method": "tools/call",
+        "params": {
+          "name": "switch_base",
+          "arguments": {
+            "base_ref": "project:mx-95-disposable-20260802T085223672Z-secondary"
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool switch_base --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "transport_only",
+        "source_anchor": "src/bin/memoryx.rs:5806",
+        "rationale": "Session registry operation"
+      },
+      "direct_case_id": "D-BASE-005",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-BASE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "transition_relation",
+      "schema_sha256": "4f80422a41c5ac26dda93359fbc372abe04c31738efd4873840e8052f18c176a",
+      "purpose": "Replace one current relation value in a selected context while preserving the old relation as superseded history. The successor keeps the same subject and predicate, may accumulate registered source IDs, and becomes the only active value for that relation slot.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-REL-003-33",
+        "method": "tools/call",
+        "params": {
+          "name": "transition_relation",
+          "arguments": {
+            "old_relation_id": 2,
+            "new_object": 4,
+            "ctx_id": 0,
+            "source_ids": [
+              1
+            ]
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool transition_relation --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5969",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-REL-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-RELATION"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "update_atom",
+      "schema_sha256": "ad3ef440a4299b2ddb1410d51b0ff46c7475f36a5b09411bdae71619515a6835",
+      "purpose": "Create a new version of an existing atom id and preserve the old version as superseded provenance.",
+      "classification": "mutating",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-ATOM-003-41",
+        "method": "tools/call",
+        "params": {
+          "name": "update_atom",
+          "arguments": {
+            "atom_id": "85296f8177c1ed8bedf0cfdfaacef79d5824177282e2a07fb8d34902394545f0",
+            "atom_type": "FACT",
+            "claims": [
+              {
+                "subj": 9530,
+                "pred": 1,
+                "obj_tag": 3,
+                "obj_val": 9531
+              }
+            ],
+            "symbols": [
+              "mx95_update_new"
+            ]
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool update_atom --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5867",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-ATOM-003",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-ATOM-LIFECYCLE"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "mutation"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "validate_query_contract",
+      "schema_sha256": "05fd54538a05654cd2b80099c9394d367fc7a43f98f6721110240a696dad3225",
+      "purpose": "Validate a QueryContract object without executing it. Returns valid=true or a concrete validation error.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-QC-002-9",
+        "method": "tools/call",
+        "params": {
+          "name": "validate_query_contract",
+          "arguments": {
+            "contract": {
+              "intent": "verify",
+              "targets": [
+                {
+                  "id": null,
+                  "entity_id": null,
+                  "atom_id": null,
+                  "node_id": null,
+                  "term_id": null,
+                  "symbol_id": null,
+                  "stable_key": null,
+                  "label": "Explain mx95 provenance and require provenance",
+                  "entity_type": null,
+                  "aliases": [],
+                  "domain_mask": null
+                }
+              ],
+              "semantic_vectors": [],
+              "relations": [],
+              "constraints": [
+                {
+                  "id": "exposes_provenance",
+                  "strength": {
+                    "should": {
+                      "weight": 1.0
+                    }
+                  },
+                  "target": {
+                    "custom": "exposes"
+                  },
+                  "operator": "contains",
+                  "value": {
+                    "text": "provenance"
+                  },
+                  "description": null
+                }
+              ],
+              "quantifiers": [],
+              "temporal_scope": {
+                "time_range": null,
+                "before_unix_ns": null,
+                "after_unix_ns": null,
+                "valid_at_unix_ns": null,
+                "observed_at_unix_ns": null,
+                "latest_count": null,
+                "require_current": true
+              },
+              "context_scope": {
+                "policy_id": null,
+                "selectors": [
+                  "active"
+                ],
+                "branch_ids": [],
+                "include_conflicting_branches": true
+              },
+              "source_policy": {
+                "allowed_sources": [],
+                "forbidden_sources": [],
+                "require_provenance": true,
+                "allow_federated_sources": true
+              },
+              "evidence_policy": {
+                "min_evidence_items": 1,
+                "require_direct_evidence": true,
+                "allow_inferred_claims": true,
+                "include_rejected_candidates": true
+              },
+              "freshness_policy": {
+                "max_age_unix_ns": null,
+                "stale_behavior": "mark_stale"
+              },
+              "ambiguity_policy": {
+                "allow_ambiguous_targets": true,
+                "require_disambiguation_notes": true
+              },
+              "conflict_policy": {
+                "mode": "branch",
+                "include_conflicts": true,
+                "fail_on_hard_conflict": false,
+                "prefer_latest_branch": false
+              },
+              "completeness_policy": {
+                "require_minimal_proof_subgraph": true,
+                "expose_unknowns": true,
+                "expose_unsatisfied_constraints": true
+              },
+              "output_contract": {
+                "format": "structured_json",
+                "include_answer_graph": true,
+                "include_confidence": true,
+                "include_provenance": true,
+                "include_execution_trace": false,
+                "max_items": 64,
+                "max_bytes": 1048576
+              },
+              "budgets": {
+                "max_iterations": 100,
+                "max_atoms": 4096,
+                "max_edges": 8192,
+                "max_io_bytes": 67108864,
+                "max_time_ms": 30000,
+                "max_federated_calls": 16,
+                "max_context_branches": 128
+              }
+            }
+          }
+        }
+      },
+      "cli_mapping": {
+        "kind": "live_owner_client",
+        "command": "memoryx --format json client --base <path> --tool validate_query_contract --arguments '<object>'",
+        "rationale": "No dedicated native subcommand; the documented client bridge calls the MCP tool through a live owner."
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5834",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-QC-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-NEGATIVE-BOUNDARY",
+        "SQ-QUERY-CONTRACT"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "negative",
+        "boundary",
+        "query_contract",
+        "response_limit"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    },
+    {
+      "name": "verify_integrity",
+      "schema_sha256": "ed44e72c8dc62ec2f2266444400fc581d7c819701428010643407925c47adc08",
+      "purpose": "Verify every non-tombstoned CAS atom through the process that already owns the base. Use this instead of starting another writer against a live base.",
+      "classification": "read_only",
+      "mcp_request_example": {
+        "jsonrpc": "2.0",
+        "id": "D-CHK-002-53",
+        "method": "tools/call",
+        "params": {
+          "name": "verify_integrity",
+          "arguments": {}
+        }
+      },
+      "cli_mapping": {
+        "kind": "native",
+        "command": "memoryx verify-integrity"
+      },
+      "rust_mapping": {
+        "kind": "rust_mcp_dispatch",
+        "source_anchor": "src/bin/memoryx.rs:5885",
+        "rationale": "Production tools/call dispatch into a typed MemoryX handler."
+      },
+      "direct_case_id": "D-CHK-002",
+      "direct_status": "passed",
+      "cross_sequence_ids": [
+        "SQ-INTEGRITY",
+        "SQ-REOPEN"
+      ],
+      "coverage_categories": [
+        "positive",
+        "stateful",
+        "cross_call",
+        "read_only",
+        "integrity",
+        "reopen"
+      ],
+      "unresolved_limitations": [
+        "Observed MCP behavior does not by itself prove model quality, hidden hook/compact behavior, cache reuse, or full MemoryX semantic acceptance.",
+        "Crash/restart observations do not close the open N5 operation-atomicity roadmap gate."
+      ]
+    }
+  ],
+  "global_coverage_classes": [
+    "positive",
+    "negative",
+    "boundary",
+    "stateful",
+    "cross_call",
+    "reopen_restart",
+    "live_owner",
+    "concurrency",
+    "idempotence",
+    "provenance",
+    "conflict",
+    "query_contract",
+    "response_limit",
+    "crash_recovery",
+    "migration",
+    "deterministic_result"
+  ],
+  "global_unresolved": [
+    "Full AnswerPack response framing byte counters varied while semantic content and IncompleteEvidence description remained stable.",
+    "No in-flight N5 persistence-boundary crash injection was performed; N5 remains open.",
+    "Runtime behavior does not prove real hook/compact lifecycle, cache reuse, model quality, or total MemoryX semantic acceptance."
+  ],
+  "global_evidence": [
+    "resilience-attempt-01/resilience-report.json",
+    "resilience-attempt-01/calls.jsonl",
+    "full-attempt-01/owner-contention.json",
+    "surface.json",
+    "determinism-postfix/determinism-report.json",
+    "determinism-postfix/calls.jsonl",
+    "validator-controls/mutation-control-report.json"
+  ],
+  "binary_identity": {
+    "version": "memoryx 2.0.6",
+    "size_bytes": 6298112,
+    "sha256": "d9b07db4f64610a4117afbb4d4ba498a45398c9f35cb36ab06741b4463a01703",
+    "passed": true
+  },
+  "postfix_determinism_gate": {
+    "same_process_repetitions": 32,
+    "after_reopen_repetitions": 1,
+    "unique_full_results": 3,
+    "unique_semantic_results": 1,
+    "unique_incomplete_evidence_descriptions": 1,
+    "stable_incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+    "semantic_projection_excluded_fields": [
+      "response_limits.emitted_bytes",
+      "response_limits.original_bytes"
+    ],
+    "passed": true
+  },
+  "global_gate_status": "passed"
+}

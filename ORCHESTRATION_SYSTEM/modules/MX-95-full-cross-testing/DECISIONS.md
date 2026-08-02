@@ -1,5 +1,18 @@
 # Decisions
 
+## D-009: Tombstoned Relation Tests Must Not Choose Production Semantics
+
+Status: `ACCEPTED`
+
+MX-95 may construct a disposable legacy relation-tombstone fixture and test
+both fail-closed and explicit-decision mechanics. It must never infer from
+physical recoverability that `restore_atom` is correct for production data.
+Real-base restoration or retirement remains an explicit reviewed operator
+decision. Missing CAS bodies remain unrecoverable through this path.
+
+The checked replay is a bounded migration guarantee. It does not replace or
+close the N5 operation-atomicity roadmap gate.
+
 ## D-000: Inherit Root Contracts
 
 Accepted: preserve the MemoryX concept and roadmap; use knowledge atoms and

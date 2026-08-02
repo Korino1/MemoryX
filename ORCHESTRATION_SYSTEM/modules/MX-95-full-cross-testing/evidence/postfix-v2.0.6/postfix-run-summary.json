@@ -1,0 +1,54 @@
+{
+  "schema_version": "memoryx.mx95.postfix-run-summary.v1",
+  "run_id": "20260802T085223672Z",
+  "observed_at_utc": "2026-08-02T08:53:36.495713+00:00",
+  "binary_identity": {
+    "version": "memoryx 2.0.6",
+    "size_bytes": 6298112,
+    "sha256": "d9b07db4f64610a4117afbb4d4ba498a45398c9f35cb36ab06741b4463a01703",
+    "passed": true
+  },
+  "surface": {
+    "observed_count": 47,
+    "observed_unique_count": 47,
+    "surface_sha256": "23bcea0f7646d49c7f522076cd2e72b2fe2c254fedb44d0265590a1f1fdfe947",
+    "supported_protocols_tested": [
+      "2025-11-25",
+      "2025-06-18",
+      "2024-11-05"
+    ],
+    "passed": true
+  },
+  "core": {
+    "direct_tools_passed": 47,
+    "authoritative_tools": 47,
+    "calls": 66,
+    "sequences": 14,
+    "primary_exit": 0,
+    "reopen_exit": 0,
+    "output": "E:\\Rust\\AI\\MemoryX\\MemoryX_2\\ORCHESTRATION_SYSTEM\\modules\\MX-95-full-cross-testing\\runs\\20260802T085223672Z\\full-attempt-01"
+  },
+  "resilience_passed": true,
+  "resilience_case_count": 18,
+  "postfix_determinism": {
+    "same_process_repetitions": 32,
+    "after_reopen_repetitions": 1,
+    "unique_full_results": 3,
+    "unique_semantic_results": 1,
+    "unique_incomplete_evidence_descriptions": 1,
+    "stable_incomplete_evidence_description": "Only 0/3 gaps covered. Missing: {\"NEED_CONSTRAINTS\", \"NEED_COUNTEREXAMPLE\", \"NEED_EVIDENCE\"}",
+    "semantic_projection_excluded_fields": [
+      "response_limits.emitted_bytes",
+      "response_limits.original_bytes"
+    ],
+    "passed": true
+  },
+  "validator_controls_passed": true,
+  "validator_control_count": 9,
+  "passed": true,
+  "limitations": [
+    "Full AnswerPack response framing byte counters varied while semantic content and IncompleteEvidence description remained stable.",
+    "No in-flight N5 persistence-boundary crash injection was performed; N5 remains open.",
+    "Runtime behavior does not prove real hook/compact lifecycle, cache reuse, model quality, or total MemoryX semantic acceptance."
+  ]
+}
