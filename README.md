@@ -170,6 +170,9 @@ relation records, and history. A single-claim equivalent atom is retained as
 superseded history, so it no longer appears as a parallel current claim. An
 equivalent atom with additional claims, a missing atom, a claim mismatch, or a
 conflicting active value fails closed instead of being guessed or overwritten.
+Repair and managed relation authoring follow the registered predicate
+cardinality, so valid `one_to_many` and `many_to_many` relations are not
+mistaken for state-slot conflicts.
 
 Bases written before commit `b2a6e41` (released in v1.0.4) may contain this
 legacy split projection: relation/CAS records were durable, but context changes
@@ -558,6 +561,9 @@ $exe = ".\target\release\memoryx.exe"
 другие утверждения, атом отсутствует, утверждение не совпадает или активно
 другое значение, операция завершается ошибкой и ничего не выбирает за
 пользователя.
+При восстановлении и записи управляемых связей учитывается зарегистрированная
+кардинальность предиката: допустимые связи «один ко многим» и «многие ко многим»
+не считаются конфликтом состояния.
 
 Базы, записанные до изменения `b2a6e41`, вошедшего в версию 1.0.4, могут
 содержать старое расхождение: связь и атом сохранялись, а изменение контекста
