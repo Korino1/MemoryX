@@ -2,7 +2,7 @@
 //!
 //! Production-ready Content-Addressed Storage implementation with:
 //! - Segment files (seg_XXXXX.dat) with append-only writes
-//! - Index files (seg_XXXXX.idx) with sorted fp64 entries
+//! - Index files (seg_XXXXX.idx) with totally ordered fp64 entries
 //! - Mmap support for zero-copy reads
 //! - CRC32 validation on all reads
 //! - Bloom filters for fast negative lookups
@@ -174,7 +174,9 @@ pub type CasIoResult<T> = Result<T, CasIoError>;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IndexEntry {
-    /// First 64 bits of atom_id interpreted as f64 for sorting
+    /// First 64 bits of atom_id interpreted as f64 for on-disk compatibility.
+    ///
+    /// These bits can encode NaN, so comparisons must use [`f64::total_cmp`].
     pub fp64: f64,
     /// Offset in segment file
     pub seg_offset: u64,
@@ -255,9 +257,7 @@ impl IndexEntry {
     /// Compare with another entry for binary search
     #[inline]
     pub fn compare(&self, other: &Self) -> Ordering {
-        self.fp64
-            .partial_cmp(&other.fp64)
-            .unwrap_or(Ordering::Equal)
+        self.fp64.total_cmp(&other.fp64)
     }
 }
 
@@ -994,15 +994,14 @@ impl IndexFile {
 
         while left < right {
             let mid = left + (right - left) / 2;
-            match entries[mid].fp64.partial_cmp(&target_fp64) {
-                Some(Ordering::Less) => left = mid + 1,
-                Some(Ordering::Greater) => right = mid,
-                Some(Ordering::Equal) => {
+            match entries[mid].fp64.total_cmp(&target_fp64) {
+                Ordering::Less => left = mid + 1,
+                Ordering::Greater => right = mid,
+                Ordering::Equal => {
                     // Found matching fp64, need to check full atom_id
                     // For now, return the entry (potential false positive if hash collision)
                     return Some(entries[mid]);
                 }
-                None => return None,
             }
         }
 
@@ -2033,6 +2032,12 @@ mod tests {
         atom_id
     }
 
+    fn create_test_atom_id_with_fp64_bits(bits: u64, suffix: u8) -> AtomId {
+        let mut atom_id = [suffix; 32];
+        atom_id[..8].copy_from_slice(&bits.to_le_bytes());
+        atom_id
+    }
+
     #[test]
     fn test_index_entry_roundtrip() {
         let atom_id = create_test_atom_id(42);
@@ -2046,6 +2051,48 @@ mod tests {
         assert_eq!(entry.seg_offset, restored.seg_offset);
         assert_eq!(entry.body_len, restored.body_len);
         assert_eq!(entry.flags, restored.flags);
+    }
+
+    #[test]
+    fn test_index_entry_nan_fingerprint_has_total_order() {
+        // This exact quiet-NaN fingerprint occurred in a v2.0.6 base. Hash
+        // prefixes are arbitrary bits, so NaN is valid persisted input.
+        let nan_bits = 0x7ff3_639a_0d94_a29f;
+        let nan = IndexEntry::new(
+            create_test_atom_id_with_fp64_bits(nan_bits, 0xa5),
+            100,
+            701,
+            0,
+        );
+        let one = IndexEntry::new(
+            create_test_atom_id_with_fp64_bits(1.0f64.to_bits(), 0x11),
+            200,
+            702,
+            0,
+        );
+        let two = IndexEntry::new(
+            create_test_atom_id_with_fp64_bits(2.0f64.to_bits(), 0x22),
+            300,
+            703,
+            0,
+        );
+
+        assert_ne!(nan.compare(&one), Ordering::Equal);
+        assert_ne!(nan.compare(&two), Ordering::Equal);
+        assert_eq!(nan.compare(&one), one.compare(&nan).reverse());
+
+        let mut entries = [nan, two, one, nan];
+        entries.sort_by(IndexEntry::compare);
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[0].compare(&pair[1]) != Ordering::Greater)
+        );
+
+        let mut bytes = [0u8; IndexEntry::SIZE];
+        nan.write_to_bytes(&mut bytes).unwrap();
+        let restored = IndexEntry::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.fp64.to_bits(), nan_bits);
     }
 
     #[test]
@@ -2186,6 +2233,46 @@ mod tests {
                 "persisted atom {i} should be found after reload"
             );
         }
+    }
+
+    #[test]
+    fn test_index_file_reopens_legacy_nan_fingerprints() {
+        let temp_dir = setup_test_dir();
+        let nan_bits = 0x7ff3_639a_0d94_a29f;
+        let nan_a = create_test_atom_id_with_fp64_bits(nan_bits, 0xa5);
+        let nan_b = create_test_atom_id_with_fp64_bits(nan_bits, 0x5a);
+
+        {
+            let index = IndexFile::create(temp_dir.path(), 0).unwrap();
+            let mut entries: Vec<(AtomId, u64, u64, u16)> = (0..32)
+                .map(|i| {
+                    (
+                        create_test_atom_id_with_fp64_bits((i as f64).to_bits(), i as u8),
+                        i * 100,
+                        512,
+                        0,
+                    )
+                })
+                .collect();
+            entries.push((nan_a, 3_200, 701, 0));
+            entries.push((nan_b, 3_300, 701, 0));
+            index.batch_insert(&entries);
+            index.sort_entries();
+            index.flush().unwrap();
+        }
+
+        let reopened = IndexFile::open(temp_dir.path(), 0).unwrap();
+        assert_eq!(reopened.entry_count(), 34);
+        assert_eq!(
+            reopened
+                .get_all_entries()
+                .iter()
+                .filter(|entry| entry.fp64.to_bits() == nan_bits)
+                .count(),
+            2
+        );
+        assert!(reopened.find(&nan_a).is_some());
+        assert!(reopened.find(&nan_b).is_some());
     }
 
     #[test]

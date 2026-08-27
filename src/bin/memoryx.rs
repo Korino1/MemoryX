@@ -66,7 +66,11 @@ use memoryx::vm::ClaimData;
 /// MemoryX CLI - Knowledge management system
 #[derive(Parser)]
 #[command(name = "memoryx")]
-#[command(about = "MemoryX CLI - Knowledge management system")]
+#[command(about = concat!(
+    "MemoryX CLI - Knowledge management system (version ",
+    env!("CARGO_PKG_VERSION"),
+    ")"
+))]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(arg_required_else_help = true)]
 struct Cli {
@@ -9057,6 +9061,19 @@ fn main() {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn cli_help_and_version_expose_package_version() {
+        let mut command = <Cli as clap::CommandFactory>::command();
+        let help = command.render_long_help().to_string();
+        assert!(help.contains(concat!("version ", env!("CARGO_PKG_VERSION"))));
+
+        let version = <Cli as clap::CommandFactory>::command().render_version();
+        assert_eq!(
+            version.trim(),
+            concat!("memoryx ", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     fn seed_single_fact_atom(base: &Path) -> (MemoryX, AtomId) {
         let mut store = MemoryX::new(StoreConfig::new(base.to_path_buf())).unwrap();
