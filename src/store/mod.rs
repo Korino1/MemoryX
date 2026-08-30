@@ -23,6 +23,12 @@ use std::hash::Hash;
 pub mod api;
 pub(crate) mod base_lease;
 pub(crate) mod operation_txn;
+pub use operation_txn::{
+    BatchIngestFailureV1, BatchIngestItemOutcomeV1, BatchIngestItemReasonV1,
+    BatchIngestItemResultV1, BatchIngestItemV1, BatchIngestReceiptV1, BatchIngestResultKindV1,
+    DirectIngestCommitDispositionV1, DirectIngestFailureCodeV1, DirectIngestFailureV1,
+    DirectIngestReceiptV1, DirectIngestResultKindV1, DirectIngestRetryV1, ProductionMemoryX,
+};
 
 // ============================================================================
 // AtomType (u32)

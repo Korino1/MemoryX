@@ -6162,6 +6162,21 @@ impl MemoryX {
         let base_lease = BaseLease::acquire(&config.root_path)?;
         config.root_path = base_lease.canonical_root().to_path_buf();
 
+        // Production-v2 recovery and installation must finish before any
+        // mutable legacy component constructor opens. The bounded N5-B carrier
+        // owns that path; the existing composite MemoryX API remains closed.
+        if config
+            .root_path
+            .join("operation_txn")
+            .join("format.v2")
+            .exists()
+        {
+            return Err(StoreError::Io(
+                "production format.v2 requires ProductionMemoryX; legacy mutable open is refused"
+                    .to_owned(),
+            ));
+        }
+
         let cas = CasStore::new(&config)?;
         let loc_index = LocationIndex::new(&config)?;
         let term_index = TermIndex::new(&config)?;

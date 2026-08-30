@@ -1,0 +1,1 @@
+{"body":{"magic":"MEMORYX_OPERATION_TXN","version":1,"codec":"memoryx.n5.private-canonical-json.v1","generation":1,"parent_commit_hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","transaction_id":"019fca57-b841-79a2-88e5-e6b78a52e550","operation":"ingest","intent_hash":"99074e08e10b279fbd9090785e69f3c0c280b9e8b201bdb4b1c9a0dee3cad838"},"crc32":3374456586}

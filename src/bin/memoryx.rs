@@ -9855,6 +9855,7 @@ mod tests {
         assert_eq!(state.active_base_ref, "secondary");
 
         let secondary_path = project_base_root().unwrap().join(&secondary_name);
+        drop(state);
         if secondary_path.exists() {
             std::fs::remove_dir_all(secondary_path).unwrap();
         }
