@@ -69,7 +69,7 @@ pub const GRAPH_MAGIC: u32 = 0x47524D31;
 pub const GRAPH_VERSION: u16 = 0x0101;
 
 /// Maximum inline deltas in manifest
-pub const MAX_INLINE_DELTAS: usize = 16;
+pub const MAX_INLINE_DELTAS: usize = 14;
 
 /// Maximum delta layers before compaction
 pub const MAX_DELTA_LAYERS: usize = 8;
@@ -709,7 +709,7 @@ pub struct GraphManifest {
     /// Reserved1 (must be 0) - padding
     pub reserved1: u32,
     /// Inline delta file IDs (up to 14)
-    pub delta_ids: [u32; 14],
+    pub delta_ids: [u32; MAX_INLINE_DELTAS],
 }
 
 impl GraphManifest {
@@ -737,7 +737,7 @@ impl GraphManifest {
             edge_type_mask: 0,
             delta_count: 0,
             reserved1: 0,
-            delta_ids: [0; 14],
+            delta_ids: [0; MAX_INLINE_DELTAS],
         }
     }
 
@@ -769,7 +769,7 @@ impl GraphManifest {
     /// Add a delta ID
     #[inline]
     pub fn add_delta(&mut self, delta_id: u32) -> bool {
-        if self.delta_count >= 14 {
+        if self.delta_count as usize >= MAX_INLINE_DELTAS {
             return false;
         }
         self.delta_ids[self.delta_count as usize] = delta_id;
@@ -789,7 +789,7 @@ impl GraphManifest {
     pub fn mark_compacted(&mut self) {
         self.flags |= Self::FLAG_COMPACTED;
         self.delta_count = 0;
-        self.delta_ids = [0; 14];
+        self.delta_ids = [0; MAX_INLINE_DELTAS];
     }
 
     /// Check if read-only
@@ -811,7 +811,7 @@ impl GraphManifest {
         }
         unsafe {
             let manifest = ptr::read_unaligned(bytes.as_ptr() as *const GraphManifest);
-            if !manifest.validate_magic() {
+            if !manifest.validate_magic() || manifest.delta_count as usize > MAX_INLINE_DELTAS {
                 return None;
             }
             Some(manifest)
@@ -839,7 +839,10 @@ impl GraphManifest {
         let mut buf = [0u8; Self::SIZE];
         file.read_exact(&mut buf)?;
         Self::from_bytes(&buf).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Invalid manifest magic/version")
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid graph manifest magic, version, or inline delta count",
+            )
         })
     }
 
@@ -1921,17 +1924,16 @@ impl GraphStore {
                 "GraphStore has no base_path configured",
             ));
         }
+        self.validate_inline_delta_capacity()?;
         fs::create_dir_all(&self.base_path)?;
 
         // Sync manifest delta tracking from actual delta layers
         let mut manifest = self.manifest;
         manifest.delta_count = 0;
-        manifest.delta_ids = [0u32; 14];
+        manifest.delta_ids = [0u32; MAX_INLINE_DELTAS];
         for delta in &self.delta_layers {
-            if manifest.delta_count < 14 {
-                manifest.delta_ids[manifest.delta_count as usize] = delta.id();
-                manifest.delta_count += 1;
-            }
+            manifest.delta_ids[manifest.delta_count as usize] = delta.id();
+            manifest.delta_count += 1;
         }
         if self.delta_layers.is_empty() {
             manifest.flags |= GraphManifest::FLAG_COMPACTED;
@@ -1974,6 +1976,7 @@ impl GraphStore {
                 "GraphStore has no base_path configured",
             ));
         }
+        self.validate_inline_delta_capacity()?;
         fs::create_dir_all(&self.base_path)?;
 
         for delta in &self.delta_layers {
@@ -2003,6 +2006,7 @@ impl GraphStore {
                 "GraphStore has no base_path configured",
             ));
         }
+        self.validate_inline_delta_capacity()?;
 
         // 1. Save base layers
         self.save_base_layers()?;
@@ -2013,6 +2017,19 @@ impl GraphStore {
         // 3. Save manifest last (acts as commit point)
         self.save_manifest()?;
 
+        Ok(())
+    }
+
+    fn validate_inline_delta_capacity(&self) -> io::Result<()> {
+        if self.delta_layers.len() > MAX_INLINE_DELTAS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "graph has {} delta layers but GRM1 can reference at most {MAX_INLINE_DELTAS}",
+                    self.delta_layers.len()
+                ),
+            ));
+        }
         Ok(())
     }
 
@@ -2627,6 +2644,55 @@ mod tests {
         assert_eq!(loaded.delta_count, 2);
         assert_eq!(loaded.delta_ids[0], 1);
         assert_eq!(loaded.delta_ids[1], 2);
+    }
+
+    #[test]
+    fn test_manifest_inline_delta_capacity_is_exact() {
+        let mut manifest = GraphManifest::new(1);
+
+        for delta_id in 1..=MAX_INLINE_DELTAS as u32 {
+            assert!(manifest.add_delta(delta_id));
+        }
+
+        let full_manifest = manifest;
+        assert!(!manifest.add_delta(MAX_INLINE_DELTAS as u32 + 1));
+        assert_eq!(manifest.delta_count as usize, MAX_INLINE_DELTAS);
+        assert_eq!(manifest.delta_ids, full_manifest.delta_ids);
+    }
+
+    #[test]
+    fn test_manifest_rejects_delta_count_above_inline_capacity() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(MANIFEST_FILE);
+        let mut manifest = GraphManifest::new(1);
+        manifest.delta_count = MAX_INLINE_DELTAS as u32 + 1;
+        manifest.write_to_file(&path).unwrap();
+
+        let error = GraphManifest::read_from_file(&path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let error = match GraphStore::load(dir.path()) {
+            Ok(_) => panic!("over-capacity manifest unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn test_save_manifest_rejects_unrepresentable_delta_count() {
+        let dir = TempDir::new().unwrap();
+        let mut store = GraphStore::with_path(dir.path(), 1);
+        for delta_id in 1..=MAX_INLINE_DELTAS as u32 + 1 {
+            store.delta_layers.push(DeltaLayer::new(delta_id, 0));
+        }
+
+        let error = store.save_manifest().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let error = store.save_delta_layers().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let error = store.save().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!dir.path().join(MANIFEST_FILE).exists());
+        assert!(!dir.path().join("delta_1.edges").exists());
     }
 
     #[test]
