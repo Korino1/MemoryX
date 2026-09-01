@@ -26,10 +26,10 @@ jobs:
         run: cargo +nightly fmt --check
 
       - name: Check
-        run: cargo +nightly check --all-features
+        run: cargo +nightly check --locked --all-targets --all-features
 
       - name: Test
-        run: cargo +nightly test --all-features
+        run: cargo +nightly test --locked --all-targets --all-features
 
       - name: Clippy
-        run: cargo +nightly clippy --all-targets --all-features
+        run: cargo +nightly clippy --locked --all-targets --all-features -- -D warnings

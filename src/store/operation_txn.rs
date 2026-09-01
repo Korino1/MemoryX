@@ -5967,6 +5967,27 @@ fn move_directory_write_through(source: &Path, target: &Path) -> io::Result<()> 
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn move_directory_write_through(source: &Path, target: &Path) -> io::Result<()> {
+    if !source.is_absolute() || !target.is_absolute() || source.parent() != target.parent() {
+        return Err(invalid_data(
+            "write-through visibility move is not between absolute same-parent paths",
+        ));
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| invalid_data("write-through visibility target has no parent"))?;
+    reject_link_or_reparse(source)?;
+    if !fs::symlink_metadata(source)?.is_dir() {
+        return Err(invalid_data(
+            "write-through visibility source is not a directory",
+        ));
+    }
+    require_path_entry_absent(target, "write-through visibility target")?;
+    fs::rename(source, target)?;
+    sync_directory(parent)
+}
+
 #[cfg(windows)]
 fn mark_opened_object_for_removal(source: &File) -> io::Result<()> {
     use std::mem::size_of;
@@ -22368,6 +22389,32 @@ mod tests {
             fs::read(native_target.join(COMMIT_FILE_NAME)).unwrap(),
             b"native-bound"
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn production_directory_visibility_uses_same_parent_atomic_rename() {
+        let directory = tempdir().unwrap();
+        let generations = directory.path().join(GENERATIONS_DIR_NAME);
+        fs::create_dir(&generations).unwrap();
+        let source = generations.join(".pending-portable");
+        let target = generations.join(generation_name(1));
+        fs::create_dir(&source).unwrap();
+        production_write_new(&source.join(COMMIT_FILE_NAME), b"portable-bound").unwrap();
+        sync_directory(&source).unwrap();
+
+        move_directory_write_through(&source, &target).unwrap();
+
+        assert!(!path_entry_exists(&source).unwrap());
+        assert_eq!(
+            fs::read(target.join(COMMIT_FILE_NAME)).unwrap(),
+            b"portable-bound"
+        );
+
+        let second = generations.join(".pending-second");
+        fs::create_dir(&second).unwrap();
+        assert!(move_directory_write_through(&second, &target).is_err());
+        assert!(path_entry_exists(&second).unwrap());
     }
 
     #[test]

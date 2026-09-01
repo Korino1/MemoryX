@@ -153,7 +153,7 @@ Successful mutations are recorded in `meta/history.log`.
 
 ### Direct Rust transaction API added after 2.0.6
 
-MemoryX 2.0.7 and 2.0.8 add two bounded operations to the public Rust library
+MemoryX 2.0.7 through 2.0.9 add two bounded operations to the public Rust library
 surface exposed by `memoryx::store`:
 
 - `ProductionMemoryX::batch_ingest` commits an edge-free atom batch as one
@@ -171,6 +171,13 @@ its ingestion paths and generic `client` bridge also do not adapt the new
 `ProductionMemoryX` transaction API. Composite updates, additional transports,
 real power-loss coverage, and the wider N5 multi-file operation-atomicity gate
 remain roadmap work.
+
+Version 2.0.9 makes the generation-publication path portable: Windows retains
+its write-through directory move, while non-Windows systems publish a prepared
+generation with an atomic same-directory rename followed by parent-directory
+sync. This fixes the Linux build and preserves the existing on-disk format and
+generation semantics. It is not a claim that the wider N5 power-loss gate is
+complete.
 
 One physical base may have only one process holding the write lease at a time.
 Do not point two independent writers at the same directory. A running
@@ -588,7 +595,7 @@ $exe = ".\target\release\memoryx.exe"
 
 ### Прямой программный интерфейс транзакций после версии 2.0.6
 
-В версиях 2.0.7 и 2.0.8 публичная библиотека Rust `memoryx::store` получила две
+В версиях 2.0.7-2.0.9 публичная библиотека Rust `memoryx::store` получила две
 ограниченные операции:
 
 - `ProductionMemoryX::batch_ingest` записывает пакет атомов без рёбер как одну
@@ -608,6 +615,13 @@ $exe = ".\target\release\memoryx.exe"
 транзакционный слой `ProductionMemoryX`. Составные изменения, дополнительные
 способы подключения, проверка реального отключения питания и общий этап N5 по
 атомарности многофайловых операций остаются в плане развития.
+
+В версии 2.0.9 публикация подготовленного поколения стала переносимой. В
+Windows сохранено перемещение каталога с принудительной записью, а в других
+системах используется атомарное переименование внутри одного родительского
+каталога с последующей синхронизацией этого каталога. Исправление устраняет
+ошибку сборки в Linux, не меняет формат базы и семантику поколений и не означает
+завершение общего этапа N5 по устойчивости к физическому отключению питания.
 
 В одной физической базе одновременно может быть только один процесс,
 удерживающий право записи. Не направляйте два независимых процесса записи в
