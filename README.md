@@ -151,6 +151,26 @@ cannot be deleted directly: transition or correct the relation first.
 Ingestion also refuses to silently reactivate a tombstoned canonical identity.
 Successful mutations are recorded in `meta/history.log`.
 
+### Direct Rust transaction API added after 2.0.6
+
+MemoryX 2.0.7 and 2.0.8 add two bounded operations to the public Rust library
+surface exposed by `memoryx::store`:
+
+- `ProductionMemoryX::batch_ingest` commits an edge-free atom batch as one
+  recoverable operation. It reports created, reused, and refused items
+  deterministically and supports exact retry after reopen.
+- `ProductionMemoryX::update_atom` keeps the predecessor immutable, publishes a
+  canonical successor, records successor-local provenance, and adds a
+  source-free `SUPERSEDES` edge. Its transaction identity, receipt, and history
+  result are stable across exact retry and reopen.
+
+These production-v2 operations are currently **Rust library APIs only**. The
+existing CLI and MCP tools named `batch_ingest` and `update_atom` continue to
+use their established database paths; this README does not claim that they are
+adapters for the new `ProductionMemoryX` transaction API. Composite updates,
+additional transports, real power-loss coverage, and the wider N5 multi-file
+operation-atomicity gate remain roadmap work.
+
 One physical base may have only one process holding the write lease at a time.
 Do not point two independent writers at the same directory. A running
 `memoryx serve --stdio` publishes a loopback-only local control endpoint. A
@@ -564,6 +584,28 @@ $exe = ".\target\release\memoryx.exe"
 Повторная загрузка также не может незаметно вернуть удалённый атом с тем же
 каноническим идентификатором. Успешные изменения записываются в
 `meta/history.log`.
+
+### Прямой программный интерфейс транзакций после версии 2.0.6
+
+В версиях 2.0.7 и 2.0.8 публичная библиотека Rust `memoryx::store` получила две
+ограниченные операции:
+
+- `ProductionMemoryX::batch_ingest` записывает пакет атомов без рёбер как одну
+  восстанавливаемую операцию. Результат однозначно разделяет созданные,
+  повторно использованные и отклонённые элементы; точный повтор после нового
+  открытия базы возвращает тот же итог.
+- `ProductionMemoryX::update_atom` оставляет предыдущий атом неизменяемым,
+  публикует канонического преемника, сохраняет источники у нового атома и
+  создаёт служебную связь `SUPERSEDES` без приписывания ей внешнего источника.
+  Идентификатор операции, квитанция и запись истории устойчивы к точному
+  повтору и повторному открытию базы.
+
+Сейчас эти операции доступны **только через библиотеку Rust**. Существующие
+одноимённые команды MCP и командной строки продолжают использовать свои
+прежние пути работы с базой и ещё не являются переходниками к новому
+транзакционному слою `ProductionMemoryX`. Составные изменения, дополнительные
+способы подключения, проверка реального отключения питания и общий этап N5 по
+атомарности многофайловых операций остаются в плане развития.
 
 В одной физической базе одновременно может быть только один процесс,
 удерживающий право записи. Не направляйте два независимых процесса записи в
