@@ -3223,18 +3223,14 @@ impl Drop for CompactionLease {
 }
 
 fn is_lock_contended(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::WouldBlock {
-        return true;
-    }
-
     #[cfg(windows)]
     {
-        matches!(error.raw_os_error(), Some(32 | 33))
+        error.kind() == io::ErrorKind::WouldBlock || matches!(error.raw_os_error(), Some(32 | 33))
     }
 
     #[cfg(not(windows))]
     {
-        false
+        error.kind() == io::ErrorKind::WouldBlock
     }
 }
 
