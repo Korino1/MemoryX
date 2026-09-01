@@ -28,6 +28,7 @@ pub use operation_txn::{
     BatchIngestItemResultV1, BatchIngestItemV1, BatchIngestReceiptV1, BatchIngestResultKindV1,
     DirectIngestCommitDispositionV1, DirectIngestFailureCodeV1, DirectIngestFailureV1,
     DirectIngestReceiptV1, DirectIngestResultKindV1, DirectIngestRetryV1, ProductionMemoryX,
+    UpdateAtomFailureCodeV1, UpdateAtomFailureV1, UpdateAtomReceiptV1, UpdateAtomRequestV1,
 };
 
 // ============================================================================

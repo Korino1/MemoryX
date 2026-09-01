@@ -19,9 +19,9 @@ use super::base_lease::{
 use crate::cas::canonical::compute_atom_id_from_payload;
 use crate::cas::io::{BloomFilter, IndexEntry, IndexFileHeader};
 use crate::cas::{AtomBodyHeader, RecordHeader};
-use crate::graph::GraphManifest;
+use crate::graph::{DeltaHeader, EdgeListEntry, GraphManifest};
 use crate::index::{IdLocBuilder, LexHeader, PostHeader};
-use crate::store::{AtomId, AtomType};
+use crate::store::{AtomId, AtomType, EdgeType};
 use crate::utils::crc32;
 
 const FORMAT_MAGIC: &str = "MEMORYX_OPERATION_TXN";
@@ -7181,6 +7181,39 @@ const PRODUCTION_BATCH_MAX_INSTALL_SCRATCH_BYTES: u64 = 268_435_456;
 const PRODUCTION_BATCH_MINIMUM_FREE_RESERVE_BYTES: u64 = 67_108_864;
 const PRODUCTION_BATCH_MAX_PATH_BYTES: usize = 240;
 const PRODUCTION_BATCH_MAX_TOTAL_PATH_BYTES: usize = 13_680;
+const PRODUCTION_UPDATE_OPERATION_REGISTRY_ID: &str = "memoryx.production-update-atom-registry.v1";
+const PRODUCTION_UPDATE_LIMITS_ID: &str = "memoryx.production-update-atom-limits.v1";
+const PRODUCTION_UPDATE_INTENT_ID: &str = "memoryx.update-atom-intent.v1";
+const PRODUCTION_UPDATE_ENVELOPE_ID: &str = "memoryx.update-atom-envelope.v1";
+const PRODUCTION_UPDATE_PREPARE_SCHEMA: &str = "memoryx.update-atom-prepare.v1";
+const PRODUCTION_UPDATE_MANIFEST_SCHEMA: &str = "memoryx.update-atom-generation-manifest.v1";
+const PRODUCTION_UPDATE_RECEIPT_ID: &str = "memoryx.update-atom-receipt.v1";
+const PRODUCTION_UPDATE_FAILURE_SCHEMA: &str = "memoryx.update-atom-failure.v1";
+const PRODUCTION_UPDATE_DESCRIPTOR_SCHEMA: &str = "memoryx.update-atom-component-descriptor.v1";
+const PRODUCTION_UPDATE_DESCRIPTOR_HASH_ID: &str = "memoryx.update-component-descriptor-hash.v1";
+const PRODUCTION_UPDATE_COMPONENT_ROOT_ID: &str = "memoryx.update-atom-component-root.v1";
+const PRODUCTION_UPDATE_RELATION_ID: &str = "memoryx.supersedes-relation-id.v1";
+const PRODUCTION_UPDATE_HISTORY_EVENT_ID: &str = "memoryx.update-history-event-id.v1";
+const PRODUCTION_UPDATE_HISTORY_SEMANTIC_ID: &str = "memoryx.update-history-event-semantic.v1";
+const PRODUCTION_UPDATE_HISTORY_LEAF_ID: &str = "memoryx.update-history-provenance-leaf.v1";
+const PRODUCTION_UPDATE_SPV1_SEMANTIC_ID: &str =
+    "memoryx.successor-provenance-source-attachment-semantic.v1";
+const PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PREFIX: &str =
+    "memoryx.atom-source-attachment-projection.v1|atom_id=";
+const PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PAYLOAD: &str = "|projection=";
+const PRODUCTION_GRAPH_ATTRIBUTE_ID: &str = "memoryx.graph-edge-attributes.v1";
+const PRODUCTION_GRAPH_LEAF_ID: &str = "memoryx.graph-semantic-leaf.v1";
+const PRODUCTION_GRAPH_DELTA_SEMANTIC_ID: &str = "memoryx.graph-delta-semantic.v1";
+const PRODUCTION_GRAPH_MANIFEST_SEMANTIC_ID: &str = "memoryx.graph-manifest-semantic.v1";
+const PRODUCTION_UPDATE_MAX_PROJECTION_BYTES: u64 = 54_000_000;
+const PRODUCTION_UPDATE_MAX_CONTROL_BYTES: u64 = 1_048_576;
+const PRODUCTION_UPDATE_MAX_AGGREGATE_CONTROL_BYTES: u64 = 67_108_864;
+const PRODUCTION_UPDATE_MAX_DESCRIPTOR_BYTES: u64 = 8_388_608;
+const PRODUCTION_UPDATE_MAX_COMPONENT_BYTES: u64 = 268_435_456;
+const PRODUCTION_UPDATE_MAX_TOTAL_BYTES: u64 = 536_870_912;
+const PRODUCTION_UPDATE_MAX_PATH_COUNT: usize = 10;
+const PRODUCTION_UPDATE_MAX_TOTAL_PATH_BYTES: usize = 2_400;
+const PRODUCTION_UPDATE_COMPONENT_COUNT: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProductionRegistryEntry {
@@ -8338,6 +8371,531 @@ impl BatchIngestReceiptV1 {
     }
 }
 
+/// Explicit immutable request for the sealed direct-library P1 update carrier.
+/// Every byte slice is successor-local; the predecessor's provenance is read
+/// from the committed parent and can never be supplied or inherited by the
+/// caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAtomRequestV1 {
+    pub transaction_id: String,
+    pub semantic_time_unix_ns: u64,
+    pub old_atom_id: AtomId,
+    pub successor_atom_id: AtomId,
+    pub successor_body: Vec<u8>,
+    pub successor_atom_type: AtomType,
+    pub claim_projection: Vec<u8>,
+    pub api_evidence_projection: Vec<u8>,
+    pub successor_source_attachment_projection: Vec<u8>,
+    pub successor_provenance: Vec<u8>,
+}
+
+impl UpdateAtomRequestV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_successor_body(
+        transaction_id: impl Into<String>,
+        semantic_time_unix_ns: u64,
+        old_atom_id: AtomId,
+        successor_body: impl Into<Vec<u8>>,
+        successor_atom_type: AtomType,
+        claim_projection: impl Into<Vec<u8>>,
+        api_evidence_projection: impl Into<Vec<u8>>,
+        successor_source_attachment_projection: impl Into<Vec<u8>>,
+        successor_provenance: impl Into<Vec<u8>>,
+    ) -> io::Result<Self> {
+        let successor_body = successor_body.into();
+        let successor_atom_id = compute_atom_id_from_payload(&successor_body).map_err(|error| {
+            invalid_data(&format!("update successor body is noncanonical: {error}"))
+        })?;
+        Ok(Self {
+            transaction_id: transaction_id.into(),
+            semantic_time_unix_ns,
+            old_atom_id,
+            successor_atom_id,
+            successor_body,
+            successor_atom_type,
+            claim_projection: claim_projection.into(),
+            api_evidence_projection: api_evidence_projection.into(),
+            successor_source_attachment_projection: successor_source_attachment_projection.into(),
+            successor_provenance: successor_provenance.into(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateAtomFailureCodeV1 {
+    InvalidTransactionId,
+    InvalidSemanticTime,
+    InvalidSuccessor,
+    OldAtomMissing,
+    SameAtomIdUpdate,
+    AlreadySuperseded,
+    AmbiguousSupersessionState,
+    RelationBackedAtomRequiresCompositeOperation,
+    SuccessorCollision,
+    ProvenanceProjectionConflict,
+    ResourceLimitExceeded,
+    GraphCompactionRequired,
+    ConflictingTransactionReuse,
+    RecoveryRequired,
+    UnsupportedOrCorrupt,
+}
+
+impl UpdateAtomFailureCodeV1 {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidTransactionId => "invalid_transaction_id",
+            Self::InvalidSemanticTime => "invalid_semantic_time",
+            Self::InvalidSuccessor => "noncanonical_successor",
+            Self::OldAtomMissing => "old_atom_missing",
+            Self::SameAtomIdUpdate => "same_atom_id_update",
+            Self::AlreadySuperseded => "already_superseded",
+            Self::AmbiguousSupersessionState => "ambiguous_supersession_state",
+            Self::RelationBackedAtomRequiresCompositeOperation => {
+                "relation_backed_atom_requires_composite_operation"
+            }
+            Self::SuccessorCollision => "successor_collision",
+            Self::ProvenanceProjectionConflict => "provenance_projection_conflict",
+            Self::ResourceLimitExceeded => "resource_limit_exceeded",
+            Self::GraphCompactionRequired => "graph_compaction_required",
+            Self::ConflictingTransactionReuse => "conflicting_transaction_reuse",
+            Self::RecoveryRequired => "recovery_required",
+            Self::UnsupportedOrCorrupt => "unsupported_or_corrupt",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAtomFailureV1 {
+    pub code: UpdateAtomFailureCodeV1,
+    pub message: String,
+    pub transaction_id: Option<String>,
+    pub intent_hash: Option<[u8; 32]>,
+    pub commit_disposition: DirectIngestCommitDispositionV1,
+    pub retry: DirectIngestRetryV1,
+    canonical_bytes: Vec<u8>,
+}
+
+impl UpdateAtomFailureV1 {
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    fn new(
+        code: UpdateAtomFailureCodeV1,
+        message: impl Into<String>,
+        transaction_id: Option<String>,
+        intent_hash: Option<[u8; 32]>,
+        committed: bool,
+    ) -> Self {
+        let message = canonical_failure_message(&message.into());
+        let commit_disposition = if committed {
+            DirectIngestCommitDispositionV1::CommittedInstallPending
+        } else if intent_hash.is_some() {
+            DirectIngestCommitDispositionV1::NotCommitted
+        } else {
+            DirectIngestCommitDispositionV1::NotStarted
+        };
+        let retry = if code == UpdateAtomFailureCodeV1::RecoveryRequired {
+            DirectIngestRetryV1::SameTransaction
+        } else {
+            DirectIngestRetryV1::Never
+        };
+        let body = UpdateAtomFailureBodyWire {
+            schema: PRODUCTION_UPDATE_FAILURE_SCHEMA.to_owned(),
+            version: 1,
+            operation: "update_atom".to_owned(),
+            code: code.as_str().to_owned(),
+            message: message.clone(),
+            transaction_id: transaction_id.clone(),
+            intent_hash: intent_hash.as_ref().map(|value| hex_lower(value)),
+            commit_disposition: commit_disposition.as_str().to_owned(),
+            acknowledged: false,
+            retry: retry.as_str().to_owned(),
+        };
+        let canonical_bytes = UpdateAtomFailureWire::from_body(body)
+            .and_then(|wire| wire.canonical_bytes())
+            .unwrap_or_default();
+        Self {
+            code,
+            message,
+            transaction_id,
+            intent_hash,
+            commit_disposition,
+            retry,
+            canonical_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAtomReceiptV1 {
+    pub transaction_id: String,
+    pub semantic_time_unix_ns: u64,
+    pub parent_generation: u64,
+    pub parent_commit_hash: [u8; 32],
+    pub committed_generation: u64,
+    pub commit_hash: [u8; 32],
+    pub logical_digest: [u8; 32],
+    pub base_binding_hash: [u8; 32],
+    pub envelope_hash: [u8; 32],
+    pub intent_hash: [u8; 32],
+    pub old_atom_id: AtomId,
+    pub successor_atom_id: AtomId,
+    pub successor_node: u64,
+    pub supersedes_relation_id: [u8; 32],
+    pub history_event_id: [u8; 32],
+    pub history_semantic_hash: [u8; 32],
+    pub old_provenance_hash: [u8; 32],
+    pub successor_provenance_hash: [u8; 32],
+    pub component_root_hash: [u8; 32],
+    canonical_bytes: Vec<u8>,
+}
+
+impl UpdateAtomReceiptV1 {
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create(
+        transaction_id: String,
+        semantic_time_unix_ns: u64,
+        parent_generation: u64,
+        parent_commit_hash: [u8; 32],
+        committed_generation: u64,
+        commit_hash: [u8; 32],
+        logical_digest: [u8; 32],
+        base_binding_hash: [u8; 32],
+        envelope_hash: [u8; 32],
+        intent_hash: [u8; 32],
+        old_atom_id: AtomId,
+        successor_atom_id: AtomId,
+        successor_node: u64,
+        supersedes_relation_id: [u8; 32],
+        history_event_id: [u8; 32],
+        history_semantic_hash: [u8; 32],
+        old_provenance_hash: [u8; 32],
+        successor_provenance_hash: [u8; 32],
+        component_root_hash: [u8; 32],
+    ) -> io::Result<Self> {
+        let transaction_uuid = validate_production_uuid(&transaction_id)?;
+        if semantic_time_unix_ns == 0
+            || committed_generation != parent_generation.saturating_add(1)
+            || committed_generation == 0
+            || committed_generation > PRODUCTION_MAX_GENERATIONS
+            || old_atom_id == successor_atom_id
+            || successor_node == u64::MAX
+            || [
+                commit_hash,
+                logical_digest,
+                base_binding_hash,
+                envelope_hash,
+                intent_hash,
+                supersedes_relation_id,
+                history_event_id,
+                history_semantic_hash,
+                old_provenance_hash,
+                successor_provenance_hash,
+                component_root_hash,
+            ]
+            .contains(&[0; 32])
+        {
+            return Err(invalid_data("update receipt identity is incomplete"));
+        }
+        let mut canonical_bytes = Vec::new();
+        canonical_bytes.extend_from_slice(PRODUCTION_UPDATE_RECEIPT_ID.as_bytes());
+        canonical_bytes.push(0);
+        canonical_bytes.extend_from_slice(&1u16.to_le_bytes());
+        canonical_bytes.extend_from_slice(&transaction_uuid);
+        canonical_bytes.extend_from_slice(&committed_generation.to_le_bytes());
+        canonical_bytes.extend_from_slice(&successor_atom_id);
+        canonical_bytes.extend_from_slice(&old_atom_id);
+        canonical_bytes.extend_from_slice(&supersedes_relation_id);
+        canonical_bytes.extend_from_slice(&history_event_id);
+        canonical_bytes.extend_from_slice(&history_semantic_hash);
+        canonical_bytes.extend_from_slice(&old_provenance_hash);
+        canonical_bytes.extend_from_slice(&successor_provenance_hash);
+        canonical_bytes.extend_from_slice(&intent_hash);
+        Ok(Self {
+            transaction_id,
+            semantic_time_unix_ns,
+            parent_generation,
+            parent_commit_hash,
+            committed_generation,
+            commit_hash,
+            logical_digest,
+            base_binding_hash,
+            envelope_hash,
+            intent_hash,
+            old_atom_id,
+            successor_atom_id,
+            successor_node,
+            supersedes_relation_id,
+            history_event_id,
+            history_semantic_hash,
+            old_provenance_hash,
+            successor_provenance_hash,
+            component_root_hash,
+            canonical_bytes,
+        })
+    }
+}
+
+fn production_sha256(bytes: &[u8]) -> [u8; 32] {
+    const INITIAL: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let bit_len = (bytes.len() as u64).wrapping_mul(8);
+    let mut padded = bytes.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+    let mut state = INITIAL;
+    for block in padded.as_chunks::<64>().0 {
+        let mut words = [0u32; 64];
+        for (index, word) in words.iter_mut().take(16).enumerate() {
+            *word = u32::from_be_bytes(block[index * 4..index * 4 + 4].try_into().unwrap());
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for index in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(choice)
+                .wrapping_add(K[index])
+                .wrapping_add(words[index]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+        for (slot, value) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *slot = slot.wrapping_add(value);
+        }
+    }
+    let mut output = [0u8; 32];
+    for (index, word) in state.iter().enumerate() {
+        output[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    output
+}
+
+fn production_update_source_attachment_hash(
+    bytes: &[u8],
+    successor_atom_id: AtomId,
+    old_atom_id: AtomId,
+) -> io::Result<[u8; 32]> {
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        invalid_data("provenance_projection_conflict: source attachment is not ASCII")
+    })?;
+    if !text.is_ascii() || bytes.len() as u64 > PRODUCTION_UPDATE_MAX_PROJECTION_BYTES {
+        return Err(invalid_data(
+            "provenance_projection_conflict: source attachment length or encoding is invalid",
+        ));
+    }
+    let declared = text
+        .strip_prefix(PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PREFIX)
+        .ok_or_else(|| {
+            invalid_data("provenance_projection_conflict: source attachment schema is not declared")
+        })?;
+    let (atom_hex, projection) = declared
+        .split_once(PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PAYLOAD)
+        .ok_or_else(|| {
+            invalid_data("provenance_projection_conflict: source attachment fields are malformed")
+        })?;
+    if atom_hex.len() != 64
+        || !atom_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || projection.is_empty()
+        || projection.bytes().any(|byte| {
+            !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b':' | b'/'))
+        })
+    {
+        return Err(invalid_data(
+            "provenance_projection_conflict: source attachment encoding is noncanonical",
+        ));
+    }
+    let declared_atom = parse_hash_hex(atom_hex, "source attachment AtomId")?;
+    if declared_atom == [0; 32]
+        || declared_atom == old_atom_id
+        || declared_atom != successor_atom_id
+    {
+        return Err(invalid_data(
+            "provenance_projection_conflict: source attachment does not bind the successor AtomId",
+        ));
+    }
+    Ok(production_sha256(bytes))
+}
+
+#[derive(Debug, Clone)]
+struct ProductionUpdateIntentV1 {
+    bytes: Vec<u8>,
+    hash: [u8; 32],
+    old_atom_id: AtomId,
+    successor_atom_id: AtomId,
+    successor_body_hash: [u8; 32],
+    claim_projection_hash: [u8; 32],
+    api_evidence_projection_hash: [u8; 32],
+    successor_source_attachment_hash: [u8; 32],
+    supersedes_relation_id: [u8; 32],
+}
+
+impl ProductionUpdateIntentV1 {
+    fn create(request: &UpdateAtomRequestV1) -> io::Result<Self> {
+        if request.old_atom_id == request.successor_atom_id {
+            return Err(invalid_data("same_atom_id_update"));
+        }
+        if request.successor_body.is_empty()
+            || request.successor_body.len() as u64 > PRODUCTION_MAX_BODY_BYTES
+            || request
+                .claim_projection
+                .len()
+                .checked_add(request.api_evidence_projection.len())
+                .and_then(|value| {
+                    value.checked_add(request.successor_source_attachment_projection.len())
+                })
+                .is_none_or(|value| value as u64 > PRODUCTION_UPDATE_MAX_PROJECTION_BYTES)
+        {
+            return Err(invalid_data("resource_limit_exceeded"));
+        }
+        if compute_atom_id_from_payload(&request.successor_body)
+            .map_err(|error| invalid_data(&format!("noncanonical_successor: {error}")))?
+            != request.successor_atom_id
+            || AtomBodyHeader::from_bytes(&request.successor_body)
+                .map_err(|error| invalid_data(&format!("noncanonical_successor: {error}")))?
+                .atom_type()
+                != Some(request.successor_atom_type)
+        {
+            return Err(invalid_data("noncanonical_successor"));
+        }
+        validate_claim_projection(&request.claim_projection)?;
+        validate_evidence_projection(&request.api_evidence_projection)?;
+        let successor_body_hash = production_sha256(&request.successor_body);
+        let claim_projection_hash = production_sha256(&request.claim_projection);
+        let api_evidence_projection_hash = production_sha256(&request.api_evidence_projection);
+        let successor_source_attachment_hash = production_update_source_attachment_hash(
+            &request.successor_source_attachment_projection,
+            request.successor_atom_id,
+            request.old_atom_id,
+        )?;
+        let supersedes_relation_id =
+            production_update_relation_id(request.successor_atom_id, request.old_atom_id);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PRODUCTION_UPDATE_INTENT_ID.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&3u16.to_le_bytes());
+        bytes.extend_from_slice(&request.old_atom_id);
+        bytes.extend_from_slice(&request.successor_atom_id);
+        bytes.extend_from_slice(&successor_body_hash);
+        bytes.extend_from_slice(&claim_projection_hash);
+        bytes.extend_from_slice(&api_evidence_projection_hash);
+        bytes.extend_from_slice(&successor_source_attachment_hash);
+        bytes.extend_from_slice(&supersedes_relation_id);
+        append_u64_frame(&mut bytes, PRODUCTION_UPDATE_LIMITS_ID.as_bytes())?;
+        Ok(Self {
+            hash: production_hash_bytes(&bytes),
+            bytes,
+            old_atom_id: request.old_atom_id,
+            successor_atom_id: request.successor_atom_id,
+            successor_body_hash,
+            claim_projection_hash,
+            api_evidence_projection_hash,
+            successor_source_attachment_hash,
+            supersedes_relation_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProductionUpdateEnvelopeV1 {
+    bytes: Vec<u8>,
+    hash: [u8; 32],
+    transaction_id: String,
+    transaction_uuid: [u8; 16],
+    semantic_time_unix_ns: u64,
+    base_binding_hash: [u8; 32],
+    intent_hash: [u8; 32],
+}
+
+impl ProductionUpdateEnvelopeV1 {
+    fn create(
+        transaction_id: &str,
+        semantic_time_unix_ns: u64,
+        base_binding_hash: [u8; 32],
+        intent_hash: [u8; 32],
+    ) -> io::Result<Self> {
+        let transaction_uuid = validate_production_uuid(transaction_id)?;
+        if semantic_time_unix_ns == 0 || base_binding_hash == [0; 32] || intent_hash == [0; 32] {
+            return Err(invalid_data("update envelope contains a zero identity"));
+        }
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PRODUCTION_UPDATE_ENVELOPE_ID.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&transaction_uuid);
+        bytes.extend_from_slice(&semantic_time_unix_ns.to_le_bytes());
+        bytes.extend_from_slice(&base_binding_hash);
+        bytes.extend_from_slice(&intent_hash);
+        Ok(Self {
+            hash: production_hash_bytes(&bytes),
+            bytes,
+            transaction_id: transaction_id.to_owned(),
+            transaction_uuid,
+            semantic_time_unix_ns,
+            base_binding_hash,
+            intent_hash,
+        })
+    }
+}
+
+fn production_update_relation_id(successor: AtomId, old: AtomId) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(PRODUCTION_UPDATE_RELATION_ID.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&EdgeType::SUPERSEDES.to_u32().to_le_bytes());
+    bytes.extend_from_slice(&successor);
+    bytes.extend_from_slice(&old);
+    production_hash_bytes(&bytes)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProductionBatchItemCodecV1 {
     bytes: Vec<u8>,
@@ -8908,6 +9466,51 @@ macro_rules! production_crc_record {
     };
 }
 
+macro_rules! production_update_crc_record {
+    ($record:ident, $body:ident { $($field:ident : $ty:ty),+ $(,)? }) => {
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+        #[serde(deny_unknown_fields)]
+        struct $body {
+            $(pub(crate) $field: $ty),+
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+        #[serde(deny_unknown_fields)]
+        struct $record {
+            $(pub(crate) $field: $ty),+,
+            pub(crate) crc32: String,
+        }
+
+        impl $record {
+            fn from_body(body: $body) -> io::Result<Self> {
+                let body_bytes = serde_json::to_vec(&body).map_err(io::Error::other)?;
+                let crc32 = format!("{:08x}", production_update_control_crc(&body_bytes)?);
+                Ok(Self {
+                    $($field: body.$field),+,
+                    crc32,
+                })
+            }
+
+            fn body(&self) -> $body {
+                $body {
+                    $($field: self.$field.clone()),+
+                }
+            }
+
+            fn canonical_bytes(&self) -> io::Result<Vec<u8>> {
+                serde_json::to_vec(self).map_err(io::Error::other)
+            }
+
+            fn decode(bytes: &[u8], label: &str) -> io::Result<Self> {
+                let record: Self = decode_production_json(bytes, label)?;
+                let body = record.body();
+                verify_production_update_crc(&body, &record.crc32)?;
+                Ok(record)
+            }
+        }
+    };
+}
+
 production_crc_record!(BatchIngestReceiptWire, BatchIngestReceiptBodyWire {
     schema: String,
     version: u64,
@@ -8939,6 +9542,19 @@ production_crc_record!(BatchIngestFailureWire, BatchIngestFailureBodyWire {
     transaction_id: Option<String>,
     intent_hash: Option<String>,
     item_ordinal: Option<u32>,
+    commit_disposition: String,
+    acknowledged: bool,
+    retry: String,
+});
+
+production_update_crc_record!(UpdateAtomFailureWire, UpdateAtomFailureBodyWire {
+    schema: String,
+    version: u64,
+    operation: String,
+    code: String,
+    message: String,
+    transaction_id: Option<String>,
+    intent_hash: Option<String>,
     commit_disposition: String,
     acknowledged: bool,
     retry: String,
@@ -9362,6 +9978,130 @@ production_crc_record!(BatchGenerationManifestV1, BatchGenerationManifestBodyV1 
     post_atom_count: u64,
 });
 
+production_update_crc_record!(
+    UpdateComponentDescriptorV1,
+    UpdateComponentDescriptorBodyV1 {
+        schema: String,
+        version: u64,
+        registry_order: u16,
+        registry_key: String,
+        ordinal: u32,
+        mode: String,
+        target_path: String,
+        stage_path: String,
+        content_codec_id: String,
+        byte_length: u64,
+        byte_hash: String,
+        semantic_hash: String,
+        descriptor_hash: String,
+    }
+);
+
+production_update_crc_record!(UpdateHistoryEventV1, UpdateHistoryEventBodyV1 {
+    schema: String,
+    version: u64,
+    event_id: String,
+    transaction_id: String,
+    event_ordinal: u32,
+    generation: u64,
+    semantic_time_unix_ns: u64,
+    operation: String,
+    outcome: String,
+    atom_ids: Vec<String>,
+    supersedes_relation_id: String,
+    intent_hash: String,
+    successor_provenance_hash: String,
+    old_provenance_hash: String,
+    history_semantic_hash: String,
+});
+
+production_update_crc_record!(
+    UpdateRelationJournalV1,
+    UpdateRelationJournalBodyV1 {
+        schema: String,
+        version: u64,
+        journal_kind: String,
+        ordinal: u32,
+        relation_atom_id: String,
+        subject_atom_id: String,
+        predicate_id: u32,
+        object_atom_id: String,
+        current: bool,
+        historical: bool,
+    }
+);
+
+production_update_crc_record!(UpdatePrepareV1, UpdatePrepareBodyV1 {
+    schema: String,
+    version: u64,
+    format_version: u64,
+    generation: u64,
+    parent_commit_hash: String,
+    transaction_id: String,
+    semantic_time_unix_ns: u64,
+    base_binding_hash: String,
+    envelope_hash: String,
+    operation: String,
+    intent_hash: String,
+    operation_registry_id: String,
+    limits_id: String,
+    old_atom_id: String,
+    successor_atom_id: String,
+    successor_body_hash: String,
+    claim_projection_hash: String,
+    api_evidence_projection_hash: String,
+    successor_atom_type: u32,
+    old_node: u64,
+    successor_node: u64,
+    supersedes_relation_id: String,
+    old_provenance_hash: String,
+    successor_provenance_hash: String,
+    successor_source_attachment_hash: String,
+    history_event_id: String,
+    history_semantic_hash: String,
+    component_root_hash: String,
+    logical_state_digest: String,
+    components: Vec<UpdateComponentDescriptorV1>,
+});
+
+production_update_crc_record!(UpdateGenerationManifestV1, UpdateGenerationManifestBodyV1 {
+    schema: String,
+    version: u64,
+    format_version: u64,
+    generation: u64,
+    parent_commit_hash: String,
+    prepare_hash: String,
+    transaction_id: String,
+    semantic_time_unix_ns: u64,
+    base_binding_hash: String,
+    envelope_hash: String,
+    operation: String,
+    intent_hash: String,
+    operation_registry_id: String,
+    limits_id: String,
+    old_atom_id: String,
+    successor_atom_id: String,
+    successor_body_hash: String,
+    claim_projection_hash: String,
+    api_evidence_projection_hash: String,
+    successor_atom_type: u32,
+    old_node: u64,
+    successor_node: u64,
+    supersedes_relation_id: String,
+    old_provenance_hash: String,
+    successor_provenance_hash: String,
+    successor_source_attachment_hash: String,
+    history_event_id: String,
+    history_semantic_hash: String,
+    history_event_count: u64,
+    relation_count: u64,
+    post_atom_count: u64,
+    graph_leaf_count: u64,
+    component_root_hash: String,
+    logical_state_digest: String,
+    components: Vec<UpdateComponentDescriptorV1>,
+});
+
 production_crc_record!(ProductionBaselineManifestV1, ProductionBaselineManifestBodyV1 {
     schema: String,
     version: u64,
@@ -9687,6 +10427,15 @@ fn production_crc(schema: &str, body_bytes: &[u8]) -> u32 {
     crc32(&bytes)
 }
 
+fn production_update_control_crc(body_bytes: &[u8]) -> io::Result<u32> {
+    if !body_bytes.is_ascii() || body_bytes.last() != Some(&b'}') {
+        return Err(invalid_data(
+            "update control record body is not canonical ASCII JSON",
+        ));
+    }
+    Ok(crc32(&body_bytes[..body_bytes.len() - 1]))
+}
+
 fn encode_receipt_wire(body: &DirectIngestReceiptBodyWire) -> io::Result<Vec<u8>> {
     let body_bytes = serde_json::to_vec(body).map_err(io::Error::other)?;
     let crc32 = production_crc(&body.schema, &body_bytes);
@@ -9736,6 +10485,22 @@ fn verify_production_crc<T: Serialize>(schema: &str, body: &T, found: &str) -> i
     let expected = production_crc(schema, &serde_json::to_vec(body).map_err(io::Error::other)?);
     if found != format!("{expected:08x}") {
         return Err(invalid_data("production record crc32 does not match"));
+    }
+    Ok(())
+}
+
+fn verify_production_update_crc<T: Serialize>(body: &T, found: &str) -> io::Result<()> {
+    if found.len() != 8
+        || !found
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid_data("update record crc32 is not canonical"));
+    }
+    let body_bytes = serde_json::to_vec(body).map_err(io::Error::other)?;
+    let expected = production_update_control_crc(&body_bytes)?;
+    if found != format!("{expected:08x}") {
+        return Err(invalid_data("update record crc32 does not match"));
     }
     Ok(())
 }
@@ -9802,6 +10567,7 @@ pub(crate) struct ProductionAtomStateV1 {
     pub(crate) created_at_ns: u64,
     pub(crate) trust_level: u16,
     pub(crate) source_id: u32,
+    pub(crate) provenance_hash: [u8; 32],
     pub(crate) history_event_id: [u8; 32],
     pub(crate) history_leaf: Vec<u8>,
 }
@@ -9810,6 +10576,7 @@ pub(crate) struct ProductionAtomStateV1 {
 enum ProductionOwnerLifetimeTransactionV1 {
     Direct(DirectIngestReceiptV1),
     Batch(BatchIngestReceiptV1),
+    Update(Box<UpdateAtomReceiptV1>),
 }
 
 #[derive(Debug, Clone)]
@@ -9820,9 +10587,12 @@ pub(crate) struct ProductionRuntimeStateV1 {
     pub(crate) atom: Option<ProductionAtomStateV1>,
     pub(crate) atoms: Vec<ProductionAtomStateV1>,
     pub(crate) history_leaves: Vec<Vec<u8>>,
+    pub(crate) graph_leaves: Vec<Vec<u8>>,
+    pub(crate) superseded_by: BTreeMap<AtomId, AtomId>,
     committed_receipts: BTreeMap<String, DirectIngestReceiptV1>,
     committed_transactions: BTreeMap<String, ProductionCommittedTransactionV1>,
     batch_transactions: BTreeMap<String, ProductionCommittedBatchV1>,
+    update_transactions: BTreeMap<String, ProductionCommittedUpdateV1>,
     owner_lifetime_transactions: BTreeMap<String, ProductionOwnerLifetimeTransactionV1>,
 }
 
@@ -9858,6 +10628,15 @@ struct ProductionCommittedBatchV1 {
     history_event_id: [u8; 32],
     commit_hash: [u8; 32],
     logical_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+struct ProductionCommittedUpdateV1 {
+    receipt: UpdateAtomReceiptV1,
+    successor_body_hash: [u8; 32],
+    claim_projection_hash: [u8; 32],
+    api_evidence_projection_hash: [u8; 32],
+    successor_source_attachment_hash: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -10152,6 +10931,7 @@ fn production_detached_components(
         created_at_ns: body_header.created_at_unix_ns,
         trust_level: 5000,
         source_id: 0,
+        provenance_hash: production_hash_bytes(&production_zero_provenance_leaf(&atom_id)),
         history_event_id: history.event_id,
         history_leaf: history.leaf_bytes.clone(),
     };
@@ -10618,7 +11398,11 @@ fn production_read_exact_committed_body(
     root: &Path,
     atom: &ProductionAtomStateV1,
 ) -> io::Result<Vec<u8>> {
-    let segment = root.join(format!("cas/seg_{:05}.dat", atom.segment_id));
+    let segment = if atom.segment_id == 0 {
+        root.join("cas/seg_00000.dat")
+    } else {
+        root.join(format!("cas/segments/seg_{:08}.skf1", atom.segment_id))
+    };
     let (mut file, identity) = open_verified_regular(root, &segment)?;
     require_single_link(&identity, "production CAS segment")?;
     let extent_end = atom
@@ -10782,6 +11566,9 @@ fn production_atom_from_generation(
             created_at_ns: body_header.created_at_unix_ns,
             trust_level: u16::from_le_bytes(metadata[68..70].try_into().unwrap()),
             source_id: u32::from_le_bytes(metadata[78..82].try_into().unwrap()),
+            provenance_hash: production_hash_bytes(&production_zero_provenance_leaf(
+                &record_header.atom_id,
+            )),
             history_event_id: event_id,
             history_leaf,
         },
@@ -10921,6 +11708,9 @@ fn production_atoms_from_batch_generation(
             created_at_ns,
             trust_level: trust,
             source_id: source,
+            provenance_hash: production_hash_bytes(&production_zero_provenance_leaf(
+                &header.atom_id,
+            )),
             history_event_id: event_id,
             history_leaf: Vec::new(),
         });
@@ -10989,11 +11779,64 @@ fn production_generation_directories(root: &Path) -> io::Result<Vec<(u64, PathBu
     Ok(result)
 }
 
+fn production_rollback_pending_update_cas(root: &Path, pending: &Path) -> io::Result<bool> {
+    let staged_path = pending.join(production_stage_path(20, 0));
+    if !path_entry_exists(&staged_path)? {
+        return Ok(false);
+    }
+    let record = read_bytes_bounded_under(
+        root,
+        &staged_path,
+        ProductionStorageLimitsV1::frozen().max_staged_record_bytes,
+    )?;
+    if record.len() < RecordHeader::SIZE + 16 {
+        return Ok(false);
+    }
+    let header = match RecordHeader::from_bytes(&record[..RecordHeader::SIZE]) {
+        Ok(header) if header.is_valid() && header.seg_id != 0 => header,
+        _ => return Ok(false),
+    };
+    let target = root.join(format!("cas/segments/seg_{:08}.skf1", header.seg_id));
+    match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Ok(metadata) => {
+            if is_link_or_reparse(&target, &metadata) || !metadata.is_file() {
+                return Err(invalid_data(
+                    "pending update CAS target is not a regular file",
+                ));
+            }
+        }
+        Err(error) => return Err(error),
+    }
+    let installed = read_bytes_bounded_under(
+        root,
+        &target,
+        ProductionStorageLimitsV1::frozen().max_staged_record_bytes,
+    )?;
+    if installed != record {
+        return Err(invalid_data(
+            "pending update CAS target conflicts with its staged record",
+        ));
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| invalid_data("pending update CAS target has no parent"))?;
+    let guard = AncestorGuard::acquire(root, parent)?;
+    guard.verify()?;
+    fs::remove_file(&target)?;
+    sync_directory(parent)?;
+    guard.verify()?;
+    Ok(true)
+}
+
 fn production_rollback_pending_cas(
     root: &Path,
     transaction_id: &str,
     pending: &Path,
 ) -> io::Result<()> {
+    if production_rollback_pending_update_cas(root, pending)? {
+        return Ok(());
+    }
     let batch_cas = pending.join("components").join("cas");
     if path_entry_exists(&batch_cas)? {
         let mut descriptors = Vec::new();
@@ -11662,6 +12505,330 @@ fn production_validate_batch_manifest(
     Ok(())
 }
 
+fn production_validate_update_manifest(
+    root: &Path,
+    generation_dir: &Path,
+    manifest: &UpdateGenerationManifestV1,
+    expected_generation: u64,
+    parent: &ProductionCommittedHead,
+) -> io::Result<()> {
+    let fixed_hashes = [
+        &manifest.parent_commit_hash,
+        &manifest.prepare_hash,
+        &manifest.base_binding_hash,
+        &manifest.envelope_hash,
+        &manifest.intent_hash,
+        &manifest.old_atom_id,
+        &manifest.successor_atom_id,
+        &manifest.successor_body_hash,
+        &manifest.claim_projection_hash,
+        &manifest.api_evidence_projection_hash,
+        &manifest.supersedes_relation_id,
+        &manifest.old_provenance_hash,
+        &manifest.successor_provenance_hash,
+        &manifest.successor_source_attachment_hash,
+        &manifest.history_event_id,
+        &manifest.history_semantic_hash,
+        &manifest.component_root_hash,
+        &manifest.logical_state_digest,
+    ];
+    if manifest.schema != PRODUCTION_UPDATE_MANIFEST_SCHEMA
+        || manifest.version != 1
+        || manifest.format_version != 2
+        || manifest.generation != expected_generation
+        || manifest.parent_commit_hash != hex_lower(&parent.commit_hash)
+        || manifest.operation != "update_atom"
+        || manifest.operation_registry_id != PRODUCTION_UPDATE_OPERATION_REGISTRY_ID
+        || manifest.limits_id != PRODUCTION_UPDATE_LIMITS_ID
+        || manifest.old_atom_id == manifest.successor_atom_id
+        || manifest.old_node == manifest.successor_node
+        || manifest.successor_atom_type == 0
+        || manifest.history_event_count == 0
+        || manifest.relation_count == 0
+        || manifest.post_atom_count < 2
+        || manifest.graph_leaf_count != manifest.relation_count
+        || manifest.components.len() != PRODUCTION_UPDATE_COMPONENT_COUNT
+        || fixed_hashes.iter().any(|value| !is_hash(value))
+    {
+        return Err(invalid_data(
+            "update generation manifest fields are invalid",
+        ));
+    }
+    validate_production_uuid(&manifest.transaction_id)?;
+    let expected = [
+        (20, "cas.successor-append.v1", "append"),
+        (30, "index.idloc-replace.v1", "replace"),
+        (40, "index.locate-replace.v1", "replace"),
+        (50, "meta.successor-provenance.v1", "replace"),
+        (60, "meta.update-history-once.v1", "replace"),
+        (70, "meta.current-view.v1", "replace"),
+        (80, "graph.delta-supersedes.v1", "create"),
+        (90, "graph.manifest-grm1.v0101", "replace"),
+    ];
+    for (descriptor, (order, key, mode)) in manifest.components.iter().zip(expected) {
+        if descriptor.registry_order != order
+            || descriptor.registry_key != key
+            || descriptor.mode != mode
+            || descriptor.byte_length > PRODUCTION_UPDATE_MAX_COMPONENT_BYTES
+        {
+            return Err(invalid_data(
+                "update component registry projection is invalid",
+            ));
+        }
+        production_read_update_component(root, generation_dir, descriptor)?;
+    }
+    if production_update_component_root(&manifest.components)?
+        != parse_hash_hex(&manifest.component_root_hash, "update component root")?
+    {
+        return Err(invalid_data("update component root does not match"));
+    }
+    let prepare_bytes = read_bytes_bounded_under(
+        root,
+        &generation_dir.join(PREPARE_FILE_NAME),
+        MAX_CONTROL_RECORD_BYTES,
+    )?;
+    let prepare = UpdatePrepareV1::decode(&prepare_bytes, "update prepare.bin")?;
+    if manifest.prepare_hash != production_hash_hex(&prepare_bytes)
+        || prepare.schema != PRODUCTION_UPDATE_PREPARE_SCHEMA
+        || prepare.version != 1
+        || prepare.format_version != 2
+        || prepare.generation != manifest.generation
+        || prepare.parent_commit_hash != manifest.parent_commit_hash
+        || prepare.transaction_id != manifest.transaction_id
+        || prepare.semantic_time_unix_ns != manifest.semantic_time_unix_ns
+        || prepare.base_binding_hash != manifest.base_binding_hash
+        || prepare.envelope_hash != manifest.envelope_hash
+        || prepare.operation != manifest.operation
+        || prepare.intent_hash != manifest.intent_hash
+        || prepare.operation_registry_id != manifest.operation_registry_id
+        || prepare.limits_id != manifest.limits_id
+        || prepare.old_atom_id != manifest.old_atom_id
+        || prepare.successor_atom_id != manifest.successor_atom_id
+        || prepare.successor_body_hash != manifest.successor_body_hash
+        || prepare.claim_projection_hash != manifest.claim_projection_hash
+        || prepare.api_evidence_projection_hash != manifest.api_evidence_projection_hash
+        || prepare.successor_atom_type != manifest.successor_atom_type
+        || prepare.old_node != manifest.old_node
+        || prepare.successor_node != manifest.successor_node
+        || prepare.supersedes_relation_id != manifest.supersedes_relation_id
+        || prepare.old_provenance_hash != manifest.old_provenance_hash
+        || prepare.successor_provenance_hash != manifest.successor_provenance_hash
+        || prepare.successor_source_attachment_hash != manifest.successor_source_attachment_hash
+        || prepare.history_event_id != manifest.history_event_id
+        || prepare.history_semantic_hash != manifest.history_semantic_hash
+        || prepare.component_root_hash != manifest.component_root_hash
+        || prepare.logical_state_digest != manifest.logical_state_digest
+        || prepare.components != manifest.components
+    {
+        return Err(invalid_data("update prepare does not bind its manifest"));
+    }
+    Ok(())
+}
+
+fn production_update_from_generation(
+    root: &Path,
+    generation_dir: &Path,
+    manifest: &UpdateGenerationManifestV1,
+    prior_graph_leaves: &[Vec<u8>],
+) -> io::Result<(ProductionAtomStateV1, ProductionUpdateHistoryV1, Vec<u8>)> {
+    let component = |order| {
+        manifest
+            .components
+            .iter()
+            .find(|descriptor| descriptor.registry_order == order)
+            .ok_or_else(|| invalid_data("update generation component is missing"))
+    };
+    let record = production_read_update_component(root, generation_dir, component(20)?)?;
+    if record.len() < RecordHeader::SIZE + 16 {
+        return Err(invalid_data("update successor SKF1 record is truncated"));
+    }
+    let header = RecordHeader::from_bytes(&record[..RecordHeader::SIZE])
+        .map_err(|error| invalid_data(&format!("update successor SKF1 is invalid: {error}")))?;
+    let body_end = RecordHeader::SIZE
+        .checked_add(header.body_len as usize)
+        .ok_or_else(|| invalid_data("update successor body extent overflow"))?;
+    let body = record
+        .get(RecordHeader::SIZE..body_end)
+        .ok_or_else(|| invalid_data("update successor body is truncated"))?;
+    let successor = parse_hash_hex(&manifest.successor_atom_id, "update successor AtomId")?;
+    let old = parse_hash_hex(&manifest.old_atom_id, "update old AtomId")?;
+    if header.atom_id != successor
+        || header.seg_id != manifest.generation as u32
+        || compute_atom_id_from_payload(body)
+            .map_err(|error| invalid_data(&format!("update successor is invalid: {error}")))?
+            != successor
+        || production_sha256(body)
+            != parse_hash_hex(&manifest.successor_body_hash, "update successor body hash")?
+    {
+        return Err(invalid_data("update successor record identities disagree"));
+    }
+    let body_header = AtomBodyHeader::from_bytes(body)
+        .map_err(|error| invalid_data(&format!("update successor body is invalid: {error}")))?;
+    let atom_type = AtomType::from_u32(manifest.successor_atom_type)
+        .ok_or_else(|| invalid_data("update successor atom type is invalid"))?;
+    if body_header.atom_type() != Some(atom_type) {
+        return Err(invalid_data(
+            "update successor atom type disagrees with body",
+        ));
+    }
+    let spv = production_read_update_component(root, generation_dir, component(50)?)?;
+    let (spv_successor, spv_provenance, spv_source) = production_update_decode_spv1(&spv)?;
+    if spv_successor != successor
+        || spv_provenance
+            != parse_hash_hex(
+                &manifest.successor_provenance_hash,
+                "update successor provenance hash",
+            )?
+        || spv_source
+            != parse_hash_hex(
+                &manifest.successor_source_attachment_hash,
+                "update successor source attachment hash",
+            )?
+    {
+        return Err(invalid_data("update SPV1 projection is invalid"));
+    }
+    let history_component = production_read_update_component(root, generation_dir, component(60)?)?;
+    let (history_wire, history_identity) = production_update_decode_history(&history_component)?;
+    let manifest_transaction_uuid = validate_production_uuid(&manifest.transaction_id)?;
+    let event_id = parse_hash_hex(&manifest.history_event_id, "update history event ID")?;
+    let semantic_hash = parse_hash_hex(
+        &manifest.history_semantic_hash,
+        "update history semantic hash",
+    )?;
+    let intent_hash = parse_hash_hex(&manifest.intent_hash, "update intent hash")?;
+    let successor_provenance_hash = parse_hash_hex(
+        &manifest.successor_provenance_hash,
+        "update successor provenance hash",
+    )?;
+    let old_provenance_hash =
+        parse_hash_hex(&manifest.old_provenance_hash, "update old provenance hash")?;
+    let manifest_relation_id =
+        parse_hash_hex(&manifest.supersedes_relation_id, "update relation ID")?;
+    if history_wire.transaction_id != manifest.transaction_id
+        || history_wire.generation != manifest.generation
+        || history_wire.semantic_time_unix_ns != manifest.semantic_time_unix_ns
+        || history_wire.atom_ids
+            != vec![
+                manifest.successor_atom_id.clone(),
+                manifest.old_atom_id.clone(),
+            ]
+        || history_wire.supersedes_relation_id != manifest.supersedes_relation_id
+        || history_wire.intent_hash != manifest.intent_hash
+        || history_wire.successor_provenance_hash != manifest.successor_provenance_hash
+        || history_wire.old_provenance_hash != manifest.old_provenance_hash
+        || history_wire.history_semantic_hash != manifest.history_semantic_hash
+        || history_wire.event_id != manifest.history_event_id
+        || history_identity.transaction_uuid != manifest_transaction_uuid
+        || history_identity.event_id != event_id
+        || history_identity.semantic_hash != semantic_hash
+        || history_identity.successor_atom_id != successor
+        || history_identity.old_atom_id != old
+        || history_identity.relation_id != manifest_relation_id
+        || history_identity.intent_hash != intent_hash
+        || history_identity.successor_provenance_hash != successor_provenance_hash
+        || history_identity.old_provenance_hash != old_provenance_hash
+    {
+        return Err(invalid_data("update history event fields are invalid"));
+    }
+    let mut leaf_bytes = Vec::new();
+    leaf_bytes.extend_from_slice(PRODUCTION_UPDATE_HISTORY_LEAF_ID.as_bytes());
+    leaf_bytes.push(0);
+    leaf_bytes.extend_from_slice(&event_id);
+    leaf_bytes.extend_from_slice(&semantic_hash);
+    leaf_bytes.extend_from_slice(&successor_provenance_hash);
+    leaf_bytes.extend_from_slice(&old_provenance_hash);
+    let graph_leaf = production_update_graph_leaf(manifest.successor_node, manifest.old_node);
+    let relation_id = production_update_relation_id(successor, old);
+    if relation_id != manifest_relation_id {
+        return Err(invalid_data("update supersedes relation ID is invalid"));
+    }
+    let delta_descriptor = component(80)?;
+    let delta_bytes = production_read_update_component(root, generation_dir, delta_descriptor)?;
+    let (delta_header, delta_edge, delta_semantic_hash) =
+        production_update_decode_delta(&delta_bytes)?;
+    let mut post_graph = prior_graph_leaves.to_vec();
+    post_graph.push(graph_leaf.clone());
+    post_graph.sort();
+    let delta_id = u32::try_from(post_graph.len())
+        .map_err(|_| invalid_data("update graph delta count overflow"))?;
+    let (expected_delta, expected_delta_semantic) =
+        production_update_delta_bytes(delta_id, 0, manifest.successor_node, manifest.old_node)?;
+    if delta_header.delta_id != delta_id
+        || delta_header.base_gen != 0
+        || delta_edge.src_node != manifest.successor_node
+        || delta_edge.dst_node != manifest.old_node
+        || delta_edge.edge_type != EdgeType::SUPERSEDES.to_u32()
+        || delta_edge.confidence_q != 5000
+        || delta_edge.flags != 0
+        || delta_edge.valid_from_bucket != 0
+        || delta_edge.valid_to_bucket != 0
+        || delta_bytes != expected_delta
+        || delta_semantic_hash != expected_delta_semantic
+        || delta_semantic_hash
+            != parse_hash_hex(
+                &delta_descriptor.semantic_hash,
+                "update DELT descriptor semantic hash",
+            )?
+    {
+        return Err(invalid_data("update DELT semantics disagree with lineage"));
+    }
+    let grm1_descriptor = component(90)?;
+    let grm1_bytes = production_read_update_component(root, generation_dir, grm1_descriptor)?;
+    let grm1 = production_update_decode_graph_manifest(&grm1_bytes)?;
+    let node_count = manifest
+        .successor_node
+        .checked_add(1)
+        .ok_or_else(|| invalid_data("update GRM1 node count overflow"))?;
+    let (expected_grm1, expected_grm1_semantic) =
+        production_update_graph_manifest(delta_id, 0, node_count, &post_graph)?;
+    if grm1.base_gen != 0
+        || grm1.node_count != node_count
+        || !grm1.has_edge_type(EdgeType::SUPERSEDES)
+        || grm1.edge_type_mask != 1u64 << (EdgeType::SUPERSEDES.to_u32() - 1)
+        || grm1.delta_count != delta_id
+        || manifest.graph_leaf_count != post_graph.len() as u64
+        || manifest.relation_count != post_graph.len() as u64
+        || grm1_bytes != expected_grm1
+        || expected_grm1_semantic
+            != parse_hash_hex(
+                &grm1_descriptor.semantic_hash,
+                "update GRM1 descriptor semantic hash",
+            )?
+    {
+        return Err(invalid_data(
+            "update GRM1 semantics disagree with cumulative graph lineage",
+        ));
+    }
+    Ok((
+        ProductionAtomStateV1 {
+            atom_id: successor,
+            atom_type,
+            node_num: manifest.successor_node,
+            committed_generation: manifest.generation,
+            body_len: header.body_len,
+            body_crc32: crc32(body),
+            body_hash: production_hash_bytes(body),
+            segment_id: manifest.generation as u32,
+            record_offset: 0,
+            record_extent_len: record.len() as u64,
+            domain_mask: 0xffff,
+            created_at_ns: body_header.created_at_unix_ns,
+            trust_level: 5000,
+            source_id: 0,
+            provenance_hash: successor_provenance_hash,
+            history_event_id: event_id,
+            history_leaf: leaf_bytes.clone(),
+        },
+        ProductionUpdateHistoryV1 {
+            event_id,
+            semantic_hash,
+            leaf_bytes,
+            record_bytes: history_component,
+        },
+        graph_leaf,
+    ))
+}
+
 fn production_validate_baseline(
     root: &Path,
     baseline: &ProductionBaselineManifestV1,
@@ -11742,6 +12909,49 @@ fn production_validate_baseline(
     Ok(())
 }
 
+fn production_baseline_logical_digest(
+    root: &Path,
+    baseline: &ProductionBaselineManifestV1,
+) -> io::Result<[u8; 32]> {
+    let mut anchors = Vec::new();
+    for entry in PRODUCTION_DIRECT_REGISTRY
+        .iter()
+        .filter(|entry| (150..=220).contains(&entry.order))
+    {
+        let descriptor = baseline
+            .components
+            .iter()
+            .find(|descriptor| descriptor.registry_order == entry.order)
+            .ok_or_else(|| invalid_data("production baseline anchor descriptor is absent"))?;
+        match descriptor.mode.as_str() {
+            "baseline_absent" if descriptor.byte_length == 0 => {
+                anchors.push((entry.order, false, Vec::new()));
+            }
+            "baseline_present" => {
+                let relative = descriptor
+                    .target_path
+                    .as_deref()
+                    .ok_or_else(|| invalid_data("production baseline anchor target is absent"))?;
+                let bytes = read_bytes_bounded_under(
+                    root,
+                    &root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)),
+                    PRODUCTION_UPDATE_MAX_COMPONENT_BYTES,
+                )?;
+                if bytes.len() as u64 != descriptor.byte_length
+                    || production_hash_hex(&bytes) != descriptor.byte_hash
+                {
+                    return Err(invalid_data(
+                        "production baseline anchor bytes are unavailable",
+                    ));
+                }
+                anchors.push((entry.order, true, bytes));
+            }
+            _ => return Err(invalid_data("production baseline anchor is invalid")),
+        }
+    }
+    production_logical_digest(0, [0; 32], None, &anchors)
+}
+
 fn production_open_runtime(
     token: &BorrowedOwnerQuiescence<'_, StartupAdmission>,
 ) -> io::Result<ProductionRuntimeStateV1> {
@@ -11815,7 +13025,7 @@ fn production_open_runtime(
 
     let baseline_digest =
         parse_hash_hex(&baseline.legacy_semantic_digest, "baseline logical digest")?;
-    if baseline_digest != production_empty_baseline_digest(root)? {
+    if baseline_digest != production_baseline_logical_digest(root, &baseline)? {
         return Err(invalid_data(
             "production generation-zero logical digest changed",
         ));
@@ -11828,9 +13038,12 @@ fn production_open_runtime(
     let mut atom = None;
     let mut atoms = Vec::new();
     let mut history_leaves = Vec::new();
+    let mut graph_leaves = Vec::new();
+    let mut superseded_by = BTreeMap::new();
     let mut committed_receipts = BTreeMap::new();
     let mut committed_transactions = BTreeMap::new();
     let mut batch_transactions = BTreeMap::new();
+    let mut update_transactions = BTreeMap::new();
     let final_generation = generations.last().map(|(generation, _)| *generation);
     for (generation, generation_dir) in generations {
         let is_head = Some(generation) == final_generation;
@@ -11880,7 +13093,7 @@ fn production_open_runtime(
                 parent.commit_hash,
                 &atom_refs,
                 &history_refs,
-                &production_anchor_leaves(root)?,
+                &production_anchor_leaves_from_descriptors(root, &manifest.components)?,
             )?;
             if hex_lower(&logical_digest) != manifest.logical_state_digest {
                 return Err(invalid_data(
@@ -11956,7 +13169,7 @@ fn production_open_runtime(
                 parent.commit_hash,
                 &atom_refs,
                 &history_refs,
-                &production_anchor_leaves(root)?,
+                &production_anchor_leaves_from_descriptors(root, &manifest.components)?,
             )?;
             if hex_lower(&logical_digest) != manifest.logical_state_digest
                 || manifest.post_atom_count != atoms.len() as u64
@@ -11998,6 +13211,177 @@ fn production_open_runtime(
                 parse_hash_hex(&manifest.base_binding_hash, "batch base binding")?,
                 parse_hash_hex(&manifest.intent_hash, "batch intent hash")?,
                 parse_hash_hex(&manifest.envelope_hash, "batch envelope hash")?,
+            )
+        } else if schema == PRODUCTION_UPDATE_MANIFEST_SCHEMA {
+            let manifest = UpdateGenerationManifestV1::decode(&commit_bytes, "update commit.bin")?;
+            production_validate_update_manifest(
+                root,
+                &generation_dir,
+                &manifest,
+                generation,
+                &parent,
+            )?;
+            if committed_transactions.contains_key(&manifest.transaction_id)
+                || batch_transactions.contains_key(&manifest.transaction_id)
+                || update_transactions.contains_key(&manifest.transaction_id)
+            {
+                return Err(invalid_data(
+                    "production transaction UUID is duplicated across operation kinds",
+                ));
+            }
+            let old_id = parse_hash_hex(&manifest.old_atom_id, "update old AtomId")?;
+            let successor_id =
+                parse_hash_hex(&manifest.successor_atom_id, "update successor AtomId")?;
+            let old_atom = atoms
+                .iter()
+                .find(|candidate| candidate.atom_id == old_id)
+                .cloned()
+                .ok_or_else(|| invalid_data("update old atom is absent from parent state"))?;
+            if old_atom.node_num != manifest.old_node
+                || old_atom.provenance_hash
+                    != parse_hash_hex(&manifest.old_provenance_hash, "update old provenance")?
+                || superseded_by.contains_key(&old_id)
+                || atoms
+                    .iter()
+                    .any(|candidate| candidate.atom_id == successor_id)
+            {
+                return Err(invalid_data(
+                    "update parent lineage or provenance state is invalid",
+                ));
+            }
+            let (successor, history, graph_leaf) =
+                production_update_from_generation(root, &generation_dir, &manifest, &graph_leaves)?;
+            if successor.node_num
+                != atoms
+                    .iter()
+                    .map(|candidate| candidate.node_num)
+                    .max()
+                    .map_or(0, |node| node.saturating_add(1))
+            {
+                return Err(invalid_data("update successor NodeNum is not canonical"));
+            }
+            atoms.push(successor.clone());
+            history_leaves.push(history.leaf_bytes.clone());
+            graph_leaves.push(graph_leaf.clone());
+            superseded_by.insert(old_id, successor_id);
+            let idloc = production_read_update_component(
+                root,
+                &generation_dir,
+                manifest
+                    .components
+                    .iter()
+                    .find(|descriptor| descriptor.registry_order == 30)
+                    .ok_or_else(|| invalid_data("update IDL1 component is absent"))?,
+            )?;
+            let locate = production_read_update_component(
+                root,
+                &generation_dir,
+                manifest
+                    .components
+                    .iter()
+                    .find(|descriptor| descriptor.registry_order == 40)
+                    .ok_or_else(|| invalid_data("update LOC1 component is absent"))?,
+            )?;
+            let current_view = production_read_update_component(
+                root,
+                &generation_dir,
+                manifest
+                    .components
+                    .iter()
+                    .find(|descriptor| descriptor.registry_order == 70)
+                    .ok_or_else(|| invalid_data("update current-view component is absent"))?,
+            )?;
+            if idloc != production_idloc_bytes_many(&atoms)
+                || locate != production_update_locate_bytes(&atoms)
+                || current_view != production_update_current_view_bytes(&superseded_by)?
+            {
+                return Err(invalid_data(
+                    "update membership or current-view projection is invalid",
+                ));
+            }
+            let provenance = production_read_update_component(
+                root,
+                &generation_dir,
+                manifest
+                    .components
+                    .iter()
+                    .find(|descriptor| descriptor.registry_order == 50)
+                    .ok_or_else(|| invalid_data("update provenance component is absent"))?,
+            )?;
+            let atom_refs = atoms.iter().collect::<Vec<_>>();
+            let graph_refs = graph_leaves.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let history_refs = history_leaves.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let logical_digest = production_logical_digest_multi_with_graph(
+                generation,
+                parent.commit_hash,
+                &atom_refs,
+                &graph_refs,
+                &history_refs,
+                &production_update_post_anchors(root, provenance)?,
+            )?;
+            if hex_lower(&logical_digest) != manifest.logical_state_digest
+                || manifest.post_atom_count != atoms.len() as u64
+                || manifest.history_event_count != history_leaves.len() as u64
+                || manifest.graph_leaf_count != graph_leaves.len() as u64
+                || manifest.relation_count != superseded_by.len() as u64
+            {
+                return Err(invalid_data("update logical state does not match manifest"));
+            }
+            if is_head {
+                production_install_update_generation(token, &generation_dir, &manifest)?;
+            }
+            let commit_hash = production_hash_bytes(&commit_bytes);
+            let receipt = UpdateAtomReceiptV1::create(
+                manifest.transaction_id.clone(),
+                manifest.semantic_time_unix_ns,
+                parent.generation,
+                parent.commit_hash,
+                generation,
+                commit_hash,
+                logical_digest,
+                parse_hash_hex(&manifest.base_binding_hash, "update base binding")?,
+                parse_hash_hex(&manifest.envelope_hash, "update envelope hash")?,
+                parse_hash_hex(&manifest.intent_hash, "update intent hash")?,
+                old_id,
+                successor_id,
+                successor.node_num,
+                parse_hash_hex(&manifest.supersedes_relation_id, "update relation ID")?,
+                history.event_id,
+                history.semantic_hash,
+                old_atom.provenance_hash,
+                successor.provenance_hash,
+                parse_hash_hex(&manifest.component_root_hash, "update component root")?,
+            )?;
+            update_transactions.insert(
+                manifest.transaction_id.clone(),
+                ProductionCommittedUpdateV1 {
+                    receipt,
+                    successor_body_hash: parse_hash_hex(
+                        &manifest.successor_body_hash,
+                        "update successor body hash",
+                    )?,
+                    claim_projection_hash: parse_hash_hex(
+                        &manifest.claim_projection_hash,
+                        "update claim projection hash",
+                    )?,
+                    api_evidence_projection_hash: parse_hash_hex(
+                        &manifest.api_evidence_projection_hash,
+                        "update evidence projection hash",
+                    )?,
+                    successor_source_attachment_hash: parse_hash_hex(
+                        &manifest.successor_source_attachment_hash,
+                        "update source attachment hash",
+                    )?,
+                },
+            );
+            atom = Some(successor);
+            (
+                logical_digest,
+                manifest.transaction_id,
+                manifest.semantic_time_unix_ns,
+                parse_hash_hex(&manifest.base_binding_hash, "update base binding")?,
+                parse_hash_hex(&manifest.intent_hash, "update intent hash")?,
+                parse_hash_hex(&manifest.envelope_hash, "update envelope hash")?,
             )
         } else {
             return Err(invalid_data("production commit schema is unsupported"));
@@ -12043,9 +13427,12 @@ fn production_open_runtime(
         atom,
         atoms,
         history_leaves,
+        graph_leaves,
+        superseded_by,
         committed_receipts,
         committed_transactions,
         batch_transactions,
+        update_transactions,
         owner_lifetime_transactions: BTreeMap::new(),
     })
 }
@@ -12910,6 +14297,7 @@ fn production_stage_batch_ingest(
             created_at_ns: envelope.semantic_time_unix_ns,
             trust_level: 5000,
             source_id: 0,
+            provenance_hash: production_hash_bytes(&production_zero_provenance_leaf(&item.atom_id)),
             history_event_id: [0; 32],
             history_leaf: Vec::new(),
         };
@@ -13619,6 +15007,1335 @@ fn production_stage_direct_ingest(
     Ok(published)
 }
 
+#[derive(Debug, Clone)]
+struct ProductionUpdateHistoryV1 {
+    event_id: [u8; 32],
+    semantic_hash: [u8; 32],
+    leaf_bytes: Vec<u8>,
+    record_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProductionUpdateHistoryIdentityV1 {
+    transaction_uuid: [u8; 16],
+    event_id: [u8; 32],
+    semantic_hash: [u8; 32],
+    successor_atom_id: AtomId,
+    old_atom_id: AtomId,
+    relation_id: [u8; 32],
+    intent_hash: [u8; 32],
+    successor_provenance_hash: [u8; 32],
+    old_provenance_hash: [u8; 32],
+}
+
+fn production_update_history_event_id(transaction_uuid: [u8; 16], event_ordinal: u32) -> [u8; 32] {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(PRODUCTION_UPDATE_HISTORY_EVENT_ID.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(&transaction_uuid);
+    preimage.extend_from_slice(&event_ordinal.to_le_bytes());
+    production_hash_bytes(&preimage)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn production_update_history_semantic_hash(
+    transaction_uuid: [u8; 16],
+    event_ordinal: u32,
+    generation: u64,
+    semantic_time_unix_ns: u64,
+    successor: AtomId,
+    old: AtomId,
+    relation_id: [u8; 32],
+    intent_hash: [u8; 32],
+    successor_provenance_hash: [u8; 32],
+    old_provenance_hash: [u8; 32],
+) -> [u8; 32] {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(PRODUCTION_UPDATE_HISTORY_SEMANTIC_ID.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(&1u16.to_le_bytes());
+    preimage.extend_from_slice(&transaction_uuid);
+    preimage.extend_from_slice(&event_ordinal.to_le_bytes());
+    preimage.extend_from_slice(&generation.to_le_bytes());
+    preimage.extend_from_slice(&semantic_time_unix_ns.to_le_bytes());
+    preimage.extend_from_slice(&3u16.to_le_bytes());
+    preimage.push(1);
+    preimage.extend_from_slice(&successor);
+    preimage.extend_from_slice(&old);
+    preimage.extend_from_slice(&relation_id);
+    preimage.extend_from_slice(&intent_hash);
+    preimage.extend_from_slice(&successor_provenance_hash);
+    preimage.extend_from_slice(&old_provenance_hash);
+    production_hash_bytes(&preimage)
+}
+
+#[derive(Debug, Clone)]
+struct ProductionUpdatePlanV1 {
+    generation: u64,
+    old_atom: ProductionAtomStateV1,
+    successor_atom: ProductionAtomStateV1,
+    relation_id: [u8; 32],
+    history: ProductionUpdateHistoryV1,
+    graph_leaf: Vec<u8>,
+    staged: Vec<(UpdateComponentDescriptorV1, Vec<u8>)>,
+    component_root: [u8; 32],
+    logical_digest: [u8; 32],
+    prepare: UpdatePrepareV1,
+    manifest: UpdateGenerationManifestV1,
+}
+
+fn production_update_descriptor_binary(
+    descriptor: &UpdateComponentDescriptorV1,
+) -> io::Result<Vec<u8>> {
+    if descriptor.schema != PRODUCTION_UPDATE_DESCRIPTOR_SCHEMA
+        || descriptor.version != 1
+        || descriptor.ordinal != 0
+        || !matches!(descriptor.mode.as_str(), "append" | "replace" | "create")
+        || descriptor.byte_hash.len() != 64
+        || descriptor.semantic_hash.len() != 64
+        || !descriptor.target_path.is_ascii()
+        || !descriptor.stage_path.is_ascii()
+        || descriptor.target_path.len() > MAX_PATH_BYTES
+        || descriptor.stage_path.len() > MAX_PATH_BYTES
+        || descriptor.target_path.contains('\\')
+        || descriptor.stage_path.contains('\\')
+    {
+        return Err(invalid_data("update component descriptor is noncanonical"));
+    }
+    for path in [&descriptor.target_path, &descriptor.stage_path] {
+        let candidate = Path::new(path);
+        if candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(invalid_data("update component path is noncanonical"));
+        }
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(PRODUCTION_UPDATE_DESCRIPTOR_SCHEMA.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&descriptor.registry_order.to_le_bytes());
+    append_u64_frame(&mut bytes, descriptor.registry_key.as_bytes())?;
+    bytes.extend_from_slice(&descriptor.ordinal.to_le_bytes());
+    bytes.push(match descriptor.mode.as_str() {
+        "append" => 1,
+        "replace" => 2,
+        "create" => 3,
+        _ => unreachable!(),
+    });
+    append_u64_frame(&mut bytes, descriptor.target_path.as_bytes())?;
+    append_u64_frame(&mut bytes, descriptor.stage_path.as_bytes())?;
+    append_u64_frame(&mut bytes, descriptor.content_codec_id.as_bytes())?;
+    bytes.extend_from_slice(&descriptor.byte_length.to_le_bytes());
+    bytes.extend_from_slice(&parse_hash_hex(
+        &descriptor.byte_hash,
+        "update component byte hash",
+    )?);
+    bytes.extend_from_slice(&parse_hash_hex(
+        &descriptor.semantic_hash,
+        "update component semantic hash",
+    )?);
+    let mut hash_preimage = Vec::new();
+    hash_preimage.extend_from_slice(PRODUCTION_UPDATE_DESCRIPTOR_HASH_ID.as_bytes());
+    hash_preimage.push(0);
+    hash_preimage.extend_from_slice(&bytes);
+    if descriptor.descriptor_hash != production_hash_hex(&hash_preimage) {
+        return Err(invalid_data("update component descriptor hash is invalid"));
+    }
+    Ok(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn production_update_descriptor(
+    order: u16,
+    key: &str,
+    mode: &str,
+    target_path: String,
+    codec: &str,
+    bytes: &[u8],
+    semantic_hash: [u8; 32],
+) -> io::Result<UpdateComponentDescriptorV1> {
+    let stage_path = production_stage_path(order, 0);
+    let mut binary = Vec::new();
+    binary.extend_from_slice(PRODUCTION_UPDATE_DESCRIPTOR_SCHEMA.as_bytes());
+    binary.push(0);
+    binary.extend_from_slice(&1u16.to_le_bytes());
+    binary.extend_from_slice(&order.to_le_bytes());
+    append_u64_frame(&mut binary, key.as_bytes())?;
+    binary.extend_from_slice(&0u32.to_le_bytes());
+    binary.push(match mode {
+        "append" => 1,
+        "replace" => 2,
+        "create" => 3,
+        _ => return Err(invalid_data("update descriptor mode is unsupported")),
+    });
+    append_u64_frame(&mut binary, target_path.as_bytes())?;
+    append_u64_frame(&mut binary, stage_path.as_bytes())?;
+    append_u64_frame(&mut binary, codec.as_bytes())?;
+    binary.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    binary.extend_from_slice(production_hash_bytes(bytes).as_slice());
+    binary.extend_from_slice(&semantic_hash);
+    let mut descriptor_preimage = Vec::new();
+    descriptor_preimage.extend_from_slice(PRODUCTION_UPDATE_DESCRIPTOR_HASH_ID.as_bytes());
+    descriptor_preimage.push(0);
+    descriptor_preimage.extend_from_slice(&binary);
+    let descriptor = UpdateComponentDescriptorV1::from_body(UpdateComponentDescriptorBodyV1 {
+        schema: PRODUCTION_UPDATE_DESCRIPTOR_SCHEMA.to_owned(),
+        version: 1,
+        registry_order: order,
+        registry_key: key.to_owned(),
+        ordinal: 0,
+        mode: mode.to_owned(),
+        target_path,
+        stage_path,
+        content_codec_id: codec.to_owned(),
+        byte_length: bytes.len() as u64,
+        byte_hash: production_hash_hex(bytes),
+        semantic_hash: hex_lower(&semantic_hash),
+        descriptor_hash: production_hash_hex(&descriptor_preimage),
+    })?;
+    if production_update_descriptor_binary(&descriptor)? != binary {
+        return Err(invalid_data("update descriptor binary is not stable"));
+    }
+    Ok(descriptor)
+}
+
+fn production_update_component_root(
+    descriptors: &[UpdateComponentDescriptorV1],
+) -> io::Result<[u8; 32]> {
+    if descriptors.len() != PRODUCTION_UPDATE_COMPONENT_COUNT {
+        return Err(invalid_data("update component count is invalid"));
+    }
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(PRODUCTION_UPDATE_COMPONENT_ROOT_ID.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(&1u16.to_le_bytes());
+    preimage.extend_from_slice(&(descriptors.len() as u32).to_le_bytes());
+    let mut previous = None;
+    for descriptor in descriptors {
+        if previous.is_some_and(|order| order >= descriptor.registry_order) {
+            return Err(invalid_data("update component order is noncanonical"));
+        }
+        previous = Some(descriptor.registry_order);
+        production_append_u32_frame(
+            &mut preimage,
+            &production_update_descriptor_binary(descriptor)?,
+        )?;
+    }
+    Ok(production_hash_bytes(&preimage))
+}
+
+fn production_update_history(
+    envelope: &ProductionUpdateEnvelopeV1,
+    generation: u64,
+    successor: AtomId,
+    old: AtomId,
+    relation_id: [u8; 32],
+    successor_provenance_hash: [u8; 32],
+    old_provenance_hash: [u8; 32],
+) -> io::Result<ProductionUpdateHistoryV1> {
+    let event_id = production_update_history_event_id(envelope.transaction_uuid, 0);
+    let semantic_hash = production_update_history_semantic_hash(
+        envelope.transaction_uuid,
+        0,
+        generation,
+        envelope.semantic_time_unix_ns,
+        successor,
+        old,
+        relation_id,
+        envelope.intent_hash,
+        successor_provenance_hash,
+        old_provenance_hash,
+    );
+    let event = UpdateHistoryEventV1::from_body(UpdateHistoryEventBodyV1 {
+        schema: "memoryx.update-history-event.v1".to_owned(),
+        version: 1,
+        event_id: hex_lower(&event_id),
+        transaction_id: envelope.transaction_id.clone(),
+        event_ordinal: 0,
+        generation,
+        semantic_time_unix_ns: envelope.semantic_time_unix_ns,
+        operation: "update".to_owned(),
+        outcome: "committed".to_owned(),
+        atom_ids: vec![hex_lower(&successor), hex_lower(&old)],
+        supersedes_relation_id: hex_lower(&relation_id),
+        intent_hash: hex_lower(&envelope.intent_hash),
+        successor_provenance_hash: hex_lower(&successor_provenance_hash),
+        old_provenance_hash: hex_lower(&old_provenance_hash),
+        history_semantic_hash: hex_lower(&semantic_hash),
+    })?;
+    let record_bytes = event.canonical_bytes()?;
+    let mut leaf_bytes = Vec::new();
+    leaf_bytes.extend_from_slice(PRODUCTION_UPDATE_HISTORY_LEAF_ID.as_bytes());
+    leaf_bytes.push(0);
+    leaf_bytes.extend_from_slice(&event_id);
+    leaf_bytes.extend_from_slice(&semantic_hash);
+    leaf_bytes.extend_from_slice(&successor_provenance_hash);
+    leaf_bytes.extend_from_slice(&old_provenance_hash);
+    Ok(ProductionUpdateHistoryV1 {
+        event_id,
+        semantic_hash,
+        leaf_bytes,
+        record_bytes,
+    })
+}
+
+fn production_update_graph_leaf(successor_node: u64, old_node: u64) -> Vec<u8> {
+    let mut attribute = Vec::new();
+    attribute.extend_from_slice(PRODUCTION_GRAPH_ATTRIBUTE_ID.as_bytes());
+    attribute.push(0);
+    attribute.extend_from_slice(&1u16.to_le_bytes());
+    attribute.extend_from_slice(&0u16.to_le_bytes());
+    attribute.extend_from_slice(&0u32.to_le_bytes());
+    attribute.extend_from_slice(&0u32.to_le_bytes());
+    let attribute_hash = production_hash_bytes(&attribute);
+    let mut leaf = Vec::new();
+    leaf.extend_from_slice(PRODUCTION_GRAPH_LEAF_ID.as_bytes());
+    leaf.push(0);
+    leaf.extend_from_slice(&1u16.to_le_bytes());
+    leaf.extend_from_slice(&successor_node.to_le_bytes());
+    leaf.extend_from_slice(&EdgeType::SUPERSEDES.to_u32().to_le_bytes());
+    leaf.extend_from_slice(&old_node.to_le_bytes());
+    leaf.extend_from_slice(&5000u16.to_le_bytes());
+    leaf.extend_from_slice(&attribute_hash);
+    leaf
+}
+
+fn production_update_delta_bytes(
+    delta_id: u32,
+    base_generation: u32,
+    successor_node: u64,
+    old_node: u64,
+) -> io::Result<(Vec<u8>, [u8; 32])> {
+    let mut header = DeltaHeader::new(delta_id, base_generation, 1);
+    let edge = EdgeListEntry::new(successor_node, old_node, EdgeType::SUPERSEDES, 5000, 0, 0);
+    let mut bytes = vec![0; DeltaHeader::SIZE + EdgeListEntry::SIZE];
+    if !header.write_to_bytes(&mut bytes[..DeltaHeader::SIZE])
+        || !edge.write_to_bytes(&mut bytes[DeltaHeader::SIZE..])
+    {
+        return Err(invalid_data("update DELT encoding failed"));
+    }
+    let mut semantic = Vec::new();
+    semantic.extend_from_slice(PRODUCTION_GRAPH_DELTA_SEMANTIC_ID.as_bytes());
+    semantic.push(0);
+    semantic.extend_from_slice(&1u16.to_le_bytes());
+    semantic.extend_from_slice(&delta_id.to_le_bytes());
+    semantic.extend_from_slice(&base_generation.to_le_bytes());
+    semantic.extend_from_slice(&1u64.to_le_bytes());
+    semantic.extend_from_slice(&successor_node.to_le_bytes());
+    semantic.extend_from_slice(&EdgeType::SUPERSEDES.to_u32().to_le_bytes());
+    semantic.extend_from_slice(&old_node.to_le_bytes());
+    semantic.extend_from_slice(&5000u16.to_le_bytes());
+    semantic.extend_from_slice(&0u16.to_le_bytes());
+    semantic.extend_from_slice(&0u32.to_le_bytes());
+    semantic.extend_from_slice(&0u32.to_le_bytes());
+    Ok((bytes, production_hash_bytes(&semantic)))
+}
+
+fn production_update_graph_manifest(
+    delta_count: u32,
+    base_generation: u32,
+    node_count: u64,
+    graph_leaves: &[Vec<u8>],
+) -> io::Result<(Vec<u8>, [u8; 32])> {
+    if delta_count == 0 || delta_count > 8 || graph_leaves.len() != delta_count as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "graph_compaction_required",
+        ));
+    }
+    let mut manifest = GraphManifest::new(node_count);
+    manifest.base_gen = base_generation;
+    manifest.mark_edge_type(EdgeType::SUPERSEDES);
+    for delta_id in 1..=delta_count {
+        if !manifest.add_delta(delta_id) {
+            return Err(invalid_data("update GRM1 delta list overflow"));
+        }
+    }
+    let mut bytes = vec![0; GraphManifest::SIZE];
+    if !manifest.write_to_bytes(&mut bytes) {
+        return Err(invalid_data("update GRM1 encoding failed"));
+    }
+    let mut graph_root = Vec::new();
+    graph_root.extend_from_slice(b"memoryx.graph-semantic-root.v1\0");
+    graph_root.extend_from_slice(&1u16.to_le_bytes());
+    graph_root.extend_from_slice(&node_count.to_le_bytes());
+    graph_root.extend_from_slice(&(graph_leaves.len() as u64).to_le_bytes());
+    for leaf in graph_leaves {
+        production_append_u32_frame(&mut graph_root, leaf)?;
+    }
+    let graph_root = production_hash_bytes(&graph_root);
+    let mut semantic = Vec::new();
+    semantic.extend_from_slice(PRODUCTION_GRAPH_MANIFEST_SEMANTIC_ID.as_bytes());
+    semantic.push(0);
+    semantic.extend_from_slice(&1u16.to_le_bytes());
+    semantic.extend_from_slice(&base_generation.to_le_bytes());
+    semantic.extend_from_slice(&node_count.to_le_bytes());
+    semantic.extend_from_slice(&manifest.edge_type_mask.to_le_bytes());
+    semantic.extend_from_slice(&delta_count.to_le_bytes());
+    for delta_id in 1..=delta_count {
+        semantic.extend_from_slice(&delta_id.to_le_bytes());
+    }
+    semantic.extend_from_slice(&graph_root);
+    Ok((bytes, production_hash_bytes(&semantic)))
+}
+
+fn production_update_locate_bytes(atoms: &[ProductionAtomStateV1]) -> Vec<u8> {
+    let mut ordered = atoms.to_vec();
+    ordered.sort_by_key(|atom| atom.node_num);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"LOC1");
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&(ordered.len() as u32).to_le_bytes());
+    for atom in ordered {
+        bytes.extend_from_slice(&atom.node_num.to_le_bytes());
+        bytes.extend_from_slice(&atom.atom_id);
+    }
+    bytes
+}
+
+fn production_update_current_view_bytes(
+    superseded_by: &BTreeMap<AtomId, AtomId>,
+) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"CVW1");
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(superseded_by.len())
+            .map_err(|_| invalid_data("update current-view count overflow"))?
+            .to_le_bytes(),
+    );
+    for (old, successor) in superseded_by {
+        bytes.extend_from_slice(successor);
+        bytes.extend_from_slice(old);
+    }
+    Ok(bytes)
+}
+
+fn production_update_spv1(
+    successor: AtomId,
+    successor_provenance_hash: [u8; 32],
+    source_projection_hash: [u8; 32],
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(102);
+    bytes.extend_from_slice(b"SPV1");
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&successor);
+    bytes.extend_from_slice(&successor_provenance_hash);
+    bytes.extend_from_slice(&source_projection_hash);
+    bytes
+}
+
+fn production_update_semantic(domain: &str, bytes: &[u8]) -> [u8; 32] {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(domain.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(bytes);
+    production_hash_bytes(&preimage)
+}
+
+fn production_update_decode_spv1(bytes: &[u8]) -> io::Result<(AtomId, [u8; 32], [u8; 32])> {
+    if bytes.len() != 102 || bytes[..4] != *b"SPV1" || bytes[4..6] != 1u16.to_le_bytes() {
+        return Err(invalid_data("update SPV1 component is noncanonical"));
+    }
+    Ok((
+        bytes[6..38]
+            .try_into()
+            .map_err(|_| invalid_data("update SPV1 successor identity is invalid"))?,
+        bytes[38..70]
+            .try_into()
+            .map_err(|_| invalid_data("update SPV1 provenance identity is invalid"))?,
+        bytes[70..102]
+            .try_into()
+            .map_err(|_| invalid_data("update SPV1 source identity is invalid"))?,
+    ))
+}
+
+fn production_update_decode_history(
+    bytes: &[u8],
+) -> io::Result<(UpdateHistoryEventV1, ProductionUpdateHistoryIdentityV1)> {
+    let record = UpdateHistoryEventV1::decode(bytes, "update history event")?;
+    if record.schema != "memoryx.update-history-event.v1"
+        || record.version != 1
+        || record.event_ordinal != 0
+        || record.operation != "update"
+        || record.outcome != "committed"
+        || record.atom_ids.len() != 2
+    {
+        return Err(invalid_data("update history event is noncanonical"));
+    }
+    let transaction_uuid = validate_production_uuid(&record.transaction_id)?;
+    let event_id = parse_hash_hex(&record.event_id, "update history event ID")?;
+    let semantic_hash = parse_hash_hex(
+        &record.history_semantic_hash,
+        "update history semantic hash",
+    )?;
+    let successor_atom_id = parse_hash_hex(&record.atom_ids[0], "update history successor AtomId")?;
+    let old_atom_id = parse_hash_hex(&record.atom_ids[1], "update history old AtomId")?;
+    let relation_id = parse_hash_hex(
+        &record.supersedes_relation_id,
+        "update history supersedes relation ID",
+    )?;
+    let intent_hash = parse_hash_hex(&record.intent_hash, "update history intent hash")?;
+    let successor_provenance_hash = parse_hash_hex(
+        &record.successor_provenance_hash,
+        "update history successor provenance hash",
+    )?;
+    let old_provenance_hash = parse_hash_hex(
+        &record.old_provenance_hash,
+        "update history old provenance hash",
+    )?;
+    let expected_event_id =
+        production_update_history_event_id(transaction_uuid, record.event_ordinal);
+    let expected_semantic_hash = production_update_history_semantic_hash(
+        transaction_uuid,
+        record.event_ordinal,
+        record.generation,
+        record.semantic_time_unix_ns,
+        successor_atom_id,
+        old_atom_id,
+        relation_id,
+        intent_hash,
+        successor_provenance_hash,
+        old_provenance_hash,
+    );
+    if event_id != expected_event_id || semantic_hash != expected_semantic_hash {
+        return Err(invalid_data(
+            "update history event identity or semantic hash is invalid",
+        ));
+    }
+    Ok((
+        record,
+        ProductionUpdateHistoryIdentityV1 {
+            transaction_uuid,
+            event_id,
+            semantic_hash,
+            successor_atom_id,
+            old_atom_id,
+            relation_id,
+            intent_hash,
+            successor_provenance_hash,
+            old_provenance_hash,
+        },
+    ))
+}
+
+fn production_update_decode_delta(
+    bytes: &[u8],
+) -> io::Result<(DeltaHeader, EdgeListEntry, [u8; 32])> {
+    if bytes.len() != DeltaHeader::SIZE + EdgeListEntry::SIZE {
+        return Err(invalid_data("update DELT length is noncanonical"));
+    }
+    let header = DeltaHeader::from_bytes(&bytes[..DeltaHeader::SIZE])
+        .ok_or_else(|| invalid_data("update DELT header or CRC is invalid"))?;
+    let edge = EdgeListEntry::from_bytes(&bytes[DeltaHeader::SIZE..])
+        .ok_or_else(|| invalid_data("update DELT edge is invalid"))?;
+    if header.flags != 0 || header.edge_count != 1 || header.reserved1 != 0 || header.reserved2 != 0
+    {
+        return Err(invalid_data("update DELT header fields are noncanonical"));
+    }
+    let mut semantic = Vec::new();
+    semantic.extend_from_slice(PRODUCTION_GRAPH_DELTA_SEMANTIC_ID.as_bytes());
+    semantic.push(0);
+    semantic.extend_from_slice(&1u16.to_le_bytes());
+    semantic.extend_from_slice(&header.delta_id.to_le_bytes());
+    semantic.extend_from_slice(&header.base_gen.to_le_bytes());
+    semantic.extend_from_slice(&1u64.to_le_bytes());
+    semantic.extend_from_slice(&edge.src_node.to_le_bytes());
+    semantic.extend_from_slice(&edge.edge_type.to_le_bytes());
+    semantic.extend_from_slice(&edge.dst_node.to_le_bytes());
+    semantic.extend_from_slice(&edge.confidence_q.to_le_bytes());
+    semantic.extend_from_slice(&edge.flags.to_le_bytes());
+    semantic.extend_from_slice(&edge.valid_from_bucket.to_le_bytes());
+    semantic.extend_from_slice(&edge.valid_to_bucket.to_le_bytes());
+    Ok((header, edge, production_hash_bytes(&semantic)))
+}
+
+fn production_update_decode_graph_manifest(bytes: &[u8]) -> io::Result<GraphManifest> {
+    if bytes.len() != GraphManifest::SIZE {
+        return Err(invalid_data("update GRM1 length is noncanonical"));
+    }
+    let manifest = GraphManifest::from_bytes(bytes)
+        .ok_or_else(|| invalid_data("update GRM1 header is invalid"))?;
+    let delta_count = manifest.delta_count as usize;
+    if manifest.flags != 0
+        || manifest.reserved1 != 0
+        || delta_count == 0
+        || delta_count > 8
+        || manifest.delta_ids[..delta_count]
+            .iter()
+            .enumerate()
+            .any(|(index, delta_id)| *delta_id != index as u32 + 1)
+        || manifest.delta_ids[delta_count..]
+            .iter()
+            .any(|delta_id| *delta_id != 0)
+    {
+        return Err(invalid_data("update GRM1 fields are noncanonical"));
+    }
+    Ok(manifest)
+}
+
+fn production_update_component_semantic_hash(
+    descriptor: &UpdateComponentDescriptorV1,
+    bytes: &[u8],
+) -> io::Result<Option<[u8; 32]>> {
+    let semantic = match descriptor.registry_order {
+        20 => production_hash_bytes(bytes),
+        30 => production_update_semantic("memoryx.idl1-membership-semantic.v1", bytes),
+        40 => production_update_semantic("memoryx.loc1-membership-semantic.v1", bytes),
+        50 => {
+            production_update_decode_spv1(bytes)?;
+            production_update_semantic(PRODUCTION_UPDATE_SPV1_SEMANTIC_ID, bytes)
+        }
+        60 => {
+            let (_, history_identity) = production_update_decode_history(bytes)?;
+            history_identity.semantic_hash
+        }
+        70 => production_update_semantic("memoryx.current-view-semantic.v1", bytes),
+        80 => production_update_decode_delta(bytes)?.2,
+        90 => {
+            production_update_decode_graph_manifest(bytes)?;
+            return Ok(None);
+        }
+        _ => {
+            return Err(invalid_data(
+                "update component semantic class is unsupported",
+            ));
+        }
+    };
+    Ok(Some(semantic))
+}
+
+fn production_update_relation_journal_preflight(root: &Path, old: AtomId) -> io::Result<()> {
+    let old = hex_lower(&old);
+    for (relative, expected_kind) in [
+        ("meta/relations.jsonl", "current"),
+        ("meta/relation_tombstone_resolutions.jsonl", "historical"),
+    ] {
+        let path = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let bytes = match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Ok(metadata) if metadata.is_file() && !is_link_or_reparse(&path, &metadata) => {
+                read_bytes_bounded_under(root, &path, PRODUCTION_UPDATE_MAX_COMPONENT_BYTES)?
+            }
+            Ok(_) => return Err(invalid_data("relation journal is not a regular file")),
+            Err(error) => return Err(error),
+        };
+        for line in bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            let record = UpdateRelationJournalV1::decode(line, "relation journal")?;
+            if record.schema != "memoryx.update-relation-journal.v1"
+                || record.version != 1
+                || record.journal_kind != expected_kind
+                || record.predicate_id != EdgeType::SUPERSEDES.to_u32()
+                || (record.current != (expected_kind == "current"))
+                || (record.historical != (expected_kind == "historical"))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "relation journal version is not admitted by P1",
+                ));
+            }
+            for (value, label) in [
+                (&record.relation_atom_id, "relation_atom_id"),
+                (&record.subject_atom_id, "subject_atom_id"),
+                (&record.object_atom_id, "object_atom_id"),
+            ] {
+                parse_hash_hex(value, label)?;
+            }
+            if record.relation_atom_id == old
+                || record.subject_atom_id == old
+                || record.object_atom_id == old
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "relation_backed_atom_requires_composite_operation",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn production_update_post_anchors(
+    root: &Path,
+    provenance_bytes: Vec<u8>,
+) -> io::Result<Vec<(u16, bool, Vec<u8>)>> {
+    let mut anchors = production_anchor_leaves(root)?;
+    let atom_sources = anchors
+        .iter_mut()
+        .find(|(order, _, _)| *order == 180)
+        .ok_or_else(|| invalid_data("atom-source anchor is absent from registry"))?;
+    atom_sources.1 = true;
+    atom_sources.2 = provenance_bytes;
+    Ok(anchors)
+}
+
+fn production_update_resource_preflight(
+    request: &UpdateAtomRequestV1,
+    staged: &[(UpdateComponentDescriptorV1, Vec<u8>)],
+    prepare_bytes: &[u8],
+    manifest_bytes: &[u8],
+) -> io::Result<()> {
+    if staged.len() != PRODUCTION_UPDATE_COMPONENT_COUNT {
+        return Err(invalid_data("resource_limit_exceeded"));
+    }
+    let mut control_lengths = vec![prepare_bytes.len() as u64, manifest_bytes.len() as u64];
+    for (descriptor, _) in staged {
+        control_lengths.push(descriptor.canonical_bytes()?.len() as u64);
+    }
+    if control_lengths
+        .iter()
+        .any(|length| *length > PRODUCTION_UPDATE_MAX_CONTROL_BYTES)
+    {
+        return Err(invalid_data("resource_limit_exceeded"));
+    }
+    let controls = control_lengths
+        .iter()
+        .try_fold(0u64, |total, length| total.checked_add(*length));
+    let controls = controls.ok_or_else(|| invalid_data("resource_limit_exceeded"))?;
+    let projection_bytes = (request.claim_projection.len() as u64)
+        .checked_add(request.api_evidence_projection.len() as u64)
+        .and_then(|value| {
+            value.checked_add(request.successor_source_attachment_projection.len() as u64)
+        })
+        .ok_or_else(|| invalid_data("resource_limit_exceeded"))?;
+    let descriptor_bytes = staged.iter().try_fold(0u64, |total, (descriptor, _)| {
+        total.checked_add(
+            production_update_descriptor_binary(descriptor)
+                .map(|bytes| bytes.len() as u64)
+                .unwrap_or(u64::MAX),
+        )
+    });
+    let descriptor_bytes =
+        descriptor_bytes.ok_or_else(|| invalid_data("resource_limit_exceeded"))?;
+    let component_bytes = staged.iter().try_fold(0u64, |total, (_, bytes)| {
+        total.checked_add(bytes.len() as u64)
+    });
+    let component_bytes = component_bytes.ok_or_else(|| invalid_data("resource_limit_exceeded"))?;
+    let path_bytes = staged.iter().try_fold(0usize, |total, (descriptor, _)| {
+        total
+            .checked_add(descriptor.target_path.len())
+            .and_then(|value| value.checked_add(descriptor.stage_path.len()))
+    });
+    let path_bytes = path_bytes.ok_or_else(|| invalid_data("resource_limit_exceeded"))?;
+    let total = controls
+        .checked_add(request.successor_body.len() as u64)
+        .and_then(|value| value.checked_add(projection_bytes))
+        .and_then(|value| value.checked_add(descriptor_bytes))
+        .and_then(|value| value.checked_add(path_bytes as u64))
+        .and_then(|value| value.checked_add(0))
+        .and_then(|value| value.checked_add(component_bytes))
+        .and_then(|value| value.checked_add(PRODUCTION_UPDATE_MAX_COMPONENT_BYTES))
+        .ok_or_else(|| invalid_data("resource_limit_exceeded"))?;
+    if controls > PRODUCTION_UPDATE_MAX_AGGREGATE_CONTROL_BYTES
+        || request.successor_body.len() as u64 > PRODUCTION_MAX_BODY_BYTES
+        || projection_bytes > PRODUCTION_UPDATE_MAX_PROJECTION_BYTES
+        || descriptor_bytes > PRODUCTION_UPDATE_MAX_DESCRIPTOR_BYTES
+        || staged.len() != PRODUCTION_UPDATE_COMPONENT_COUNT
+        || PRODUCTION_UPDATE_MAX_PATH_COUNT != 10
+        || path_bytes > PRODUCTION_UPDATE_MAX_TOTAL_PATH_BYTES
+        || component_bytes > PRODUCTION_UPDATE_MAX_COMPONENT_BYTES
+        || total > PRODUCTION_UPDATE_MAX_TOTAL_BYTES
+    {
+        return Err(invalid_data("resource_limit_exceeded"));
+    }
+    Ok(())
+}
+
+fn production_plan_update(
+    root: &Path,
+    state: &ProductionRuntimeStateV1,
+    request: &UpdateAtomRequestV1,
+    intent: &ProductionUpdateIntentV1,
+    envelope: &ProductionUpdateEnvelopeV1,
+) -> io::Result<ProductionUpdatePlanV1> {
+    let generation = state
+        .head
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| invalid_data("production generation overflow"))?;
+    if generation > PRODUCTION_MAX_GENERATIONS {
+        return Err(invalid_data("resource_limit_exceeded"));
+    }
+    let old_atom = state
+        .atoms
+        .iter()
+        .find(|atom| atom.atom_id == request.old_atom_id)
+        .cloned()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "old_atom_missing"))?;
+    if state.superseded_by.contains_key(&request.old_atom_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "already_superseded",
+        ));
+    }
+    if state
+        .atoms
+        .iter()
+        .any(|atom| atom.atom_id == request.successor_atom_id)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "successor_collision",
+        ));
+    }
+    production_update_relation_journal_preflight(root, request.old_atom_id)?;
+    let successor_node = state
+        .atoms
+        .iter()
+        .map(|atom| atom.node_num)
+        .max()
+        .map_or(0, |node| node.saturating_add(1));
+    if successor_node == u64::MAX {
+        return Err(invalid_data("resource_limit_exceeded"));
+    }
+    let successor_provenance_hash = production_sha256(&request.successor_provenance);
+    if request.successor_provenance.is_empty()
+        || successor_provenance_hash == old_atom.provenance_hash
+    {
+        return Err(invalid_data("provenance_projection_conflict"));
+    }
+    let record = production_record_bytes(
+        request.successor_atom_id,
+        &request.successor_body,
+        generation as u32,
+    )?;
+    let body_header = AtomBodyHeader::from_bytes(&request.successor_body)
+        .map_err(|error| invalid_data(&format!("noncanonical_successor: {error}")))?;
+    let history = production_update_history(
+        envelope,
+        generation,
+        request.successor_atom_id,
+        request.old_atom_id,
+        intent.supersedes_relation_id,
+        successor_provenance_hash,
+        old_atom.provenance_hash,
+    )?;
+    let successor_atom = ProductionAtomStateV1 {
+        atom_id: request.successor_atom_id,
+        atom_type: request.successor_atom_type,
+        node_num: successor_node,
+        committed_generation: generation,
+        body_len: request.successor_body.len() as u64,
+        body_crc32: crc32(&request.successor_body),
+        body_hash: production_hash_bytes(&request.successor_body),
+        segment_id: generation as u32,
+        record_offset: 0,
+        record_extent_len: record.len() as u64,
+        domain_mask: 0xffff,
+        created_at_ns: body_header.created_at_unix_ns,
+        trust_level: 5000,
+        source_id: 0,
+        provenance_hash: successor_provenance_hash,
+        history_event_id: history.event_id,
+        history_leaf: history.leaf_bytes.clone(),
+    };
+    let mut post_atoms = state.atoms.clone();
+    post_atoms.push(successor_atom.clone());
+    let idloc = production_idloc_bytes_many(&post_atoms);
+    let locate = production_update_locate_bytes(&post_atoms);
+    let spv1 = production_update_spv1(
+        request.successor_atom_id,
+        successor_provenance_hash,
+        intent.successor_source_attachment_hash,
+    );
+    if spv1.len() != 102 {
+        return Err(invalid_data("provenance_projection_conflict"));
+    }
+    let prior_provenance = match fs::symlink_metadata(root.join("meta/atom_sources.jsonl")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Ok(metadata) if metadata.is_file() => read_bytes_bounded_under(
+            root,
+            &root.join("meta/atom_sources.jsonl"),
+            PRODUCTION_UPDATE_MAX_COMPONENT_BYTES,
+        )?,
+        Ok(_) => return Err(invalid_data("successor provenance target is not a file")),
+        Err(error) => return Err(error),
+    };
+    if prior_provenance.len() % 102 != 0 {
+        return Err(invalid_data(
+            "existing successor provenance is noncanonical",
+        ));
+    }
+    for prior in prior_provenance.as_chunks::<102>().0 {
+        production_update_decode_spv1(prior)?;
+    }
+    let mut post_provenance = prior_provenance;
+    post_provenance.extend_from_slice(&spv1);
+    let mut post_superseded = state.superseded_by.clone();
+    if post_superseded
+        .insert(request.old_atom_id, request.successor_atom_id)
+        .is_some()
+    {
+        return Err(invalid_data("ambiguous_supersession_state"));
+    }
+    let current_view = production_update_current_view_bytes(&post_superseded)?;
+    let graph_leaf = production_update_graph_leaf(successor_node, old_atom.node_num);
+    let mut post_graph = state.graph_leaves.clone();
+    post_graph.push(graph_leaf.clone());
+    post_graph.sort();
+    let delta_id =
+        u32::try_from(post_graph.len()).map_err(|_| invalid_data("graph_compaction_required"))?;
+    let (delta, delta_semantic) =
+        production_update_delta_bytes(delta_id, 0, successor_node, old_atom.node_num)?;
+    let (grm1, grm1_semantic) =
+        production_update_graph_manifest(delta_id, 0, successor_node + 1, &post_graph)?;
+    let mut staged = vec![
+        (
+            production_update_descriptor(
+                20,
+                "cas.successor-append.v1",
+                "append",
+                format!("cas/segments/seg_{generation:08}.skf1"),
+                "memoryx.skf1.current",
+                &record,
+                production_hash_bytes(&record),
+            )?,
+            record,
+        ),
+        (
+            production_update_descriptor(
+                30,
+                "index.idloc-replace.v1",
+                "replace",
+                "index/idloc.mmap".to_owned(),
+                "memoryx.idl1.current",
+                &idloc,
+                production_update_semantic("memoryx.idl1-membership-semantic.v1", &idloc),
+            )?,
+            idloc,
+        ),
+        (
+            production_update_descriptor(
+                40,
+                "index.locate-replace.v1",
+                "replace",
+                "index/locate.bin".to_owned(),
+                "memoryx.loc1.current",
+                &locate,
+                production_update_semantic("memoryx.loc1-membership-semantic.v1", &locate),
+            )?,
+            locate,
+        ),
+        (
+            production_update_descriptor(
+                50,
+                "meta.successor-provenance.v1",
+                "replace",
+                "meta/atom_sources.jsonl".to_owned(),
+                "memoryx.atom-source-links.v1",
+                &spv1,
+                production_update_semantic(PRODUCTION_UPDATE_SPV1_SEMANTIC_ID, &spv1),
+            )?,
+            spv1,
+        ),
+        (
+            production_update_descriptor(
+                60,
+                "meta.update-history-once.v1",
+                "replace",
+                "meta/history.log".to_owned(),
+                "memoryx.history.transaction-once.v1",
+                &history.record_bytes,
+                history.semantic_hash,
+            )?,
+            history.record_bytes.clone(),
+        ),
+        (
+            production_update_descriptor(
+                70,
+                "meta.current-view.v1",
+                "replace",
+                "meta/current_versions.jsonl".to_owned(),
+                "memoryx.current-view.v1",
+                &current_view,
+                production_update_semantic("memoryx.current-view-semantic.v1", &current_view),
+            )?,
+            current_view,
+        ),
+        (
+            production_update_descriptor(
+                80,
+                "graph.delta-supersedes.v1",
+                "create",
+                format!("index/graph/deltas/d_{delta_id:08}.edges"),
+                "memoryx.graph.delta.v0101",
+                &delta,
+                delta_semantic,
+            )?,
+            delta,
+        ),
+        (
+            production_update_descriptor(
+                90,
+                "graph.manifest-grm1.v0101",
+                "replace",
+                "index/graph/manifest.dat".to_owned(),
+                "memoryx.graph-manifest.grm1-v0101",
+                &grm1,
+                grm1_semantic,
+            )?,
+            grm1,
+        ),
+    ];
+    staged.sort_by_key(|(descriptor, _)| descriptor.registry_order);
+    let descriptors = staged
+        .iter()
+        .map(|(descriptor, _)| descriptor.clone())
+        .collect::<Vec<_>>();
+    let component_root = production_update_component_root(&descriptors)?;
+    let mut post_history = state.history_leaves.clone();
+    post_history.push(history.leaf_bytes.clone());
+    let atom_refs = post_atoms.iter().collect::<Vec<_>>();
+    let graph_refs = post_graph.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let history_refs = post_history.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let logical_digest = production_logical_digest_multi_with_graph(
+        generation,
+        state.head.commit_hash,
+        &atom_refs,
+        &graph_refs,
+        &history_refs,
+        &production_update_post_anchors(root, post_provenance)?,
+    )?;
+    let prepare = UpdatePrepareV1::from_body(UpdatePrepareBodyV1 {
+        schema: PRODUCTION_UPDATE_PREPARE_SCHEMA.to_owned(),
+        version: 1,
+        format_version: 2,
+        generation,
+        parent_commit_hash: hex_lower(&state.head.commit_hash),
+        transaction_id: envelope.transaction_id.clone(),
+        semantic_time_unix_ns: envelope.semantic_time_unix_ns,
+        base_binding_hash: hex_lower(&envelope.base_binding_hash),
+        envelope_hash: hex_lower(&envelope.hash),
+        operation: "update_atom".to_owned(),
+        intent_hash: hex_lower(&intent.hash),
+        operation_registry_id: PRODUCTION_UPDATE_OPERATION_REGISTRY_ID.to_owned(),
+        limits_id: PRODUCTION_UPDATE_LIMITS_ID.to_owned(),
+        old_atom_id: hex_lower(&intent.old_atom_id),
+        successor_atom_id: hex_lower(&intent.successor_atom_id),
+        successor_body_hash: hex_lower(&intent.successor_body_hash),
+        claim_projection_hash: hex_lower(&intent.claim_projection_hash),
+        api_evidence_projection_hash: hex_lower(&intent.api_evidence_projection_hash),
+        successor_atom_type: request.successor_atom_type.to_u32(),
+        old_node: old_atom.node_num,
+        successor_node,
+        supersedes_relation_id: hex_lower(&intent.supersedes_relation_id),
+        old_provenance_hash: hex_lower(&old_atom.provenance_hash),
+        successor_provenance_hash: hex_lower(&successor_provenance_hash),
+        successor_source_attachment_hash: hex_lower(&intent.successor_source_attachment_hash),
+        history_event_id: hex_lower(&history.event_id),
+        history_semantic_hash: hex_lower(&history.semantic_hash),
+        component_root_hash: hex_lower(&component_root),
+        logical_state_digest: hex_lower(&logical_digest),
+        components: descriptors.clone(),
+    })?;
+    let prepare_bytes = prepare.canonical_bytes()?;
+    let manifest = UpdateGenerationManifestV1::from_body(UpdateGenerationManifestBodyV1 {
+        schema: PRODUCTION_UPDATE_MANIFEST_SCHEMA.to_owned(),
+        version: 1,
+        format_version: 2,
+        generation,
+        parent_commit_hash: hex_lower(&state.head.commit_hash),
+        prepare_hash: production_hash_hex(&prepare_bytes),
+        transaction_id: envelope.transaction_id.clone(),
+        semantic_time_unix_ns: envelope.semantic_time_unix_ns,
+        base_binding_hash: hex_lower(&envelope.base_binding_hash),
+        envelope_hash: hex_lower(&envelope.hash),
+        operation: "update_atom".to_owned(),
+        intent_hash: hex_lower(&intent.hash),
+        operation_registry_id: PRODUCTION_UPDATE_OPERATION_REGISTRY_ID.to_owned(),
+        limits_id: PRODUCTION_UPDATE_LIMITS_ID.to_owned(),
+        old_atom_id: hex_lower(&intent.old_atom_id),
+        successor_atom_id: hex_lower(&intent.successor_atom_id),
+        successor_body_hash: hex_lower(&intent.successor_body_hash),
+        claim_projection_hash: hex_lower(&intent.claim_projection_hash),
+        api_evidence_projection_hash: hex_lower(&intent.api_evidence_projection_hash),
+        successor_atom_type: request.successor_atom_type.to_u32(),
+        old_node: old_atom.node_num,
+        successor_node,
+        supersedes_relation_id: hex_lower(&intent.supersedes_relation_id),
+        old_provenance_hash: hex_lower(&old_atom.provenance_hash),
+        successor_provenance_hash: hex_lower(&successor_provenance_hash),
+        successor_source_attachment_hash: hex_lower(&intent.successor_source_attachment_hash),
+        history_event_id: hex_lower(&history.event_id),
+        history_semantic_hash: hex_lower(&history.semantic_hash),
+        history_event_count: state.history_leaves.len() as u64 + 1,
+        relation_count: state.graph_leaves.len() as u64 + 1,
+        post_atom_count: post_atoms.len() as u64,
+        graph_leaf_count: post_graph.len() as u64,
+        component_root_hash: hex_lower(&component_root),
+        logical_state_digest: hex_lower(&logical_digest),
+        components: descriptors,
+    })?;
+    production_update_resource_preflight(
+        request,
+        &staged,
+        &prepare_bytes,
+        &manifest.canonical_bytes()?,
+    )?;
+    Ok(ProductionUpdatePlanV1 {
+        generation,
+        old_atom,
+        successor_atom,
+        relation_id: intent.supersedes_relation_id,
+        history,
+        graph_leaf,
+        staged,
+        component_root,
+        logical_digest,
+        prepare,
+        manifest,
+    })
+}
+
+fn production_install_create(root: &Path, relative: &str, bytes: &[u8]) -> io::Result<()> {
+    let target = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+    canonical_relative_path(root, &target)?;
+    if path_entry_exists(&target)? {
+        let metadata = fs::symlink_metadata(&target)?;
+        if is_link_or_reparse(&target, &metadata) || !metadata.is_file() {
+            return Err(invalid_data("update create target is not a regular file"));
+        }
+        let existing =
+            read_bytes_bounded_under(root, &target, PRODUCTION_UPDATE_MAX_COMPONENT_BYTES)?;
+        if existing == bytes {
+            return Ok(());
+        }
+        return Err(invalid_data(
+            "update create target conflicts with committed bytes",
+        ));
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| invalid_data("update create target has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let guard = AncestorGuard::acquire(root, parent)?;
+    guard.verify()?;
+    production_write_new(&target, bytes)?;
+    sync_directory(parent)?;
+    guard.verify()
+}
+
+fn production_install_update_spv1(root: &Path, relative: &str, bytes: &[u8]) -> io::Result<()> {
+    production_update_decode_spv1(bytes)?;
+    let target = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let existing = match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Ok(metadata) if metadata.is_file() && !is_link_or_reparse(&target, &metadata) => {
+            read_bytes_bounded_under(root, &target, PRODUCTION_UPDATE_MAX_COMPONENT_BYTES)?
+        }
+        Ok(_) => return Err(invalid_data("update SPV1 target is not a regular file")),
+        Err(error) => return Err(error),
+    };
+    if existing.len() % 102 != 0 {
+        return Err(invalid_data("update SPV1 target is noncanonical"));
+    }
+    for prior in existing.as_chunks::<102>().0 {
+        production_update_decode_spv1(prior)?;
+    }
+    if existing.ends_with(bytes) {
+        return Ok(());
+    }
+    if existing
+        .as_chunks::<102>()
+        .0
+        .iter()
+        .any(|prior| prior.as_slice() == bytes)
+    {
+        return Err(invalid_data(
+            "update SPV1 record is duplicated out of order",
+        ));
+    }
+    let mut post = existing;
+    post.extend_from_slice(bytes);
+    production_install_replacement(root, relative, &post)
+}
+
+fn production_install_update_history(root: &Path, relative: &str, bytes: &[u8]) -> io::Result<()> {
+    production_update_decode_history(bytes)?;
+    let target = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let existing = match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Ok(metadata) if metadata.is_file() && !is_link_or_reparse(&target, &metadata) => {
+            read_bytes_bounded_under(root, &target, PRODUCTION_UPDATE_MAX_AGGREGATE_CONTROL_BYTES)?
+        }
+        Ok(_) => return Err(invalid_data("update history target is not a regular file")),
+        Err(error) => return Err(error),
+    };
+    if !existing.is_empty() && !existing.ends_with(b"\n") {
+        return Err(invalid_data("update history target is noncanonical"));
+    }
+    if existing
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .any(|line| line == bytes)
+    {
+        return if existing.ends_with(&[bytes, b"\n"].concat()) {
+            Ok(())
+        } else {
+            Err(invalid_data(
+                "update history event is duplicated out of order",
+            ))
+        };
+    }
+    let mut post = existing;
+    post.extend_from_slice(bytes);
+    post.push(b'\n');
+    if post.len() as u64 > PRODUCTION_UPDATE_MAX_AGGREGATE_CONTROL_BYTES {
+        return Err(invalid_data("resource_limit_exceeded"));
+    }
+    production_install_replacement(root, relative, &post)
+}
+
+fn production_read_update_component(
+    root: &Path,
+    generation_dir: &Path,
+    descriptor: &UpdateComponentDescriptorV1,
+) -> io::Result<Vec<u8>> {
+    production_update_descriptor_binary(descriptor)?;
+    let bytes = read_bytes_bounded_under(
+        root,
+        &generation_dir.join(
+            descriptor
+                .stage_path
+                .replace('/', std::path::MAIN_SEPARATOR_STR),
+        ),
+        PRODUCTION_UPDATE_MAX_COMPONENT_BYTES,
+    )?;
+    if bytes.len() as u64 != descriptor.byte_length
+        || production_hash_hex(&bytes) != descriptor.byte_hash
+    {
+        return Err(invalid_data("update staged component hash is invalid"));
+    }
+    if let Some(semantic_hash) = production_update_component_semantic_hash(descriptor, &bytes)?
+        && semantic_hash
+            != parse_hash_hex(&descriptor.semantic_hash, "update component semantic hash")?
+    {
+        return Err(invalid_data(
+            "update staged component semantic hash is invalid",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn production_install_update_generation<Phase>(
+    token: &BorrowedOwnerQuiescence<'_, Phase>,
+    generation_dir: &Path,
+    manifest: &UpdateGenerationManifestV1,
+) -> io::Result<()> {
+    token.verify()?;
+    for descriptor in &manifest.components {
+        let bytes =
+            production_read_update_component(token.canonical_root(), generation_dir, descriptor)?;
+        match descriptor.registry_order {
+            20 => {
+                production_install_create(token.canonical_root(), &descriptor.target_path, &bytes)?
+            }
+            30 | 40 | 70 => production_install_replacement(
+                token.canonical_root(),
+                &descriptor.target_path,
+                &bytes,
+            )?,
+            50 => production_install_update_spv1(
+                token.canonical_root(),
+                &descriptor.target_path,
+                &bytes,
+            )?,
+            60 => production_install_update_history(
+                token.canonical_root(),
+                &descriptor.target_path,
+                &bytes,
+            )?,
+            80 => {
+                production_install_create(token.canonical_root(), &descriptor.target_path, &bytes)?
+            }
+            90 => production_install_replacement(
+                token.canonical_root(),
+                &descriptor.target_path,
+                &bytes,
+            )?,
+            _ => return Err(invalid_data("update install order is unsupported")),
+        }
+    }
+    token.verify()
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRODUCTION_UPDATE_TEST_STOP: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn production_update_test_stop(stage: &'static str) -> io::Result<()> {
+    PRODUCTION_UPDATE_TEST_STOP.with(|selected| {
+        if selected.get() == Some(stage) {
+            selected.set(None);
+            Err(io::Error::other(format!("injected update stop at {stage}")))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn production_update_test_stop(_stage: &'static str) -> io::Result<()> {
+    Ok(())
+}
+
+fn production_stage_update(
+    token: &BorrowedOwnerQuiescence<'_, QuiescentWrite>,
+    plan: &ProductionUpdatePlanV1,
+    envelope: &ProductionUpdateEnvelopeV1,
+) -> io::Result<PathBuf> {
+    token.verify()?;
+    let root = token.canonical_root();
+    let generations = production_txn_root(root).join(GENERATIONS_DIR_NAME);
+    let pending = generations.join(format!(".pending-{}", envelope.transaction_id));
+    let published = production_generation_path(root, plan.generation);
+    if path_entry_exists(&pending)? || path_entry_exists(&published)? {
+        return Err(invalid_data("production update namespace already exists"));
+    }
+    fs::create_dir(&pending)?;
+    fs::create_dir(pending.join(COMPONENTS_DIR_NAME))?;
+    for (descriptor, bytes) in &plan.staged {
+        production_write_new(
+            &pending.join(
+                descriptor
+                    .stage_path
+                    .replace('/', std::path::MAIN_SEPARATOR_STR),
+            ),
+            bytes,
+        )?;
+    }
+    sync_directory(&pending.join(COMPONENTS_DIR_NAME))?;
+    let cas = plan
+        .staged
+        .iter()
+        .find(|(descriptor, _)| descriptor.registry_order == 20)
+        .ok_or_else(|| invalid_data("update CAS component is missing"))?;
+    production_install_create(root, &cas.0.target_path, &cas.1)?;
+    production_write_new(
+        &pending.join(PREPARE_FILE_NAME),
+        &plan.prepare.canonical_bytes()?,
+    )?;
+    sync_directory(&pending)?;
+    production_update_test_stop("after_prepare_before_commit")?;
+    production_write_new(
+        &pending.join(COMMIT_FILE_NAME),
+        &plan.manifest.canonical_bytes()?,
+    )?;
+    sync_directory(&pending)?;
+    token.verify()?;
+    move_directory_write_through(&pending, &published)?;
+    production_update_test_stop("after_commit_before_install")?;
+    Ok(published)
+}
+
 /// Explicit direct-library production-v2 carrier for the bounded N5-B P0-C
 /// one-new-atom slice. Existing `MemoryX` transports remain unchanged and fail
 /// closed until their own transaction adapters are ratified.
@@ -13728,9 +16445,13 @@ impl ProductionMemoryX {
             }
         }
         if self.state.batch_transactions.contains_key(transaction_id)
+            || self.state.update_transactions.contains_key(transaction_id)
             || matches!(
                 self.state.owner_lifetime_transactions.get(transaction_id),
-                Some(ProductionOwnerLifetimeTransactionV1::Batch(_))
+                Some(
+                    ProductionOwnerLifetimeTransactionV1::Batch(_)
+                        | ProductionOwnerLifetimeTransactionV1::Update(_)
+                )
             )
         {
             return Err(DirectIngestFailureV1::not_started(
@@ -14089,6 +16810,7 @@ impl ProductionMemoryX {
             .state
             .committed_transactions
             .contains_key(transaction_id)
+            || self.state.update_transactions.contains_key(transaction_id)
         {
             return Err(BatchIngestFailureV1::new(
                 DirectIngestFailureCodeV1::ConflictingTransactionReuse,
@@ -14106,7 +16828,8 @@ impl ProductionMemoryX {
             .cloned()
         {
             let receipt = match owner_transaction {
-                ProductionOwnerLifetimeTransactionV1::Direct(_) => {
+                ProductionOwnerLifetimeTransactionV1::Direct(_)
+                | ProductionOwnerLifetimeTransactionV1::Update(_) => {
                     return Err(BatchIngestFailureV1::new(
                         DirectIngestFailureCodeV1::ConflictingTransactionReuse,
                         "transaction identity belongs to a direct-v1 operation",
@@ -14220,9 +16943,12 @@ impl ProductionMemoryX {
                 atom: committed.parent_atoms.first().cloned(),
                 atoms: committed.parent_atoms.clone(),
                 history_leaves: committed.parent_history_leaves.clone(),
+                graph_leaves: Vec::new(),
+                superseded_by: BTreeMap::new(),
                 committed_receipts: BTreeMap::new(),
                 committed_transactions: BTreeMap::new(),
                 batch_transactions: BTreeMap::new(),
+                update_transactions: BTreeMap::new(),
                 owner_lifetime_transactions: BTreeMap::new(),
             };
             let plan = production_plan_batch(
@@ -14434,8 +17160,351 @@ impl ProductionMemoryX {
         })
     }
 
+    /// Commit one sealed direct-library successor and one source-free
+    /// `SUPERSEDES(successor, old)` lineage edge. Recovery is completed before
+    /// planning, and the existing live-owner lease is only borrowed.
+    pub fn update_atom(
+        &mut self,
+        request: &UpdateAtomRequestV1,
+    ) -> Result<UpdateAtomReceiptV1, UpdateAtomFailureV1> {
+        let transaction = request.transaction_id.clone();
+        if validate_production_uuid(&transaction).is_err() {
+            return Err(UpdateAtomFailureV1::new(
+                UpdateAtomFailureCodeV1::InvalidTransactionId,
+                "transaction UUID is not canonical RFC-variant lowercase ASCII",
+                None,
+                None,
+                false,
+            ));
+        }
+        if request.semantic_time_unix_ns == 0 {
+            return Err(UpdateAtomFailureV1::new(
+                UpdateAtomFailureCodeV1::InvalidSemanticTime,
+                "semantic time must be nonzero",
+                Some(transaction),
+                None,
+                false,
+            ));
+        }
+        let owner_lifetime_transactions = self.state.owner_lifetime_transactions.clone();
+        let recovered = (|| -> io::Result<ProductionRuntimeStateV1> {
+            let startup = self.authority.borrow_startup()?;
+            production_open_runtime(&startup)
+        })();
+        let mut recovered = recovered.map_err(|error| {
+            UpdateAtomFailureV1::new(
+                UpdateAtomFailureCodeV1::RecoveryRequired,
+                error.to_string(),
+                Some(transaction.clone()),
+                None,
+                false,
+            )
+        })?;
+        recovered.owner_lifetime_transactions = owner_lifetime_transactions;
+        self.state = recovered;
+        if self.state.committed_transactions.contains_key(&transaction)
+            || self.state.batch_transactions.contains_key(&transaction)
+            || matches!(
+                self.state.owner_lifetime_transactions.get(&transaction),
+                Some(
+                    ProductionOwnerLifetimeTransactionV1::Direct(_)
+                        | ProductionOwnerLifetimeTransactionV1::Batch(_)
+                )
+            )
+        {
+            return Err(UpdateAtomFailureV1::new(
+                UpdateAtomFailureCodeV1::ConflictingTransactionReuse,
+                "transaction identity belongs to another operation kind",
+                Some(transaction),
+                None,
+                false,
+            ));
+        }
+        let intent = ProductionUpdateIntentV1::create(request).map_err(|error| {
+            let text = error.to_string();
+            let code = if text.contains("same_atom_id") {
+                UpdateAtomFailureCodeV1::SameAtomIdUpdate
+            } else if text.contains("provenance_projection_conflict") {
+                UpdateAtomFailureCodeV1::ProvenanceProjectionConflict
+            } else if text.contains("resource") || text.contains("bound") {
+                UpdateAtomFailureCodeV1::ResourceLimitExceeded
+            } else {
+                UpdateAtomFailureCodeV1::InvalidSuccessor
+            };
+            UpdateAtomFailureV1::new(code, text, Some(transaction.clone()), None, false)
+        })?;
+        if let Some(committed) = self.state.update_transactions.get(&transaction) {
+            let receipt = committed.receipt.clone();
+            let binding = ProductionBaseBindingV1::from_identity(
+                self.authority.physical_identity(),
+                ProductionCommittedHead {
+                    generation: receipt.parent_generation,
+                    commit_hash: receipt.parent_commit_hash,
+                    logical_digest: {
+                        if receipt.parent_generation == 0 {
+                            production_empty_baseline_digest(self.authority.canonical_root())
+                                .map_err(|error| {
+                                    UpdateAtomFailureV1::new(
+                                        UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                                        error.to_string(),
+                                        Some(transaction.clone()),
+                                        Some(receipt.intent_hash),
+                                        false,
+                                    )
+                                })?
+                        } else {
+                            let parent_dir = production_generation_path(
+                                self.authority.canonical_root(),
+                                receipt.parent_generation,
+                            );
+                            let parent_bytes = read_bytes_bounded_under(
+                                self.authority.canonical_root(),
+                                &parent_dir.join(COMMIT_FILE_NAME),
+                                MAX_CONTROL_RECORD_BYTES,
+                            )
+                            .map_err(|error| {
+                                UpdateAtomFailureV1::new(
+                                    UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                                    error.to_string(),
+                                    Some(transaction.clone()),
+                                    Some(receipt.intent_hash),
+                                    false,
+                                )
+                            })?;
+                            let value: serde_json::Value = serde_json::from_slice(&parent_bytes)
+                                .map_err(|error| {
+                                    UpdateAtomFailureV1::new(
+                                        UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                                        error.to_string(),
+                                        Some(transaction.clone()),
+                                        Some(receipt.intent_hash),
+                                        false,
+                                    )
+                                })?;
+                            let parent_logical_digest = value
+                                .get("logical_state_digest")
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or_else(|| {
+                                    UpdateAtomFailureV1::new(
+                                        UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                                        "parent logical digest is absent",
+                                        Some(transaction.clone()),
+                                        Some(receipt.intent_hash),
+                                        false,
+                                    )
+                                })?;
+                            parse_hash_hex(parent_logical_digest, "parent logical digest").map_err(
+                                |error| {
+                                    UpdateAtomFailureV1::new(
+                                        UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                                        error.to_string(),
+                                        Some(transaction.clone()),
+                                        Some(receipt.intent_hash),
+                                        false,
+                                    )
+                                },
+                            )?
+                        }
+                    },
+                },
+            )
+            .map_err(|error| {
+                UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                    error.to_string(),
+                    Some(transaction.clone()),
+                    Some(receipt.intent_hash),
+                    false,
+                )
+            })?;
+            let envelope = ProductionUpdateEnvelopeV1::create(
+                &transaction,
+                request.semantic_time_unix_ns,
+                binding.hash(),
+                intent.hash,
+            )
+            .map_err(|error| {
+                UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::ConflictingTransactionReuse,
+                    error.to_string(),
+                    Some(transaction.clone()),
+                    Some(intent.hash),
+                    false,
+                )
+            })?;
+            let successor_provenance_hash = production_sha256(&request.successor_provenance);
+            if request.semantic_time_unix_ns != receipt.semantic_time_unix_ns
+                || binding.hash() != receipt.base_binding_hash
+                || intent.hash != receipt.intent_hash
+                || envelope.hash != receipt.envelope_hash
+                || intent.successor_body_hash != committed.successor_body_hash
+                || intent.claim_projection_hash != committed.claim_projection_hash
+                || intent.api_evidence_projection_hash != committed.api_evidence_projection_hash
+                || intent.successor_source_attachment_hash
+                    != committed.successor_source_attachment_hash
+                || successor_provenance_hash != receipt.successor_provenance_hash
+            {
+                return Err(UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::ConflictingTransactionReuse,
+                    "transaction identity was reused with a divergent update intent",
+                    Some(transaction),
+                    Some(intent.hash),
+                    false,
+                ));
+            }
+            return Ok(receipt);
+        }
+        let binding = self.state.base_binding.clone();
+        let envelope = ProductionUpdateEnvelopeV1::create(
+            &transaction,
+            request.semantic_time_unix_ns,
+            binding.hash(),
+            intent.hash,
+        )
+        .map_err(|error| {
+            UpdateAtomFailureV1::new(
+                UpdateAtomFailureCodeV1::InvalidTransactionId,
+                error.to_string(),
+                Some(transaction.clone()),
+                Some(intent.hash),
+                false,
+            )
+        })?;
+        let plan = production_plan_update(
+            self.authority.canonical_root(),
+            &self.state,
+            request,
+            &intent,
+            &envelope,
+        )
+        .map_err(|error| {
+            let text = error.to_string();
+            let code = if text.contains("old_atom_missing") {
+                UpdateAtomFailureCodeV1::OldAtomMissing
+            } else if text.contains("already_superseded") {
+                UpdateAtomFailureCodeV1::AlreadySuperseded
+            } else if text.contains("ambiguous_supersession") {
+                UpdateAtomFailureCodeV1::AmbiguousSupersessionState
+            } else if text.contains("relation_backed") {
+                UpdateAtomFailureCodeV1::RelationBackedAtomRequiresCompositeOperation
+            } else if text.contains("successor_collision") {
+                UpdateAtomFailureCodeV1::SuccessorCollision
+            } else if text.contains("provenance") {
+                UpdateAtomFailureCodeV1::ProvenanceProjectionConflict
+            } else if text.contains("graph_compaction") {
+                UpdateAtomFailureCodeV1::GraphCompactionRequired
+            } else if text.contains("resource") || text.contains("bound") {
+                UpdateAtomFailureCodeV1::ResourceLimitExceeded
+            } else {
+                UpdateAtomFailureCodeV1::UnsupportedOrCorrupt
+            };
+            UpdateAtomFailureV1::new(
+                code,
+                text,
+                Some(transaction.clone()),
+                Some(intent.hash),
+                false,
+            )
+        })?;
+        let published = {
+            let write = self.authority.borrow_write().map_err(|error| {
+                UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::RecoveryRequired,
+                    error.to_string(),
+                    Some(transaction.clone()),
+                    Some(intent.hash),
+                    false,
+                )
+            })?;
+            match production_stage_update(&write, &plan, &envelope) {
+                Ok(published) => {
+                    production_install_update_generation(&write, &published, &plan.manifest)
+                        .map_err(|error| {
+                            UpdateAtomFailureV1::new(
+                                UpdateAtomFailureCodeV1::RecoveryRequired,
+                                error.to_string(),
+                                Some(transaction.clone()),
+                                Some(intent.hash),
+                                true,
+                            )
+                        })?;
+                    published
+                }
+                Err(error) => {
+                    let committed = path_entry_exists(&production_generation_path(
+                        write.canonical_root(),
+                        plan.generation,
+                    ))
+                    .unwrap_or(false);
+                    return Err(UpdateAtomFailureV1::new(
+                        UpdateAtomFailureCodeV1::RecoveryRequired,
+                        error.to_string(),
+                        Some(transaction.clone()),
+                        Some(intent.hash),
+                        committed,
+                    ));
+                }
+            }
+        };
+        let _ = published;
+        let owner_lifetime_transactions = self.state.owner_lifetime_transactions.clone();
+        let mut reopened = {
+            let startup = self.authority.borrow_startup().map_err(|error| {
+                UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::RecoveryRequired,
+                    error.to_string(),
+                    Some(transaction.clone()),
+                    Some(intent.hash),
+                    true,
+                )
+            })?;
+            production_open_runtime(&startup).map_err(|error| {
+                UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::RecoveryRequired,
+                    error.to_string(),
+                    Some(transaction.clone()),
+                    Some(intent.hash),
+                    true,
+                )
+            })?
+        };
+        reopened.owner_lifetime_transactions = owner_lifetime_transactions;
+        let receipt = reopened
+            .update_transactions
+            .get(&transaction)
+            .map(|committed| committed.receipt.clone())
+            .ok_or_else(|| {
+                UpdateAtomFailureV1::new(
+                    UpdateAtomFailureCodeV1::UnsupportedOrCorrupt,
+                    "reopened update transaction is absent from the immutable ledger",
+                    Some(transaction.clone()),
+                    Some(intent.hash),
+                    true,
+                )
+            })?;
+        reopened.owner_lifetime_transactions.insert(
+            transaction,
+            ProductionOwnerLifetimeTransactionV1::Update(Box::new(receipt.clone())),
+        );
+        self.state = reopened;
+        Ok(receipt)
+    }
+
     pub fn committed_atom_ids(&self) -> Vec<AtomId> {
         self.state.atoms.iter().map(|atom| atom.atom_id).collect()
+    }
+
+    pub fn current_atom_ids(&self) -> Vec<AtomId> {
+        self.state
+            .atoms
+            .iter()
+            .filter(|atom| !self.state.superseded_by.contains_key(&atom.atom_id))
+            .map(|atom| atom.atom_id)
+            .collect()
+    }
+
+    pub fn successor_for(&self, old_atom_id: AtomId) -> Option<AtomId> {
+        self.state.superseded_by.get(&old_atom_id).copied()
     }
 }
 
@@ -14655,6 +17724,50 @@ fn production_anchor_leaves(root: &Path) -> io::Result<Vec<(u16, bool, Vec<u8>)>
     Ok(anchors)
 }
 
+fn production_anchor_leaves_from_descriptors(
+    root: &Path,
+    descriptors: &[ProductionComponentDescriptorV1],
+) -> io::Result<Vec<(u16, bool, Vec<u8>)>> {
+    let mut anchors = Vec::new();
+    for entry in PRODUCTION_DIRECT_REGISTRY
+        .iter()
+        .filter(|entry| (150..=220).contains(&entry.order))
+    {
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| {
+                descriptor.registry_order == entry.order && descriptor.registry_key == entry.key
+            })
+            .ok_or_else(|| invalid_data("production generation anchor descriptor is absent"))?;
+        match descriptor.mode.as_str() {
+            "anchor_absent" if descriptor.byte_length == 0 => {
+                anchors.push((entry.order, false, Vec::new()));
+            }
+            "anchor_present" => {
+                let relative = descriptor
+                    .target_path
+                    .as_deref()
+                    .ok_or_else(|| invalid_data("production anchor target is absent"))?;
+                let bytes = read_bytes_bounded_under(
+                    root,
+                    &root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)),
+                    PRODUCTION_UPDATE_MAX_COMPONENT_BYTES,
+                )?;
+                if bytes.len() as u64 != descriptor.byte_length
+                    || production_hash_hex(&bytes) != descriptor.byte_hash
+                {
+                    return Err(invalid_data(
+                        "production historical anchor bytes are unavailable",
+                    ));
+                }
+                anchors.push((entry.order, true, bytes));
+            }
+            _ => return Err(invalid_data("production anchor descriptor is invalid")),
+        }
+    }
+    Ok(anchors)
+}
+
 fn production_logical_digest(
     generation: u64,
     parent_commit_hash: [u8; 32],
@@ -14676,15 +17789,37 @@ fn production_logical_digest_multi(
     histories: &[&[u8]],
     anchors: &[(u16, bool, Vec<u8>)],
 ) -> io::Result<[u8; 32]> {
+    production_logical_digest_multi_with_graph(
+        generation,
+        parent_commit_hash,
+        atoms,
+        &[],
+        histories,
+        anchors,
+    )
+}
+
+fn production_logical_digest_multi_with_graph(
+    generation: u64,
+    parent_commit_hash: [u8; 32],
+    atoms: &[&ProductionAtomStateV1],
+    graph_leaves: &[&[u8]],
+    histories: &[&[u8]],
+    anchors: &[(u16, bool, Vec<u8>)],
+) -> io::Result<[u8; 32]> {
     if generation > PRODUCTION_MAX_GENERATIONS || anchors.len() != 8 {
         return Err(invalid_data("production logical digest bounds are invalid"));
     }
-    if atoms.len() > 100_000_000 || histories.len() > PRODUCTION_MAX_GENERATIONS as usize {
+    if atoms.len() > 100_000_000
+        || graph_leaves.len() > 100_000_000
+        || histories.len() > PRODUCTION_MAX_GENERATIONS as usize
+    {
         return Err(invalid_data(
             "production logical state count exceeds its bound",
         ));
     }
     let atom_count = atoms.len() as u64;
+    let graph_leaf_count = graph_leaves.len() as u64;
     let history_count = histories.len() as u64;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(PRODUCTION_DIGEST_ID.as_bytes());
@@ -14694,7 +17829,7 @@ fn production_logical_digest_multi(
     bytes.extend_from_slice(&parent_commit_hash);
     bytes.extend_from_slice(&atom_count.to_le_bytes());
     bytes.extend_from_slice(&0u64.to_le_bytes());
-    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.extend_from_slice(&graph_leaf_count.to_le_bytes());
     bytes.extend_from_slice(&atom_count.to_le_bytes());
     bytes.extend_from_slice(&history_count.to_le_bytes());
     bytes.extend_from_slice(&(anchors.len() as u64).to_le_bytes());
@@ -14710,7 +17845,6 @@ fn production_logical_digest_multi(
             atom.domain_mask,
             atom.source_id,
         )?;
-        let provenance_leaf = production_zero_provenance_leaf(&atom.atom_id);
         bytes.push(0x01);
         bytes.extend_from_slice(&atom.atom_id);
         bytes.push(1);
@@ -14724,7 +17858,43 @@ fn production_logical_digest_multi(
         bytes.extend_from_slice(&atom.domain_mask.to_le_bytes());
         bytes.push(0);
         bytes.extend_from_slice(blake3::hash(&metadata_leaf).as_bytes());
-        bytes.extend_from_slice(blake3::hash(&provenance_leaf).as_bytes());
+        bytes.extend_from_slice(&atom.provenance_hash);
+    }
+    let graph_prefix_len = PRODUCTION_GRAPH_LEAF_ID.len() + 1;
+    let mut ordered_graph = graph_leaves.to_vec();
+    ordered_graph.sort_by_key(|leaf| {
+        let src = leaf
+            .get(graph_prefix_len + 2..graph_prefix_len + 10)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes)
+            .unwrap_or(u64::MAX);
+        let edge_type = leaf
+            .get(graph_prefix_len + 10..graph_prefix_len + 14)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+            .unwrap_or(u32::MAX);
+        let dst = leaf
+            .get(graph_prefix_len + 14..graph_prefix_len + 22)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes)
+            .unwrap_or(u64::MAX);
+        (src, edge_type, dst)
+    });
+    for pair in ordered_graph.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(invalid_data("production graph semantic leaf is duplicated"));
+        }
+    }
+    for leaf in ordered_graph {
+        if leaf.len() != 87
+            || !leaf.starts_with(PRODUCTION_GRAPH_LEAF_ID.as_bytes())
+            || leaf.get(PRODUCTION_GRAPH_LEAF_ID.len()) != Some(&0)
+            || leaf.get(graph_prefix_len..graph_prefix_len + 2) != Some(&1u16.to_le_bytes())
+        {
+            return Err(invalid_data("production graph semantic leaf is invalid"));
+        }
+        bytes.push(0x03);
+        production_append_u32_frame(&mut bytes, leaf)?;
     }
     for atom in &ordered_atoms {
         let metadata_leaf = production_metadata_leaf(
@@ -14802,6 +17972,7 @@ mod tests {
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
+    use base64::Engine as _;
     use tempfile::tempdir;
 
     use super::*;
@@ -15134,6 +18305,799 @@ mod tests {
         output
     }
 
+    fn reseal_update_component(
+        root: &Path,
+        generation: u64,
+        order: u16,
+        bytes: Vec<u8>,
+        semantic_hash: [u8; 32],
+    ) {
+        let generation_dir = production_generation_path(root, generation);
+        let commit_path = generation_dir.join(COMMIT_FILE_NAME);
+        let manifest_bytes = fs::read(&commit_path).unwrap();
+        let manifest =
+            UpdateGenerationManifestV1::decode(&manifest_bytes, "test update manifest").unwrap();
+        let mut manifest_body = manifest.body();
+        let index = manifest_body
+            .components
+            .iter()
+            .position(|descriptor| descriptor.registry_order == order)
+            .unwrap();
+        let prior = manifest_body.components[index].clone();
+        let descriptor = production_update_descriptor(
+            prior.registry_order,
+            &prior.registry_key,
+            &prior.mode,
+            prior.target_path.clone(),
+            &prior.content_codec_id,
+            &bytes,
+            semantic_hash,
+        )
+        .unwrap();
+        fs::write(
+            generation_dir.join(
+                descriptor
+                    .stage_path
+                    .replace('/', std::path::MAIN_SEPARATOR_STR),
+            ),
+            &bytes,
+        )
+        .unwrap();
+        manifest_body.components[index] = descriptor;
+        let component_root = production_update_component_root(&manifest_body.components).unwrap();
+        manifest_body.component_root_hash = hex_lower(&component_root);
+
+        let prepare_path = generation_dir.join(PREPARE_FILE_NAME);
+        let prepare =
+            UpdatePrepareV1::decode(&fs::read(&prepare_path).unwrap(), "test update prepare")
+                .unwrap();
+        let mut prepare_body = prepare.body();
+        prepare_body.components = manifest_body.components.clone();
+        prepare_body.component_root_hash = hex_lower(&component_root);
+        let prepare = UpdatePrepareV1::from_body(prepare_body).unwrap();
+        let prepare_bytes = prepare.canonical_bytes().unwrap();
+        fs::write(&prepare_path, &prepare_bytes).unwrap();
+
+        manifest_body.prepare_hash = production_hash_hex(&prepare_bytes);
+        let manifest = UpdateGenerationManifestV1::from_body(manifest_body).unwrap();
+        fs::write(commit_path, manifest.canonical_bytes().unwrap()).unwrap();
+    }
+
+    fn update_generation_component(root: &Path, generation: u64, order: u16) -> Vec<u8> {
+        let generation_dir = production_generation_path(root, generation);
+        let manifest = UpdateGenerationManifestV1::decode(
+            &fs::read(generation_dir.join(COMMIT_FILE_NAME)).unwrap(),
+            "test update manifest",
+        )
+        .unwrap();
+        let descriptor = manifest
+            .components
+            .iter()
+            .find(|descriptor| descriptor.registry_order == order)
+            .unwrap();
+        fs::read(
+            generation_dir.join(
+                descriptor
+                    .stage_path
+                    .replace('/', std::path::MAIN_SEPARATOR_STR),
+            ),
+        )
+        .unwrap()
+    }
+
+    fn production_update_source_attachment(atom_id: AtomId, projection: &str) -> Vec<u8> {
+        format!(
+            "{PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PREFIX}{}{PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PAYLOAD}{projection}",
+            hex_lower(&atom_id)
+        )
+        .into_bytes()
+    }
+
+    fn production_update_request(
+        transaction_id: &str,
+        semantic_time_unix_ns: u64,
+        old_atom_id: AtomId,
+    ) -> UpdateAtomRequestV1 {
+        let successor_body = production_body_variant(2, semantic_time_unix_ns);
+        let successor_atom_id = compute_atom_id_from_payload(&successor_body).unwrap();
+        let source_attachment = production_update_source_attachment(
+            successor_atom_id,
+            "successor-source-attachment-v1",
+        );
+        UpdateAtomRequestV1::from_successor_body(
+            transaction_id,
+            semantic_time_unix_ns,
+            old_atom_id,
+            successor_body,
+            AtomType::from_u32(2).unwrap(),
+            [],
+            [],
+            source_attachment,
+            b"successor-provenance-v1".as_slice(),
+        )
+        .unwrap()
+    }
+
+    fn production_update_vectors() -> serde_json::Value {
+        serde_json::from_slice(&fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "ORCHESTRATION_SYSTEM/modules/MX-80-schemas-migrations/evidence/fixtures/n5b_p1_update_atom_v1/vectors.json",
+            ),
+        ).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn production_update_atom_create_retry_reopen_lineage_and_history_once() {
+        const UPDATE_TX: &str = "823e4567-e89b-42d3-a456-426614174008";
+        const TIME: u64 = 1_720_000_000_000_000_800;
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("production-update-success");
+        activate_empty_production_base(&root);
+        let old_body = minimal_production_atom();
+        let old_type = AtomBodyHeader::from_bytes(old_body)
+            .unwrap()
+            .atom_type()
+            .unwrap();
+        let old_id = compute_atom_id_from_payload(old_body).unwrap();
+        let mut store = ProductionMemoryX::open(&root).unwrap();
+        store
+            .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+            .unwrap();
+        let old_cas = fs::read(root.join("cas/seg_00000.dat")).unwrap();
+        let request = production_update_request(UPDATE_TX, TIME, old_id);
+        let receipt = store.update_atom(&request).unwrap();
+        assert_eq!(receipt.parent_generation, 1);
+        assert_eq!(receipt.committed_generation, 2);
+        assert_eq!(receipt.old_atom_id, old_id);
+        assert_eq!(receipt.successor_atom_id, request.successor_atom_id);
+        assert_ne!(
+            receipt.old_provenance_hash,
+            receipt.successor_provenance_hash
+        );
+        assert_eq!(store.successor_for(old_id), Some(request.successor_atom_id));
+        assert_eq!(store.current_atom_ids(), vec![request.successor_atom_id]);
+        assert_eq!(store.committed_atom_ids().len(), 2);
+        assert_eq!(fs::read(root.join("cas/seg_00000.dat")).unwrap(), old_cas);
+        let successor_cas = fs::read(root.join("cas/segments/seg_00000002.skf1")).unwrap();
+        assert_eq!(
+            &successor_cas[RecordHeader::SIZE..RecordHeader::SIZE + request.successor_body.len()],
+            request.successor_body
+        );
+        let history = fs::read(root.join("meta/history.log")).unwrap();
+        assert_eq!(history.iter().filter(|byte| **byte == b'\n').count(), 2);
+        let provenance = fs::read(root.join("meta/atom_sources.jsonl")).unwrap();
+        assert_eq!(provenance.len(), 102);
+        assert_eq!(&provenance[..4], b"SPV1");
+        assert_eq!(&provenance[6..38], &request.successor_atom_id);
+        assert!(
+            !provenance
+                .windows(old_id.len())
+                .any(|window| window == old_id)
+        );
+        let delta = fs::read(root.join("index/graph/deltas/d_00000001.edges")).unwrap();
+        let edge = EdgeListEntry::from_bytes(&delta[DeltaHeader::SIZE..]).unwrap();
+        assert_eq!(edge.src_node, receipt.successor_node);
+        assert_eq!(edge.dst_node, 0);
+        assert_eq!(edge.edge_type, EdgeType::SUPERSEDES.to_u32());
+        assert_eq!(edge.confidence_q, 5000);
+        let tree = production_tree_snapshot(&root);
+        let retry = store.update_atom(&request).unwrap();
+        assert_eq!(retry.canonical_bytes(), receipt.canonical_bytes());
+        assert_eq!(production_tree_snapshot(&root), tree);
+
+        let mut divergent = request.clone();
+        divergent.successor_provenance = b"divergent-successor-provenance".to_vec();
+        assert_eq!(
+            store.update_atom(&divergent).unwrap_err().code,
+            UpdateAtomFailureCodeV1::ConflictingTransactionReuse
+        );
+        assert_eq!(production_tree_snapshot(&root), tree);
+        assert_eq!(
+            store
+                .direct_ingest(
+                    UPDATE_TX,
+                    TIME,
+                    &request.successor_body,
+                    request.successor_atom_type,
+                    &[],
+                    &[],
+                )
+                .unwrap_err()
+                .code,
+            DirectIngestFailureCodeV1::ConflictingTransactionReuse
+        );
+        drop(store);
+
+        let mut first = ProductionMemoryX::open(&root).unwrap();
+        assert_eq!(first.current_atom_ids(), vec![request.successor_atom_id]);
+        assert_eq!(
+            first.update_atom(&request).unwrap().canonical_bytes(),
+            receipt.canonical_bytes()
+        );
+        drop(first);
+        let second = ProductionMemoryX::open(&root).unwrap();
+        assert_eq!(second.committed_generation(), 2);
+        assert_eq!(second.committed_logical_digest(), receipt.logical_digest);
+        assert_eq!(
+            second.successor_for(old_id),
+            Some(request.successor_atom_id)
+        );
+        assert_eq!(production_tree_snapshot(&root), tree);
+    }
+
+    #[test]
+    fn production_update_atom_precommit_s0_and_postcommit_s1_recovery() {
+        const TIME: u64 = 1_720_000_000_000_000_900;
+        for (name, transaction, stop, committed) in [
+            (
+                "precommit",
+                "923e4567-e89b-42d3-a456-426614174009",
+                "after_prepare_before_commit",
+                false,
+            ),
+            (
+                "postcommit",
+                "a23e4567-e89b-42d3-a456-42661417400a",
+                "after_commit_before_install",
+                true,
+            ),
+        ] {
+            let temp = tempdir().unwrap();
+            let root = temp.path().join(format!("production-update-{name}"));
+            activate_empty_production_base(&root);
+            let old_body = minimal_production_atom();
+            let old_type = AtomBodyHeader::from_bytes(old_body)
+                .unwrap()
+                .atom_type()
+                .unwrap();
+            let old_id = compute_atom_id_from_payload(old_body).unwrap();
+            let mut store = ProductionMemoryX::open(&root).unwrap();
+            store
+                .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+                .unwrap();
+            let request = production_update_request(transaction, TIME, old_id);
+            PRODUCTION_UPDATE_TEST_STOP.with(|selected| selected.set(Some(stop)));
+            let failure = store.update_atom(&request).unwrap_err();
+            assert_eq!(failure.code, UpdateAtomFailureCodeV1::RecoveryRequired);
+            assert_eq!(
+                failure.commit_disposition,
+                if committed {
+                    DirectIngestCommitDispositionV1::CommittedInstallPending
+                } else {
+                    DirectIngestCommitDispositionV1::NotCommitted
+                }
+            );
+            drop(store);
+            let mut first = ProductionMemoryX::open(&root).unwrap();
+            if committed {
+                assert_eq!(first.committed_generation(), 2);
+                assert_eq!(first.current_atom_ids(), vec![request.successor_atom_id]);
+            } else {
+                assert_eq!(first.committed_generation(), 1);
+                assert_eq!(first.current_atom_ids(), vec![old_id]);
+                assert!(!root.join("cas/segments/seg_00000002.skf1").exists());
+            }
+            let receipt = first.update_atom(&request).unwrap();
+            assert_eq!(receipt.committed_generation, 2);
+            drop(first);
+            let second = ProductionMemoryX::open(&root).unwrap();
+            assert_eq!(second.current_atom_ids(), vec![request.successor_atom_id]);
+            assert_eq!(
+                second.successor_for(old_id),
+                Some(request.successor_atom_id)
+            );
+            assert_eq!(
+                fs::read(root.join("meta/history.log"))
+                    .unwrap()
+                    .iter()
+                    .filter(|byte| **byte == b'\n')
+                    .count(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn production_update_atom_preflight_is_mutation_free_and_journal_authoritative() {
+        const TIME: u64 = 1_720_000_000_000_001_000;
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("production-update-preflight");
+        activate_empty_production_base(&root);
+        let old_body = minimal_production_atom();
+        let old_type = AtomBodyHeader::from_bytes(old_body)
+            .unwrap()
+            .atom_type()
+            .unwrap();
+        let old_id = compute_atom_id_from_payload(old_body).unwrap();
+        let mut store = ProductionMemoryX::open(&root).unwrap();
+        store
+            .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+            .unwrap();
+        let parent = production_tree_snapshot(&root);
+
+        let mut missing =
+            production_update_request("b23e4567-e89b-42d3-a456-42661417400b", TIME, [0x55; 32]);
+        assert_eq!(
+            store.update_atom(&missing).unwrap_err().code,
+            UpdateAtomFailureCodeV1::OldAtomMissing
+        );
+        assert_eq!(production_tree_snapshot(&root), parent);
+        missing.old_atom_id = missing.successor_atom_id;
+        assert_eq!(
+            store.update_atom(&missing).unwrap_err().code,
+            UpdateAtomFailureCodeV1::SameAtomIdUpdate
+        );
+        assert_eq!(production_tree_snapshot(&root), parent);
+
+        let vectors = production_update_vectors();
+        let current = &vectors["relation_journals"]["current"][0];
+        let exact_relation = base64::engine::general_purpose::STANDARD
+            .decode(current["record_base64"].as_str().unwrap())
+            .unwrap();
+        let exact = UpdateRelationJournalV1::decode(&exact_relation, "exact relation").unwrap();
+        assert_eq!(exact.canonical_bytes().unwrap(), exact_relation);
+        let mut relation = UpdateRelationJournalV1::from_body(UpdateRelationJournalBodyV1 {
+            schema: exact.schema.clone(),
+            version: exact.version,
+            journal_kind: exact.journal_kind.clone(),
+            ordinal: exact.ordinal,
+            relation_atom_id: exact.relation_atom_id.clone(),
+            subject_atom_id: hex_lower(&old_id),
+            predicate_id: exact.predicate_id,
+            object_atom_id: exact.object_atom_id.clone(),
+            current: exact.current,
+            historical: exact.historical,
+        })
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+        relation.push(b'\n');
+        fs::write(root.join("meta/relations.jsonl"), relation).unwrap();
+        let with_journal = production_tree_snapshot(&root);
+        let request =
+            production_update_request("c23e4567-e89b-42d3-a456-42661417400c", TIME + 1, old_id);
+        assert_eq!(
+            store.update_atom(&request).unwrap_err().code,
+            UpdateAtomFailureCodeV1::RelationBackedAtomRequiresCompositeOperation
+        );
+        assert_eq!(production_tree_snapshot(&root), with_journal);
+        fs::remove_file(root.join("meta/relations.jsonl")).unwrap();
+
+        let future = UpdateRelationJournalV1::from_body(UpdateRelationJournalBodyV1 {
+            version: 2,
+            ..exact.body()
+        })
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+        fs::write(root.join("meta/relations.jsonl"), future).unwrap();
+        let future_tree = production_tree_snapshot(&root);
+        let future_request =
+            production_update_request("e23e4567-e89b-42d3-a456-42661417400e", TIME + 2, old_id);
+        assert_eq!(
+            store.update_atom(&future_request).unwrap_err().code,
+            UpdateAtomFailureCodeV1::UnsupportedOrCorrupt
+        );
+        assert_eq!(production_tree_snapshot(&root), future_tree);
+        fs::remove_file(root.join("meta/relations.jsonl")).unwrap();
+
+        let mut bounded =
+            production_update_request("d23e4567-e89b-42d3-a456-42661417400d", TIME + 3, old_id);
+        bounded
+            .successor_body
+            .resize(PRODUCTION_MAX_BODY_BYTES as usize + 1, 0);
+        assert_eq!(
+            store.update_atom(&bounded).unwrap_err().code,
+            UpdateAtomFailureCodeV1::ResourceLimitExceeded
+        );
+        assert_eq!(production_tree_snapshot(&root), parent);
+    }
+
+    #[test]
+    fn production_update_atom_source_attachment_is_successor_bound_before_prepare() {
+        const TIME: u64 = 1_720_000_000_000_001_100;
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("production-update-source-binding");
+        activate_empty_production_base(&root);
+        let old_body = minimal_production_atom();
+        let old_type = AtomBodyHeader::from_bytes(old_body)
+            .unwrap()
+            .atom_type()
+            .unwrap();
+        let old_id = compute_atom_id_from_payload(old_body).unwrap();
+        let mut store = ProductionMemoryX::open(&root).unwrap();
+        store
+            .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+            .unwrap();
+        let positive =
+            production_update_request("f23e4567-e89b-42d3-a456-42661417400f", TIME, old_id);
+        ProductionUpdateIntentV1::create(&positive).unwrap();
+        let before = production_tree_snapshot(&root);
+        let cases = [
+            production_update_source_attachment([0; 32], "zero"),
+            production_update_source_attachment(old_id, "old"),
+            production_update_source_attachment([0x33; 32], "foreign"),
+            b"memoryx.atom-source-attachment-projection.v1|atom_id=bad|projection=x".to_vec(),
+            format!(
+                "{PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PREFIX}{}{PRODUCTION_UPDATE_SOURCE_ATTACHMENT_PAYLOAD}non canonical",
+                hex_lower(&positive.successor_atom_id)
+            )
+            .into_bytes(),
+        ];
+        for (index, source_attachment) in cases.into_iter().enumerate() {
+            let mut request = positive.clone();
+            request.transaction_id = format!("{index:08x}-e89b-42d3-a456-426614174100");
+            request.successor_source_attachment_projection = source_attachment;
+            let failure = store.update_atom(&request).unwrap_err();
+            assert_eq!(
+                failure.code,
+                UpdateAtomFailureCodeV1::ProvenanceProjectionConflict
+            );
+            assert_eq!(production_tree_snapshot(&root), before);
+            assert!(!production_generation_path(&root, 2).exists());
+        }
+    }
+
+    #[test]
+    fn production_update_atom_control_record_bound_is_exact_and_mutation_free() {
+        const TIME: u64 = 1_720_000_000_000_001_200;
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("production-update-control-bound");
+        activate_empty_production_base(&root);
+        let old_body = minimal_production_atom();
+        let old_type = AtomBodyHeader::from_bytes(old_body)
+            .unwrap()
+            .atom_type()
+            .unwrap();
+        let old_id = compute_atom_id_from_payload(old_body).unwrap();
+        let mut store = ProductionMemoryX::open(&root).unwrap();
+        store
+            .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+            .unwrap();
+        let request =
+            production_update_request("123e4567-e89b-42d3-a456-426614174120", TIME, old_id);
+        let intent = ProductionUpdateIntentV1::create(&request).unwrap();
+        let envelope = ProductionUpdateEnvelopeV1::create(
+            &request.transaction_id,
+            TIME,
+            store.state.base_binding.hash(),
+            intent.hash,
+        )
+        .unwrap();
+        let plan =
+            production_plan_update(&root, &store.state, &request, &intent, &envelope).unwrap();
+        let manifest_bytes = plan.manifest.canonical_bytes().unwrap();
+        let before = production_tree_snapshot(&root);
+        assert_eq!(
+            PRODUCTION_UPDATE_MAX_CONTROL_BYTES,
+            MAX_CONTROL_RECORD_BYTES
+        );
+        assert!(
+            production_update_resource_preflight(
+                &request,
+                &plan.staged,
+                &vec![0; PRODUCTION_UPDATE_MAX_CONTROL_BYTES as usize],
+                &manifest_bytes,
+            )
+            .is_ok()
+        );
+        assert!(
+            production_update_resource_preflight(
+                &request,
+                &plan.staged,
+                &vec![0; PRODUCTION_UPDATE_MAX_CONTROL_BYTES as usize + 1],
+                &manifest_bytes,
+            )
+            .is_err()
+        );
+        assert_eq!(production_tree_snapshot(&root), before);
+        assert!(!production_generation_path(&root, 2).exists());
+    }
+
+    #[test]
+    fn production_update_atom_reopen_recomputes_every_component_semantic_class() {
+        const TIME: u64 = 1_720_000_000_000_001_300;
+        for order in [20u16, 30, 40, 50, 60, 70, 80, 90] {
+            let temp = tempdir().unwrap();
+            let root = temp
+                .path()
+                .join(format!("production-update-semantic-{order}"));
+            activate_empty_production_base(&root);
+            let old_body = minimal_production_atom();
+            let old_type = AtomBodyHeader::from_bytes(old_body)
+                .unwrap()
+                .atom_type()
+                .unwrap();
+            let old_id = compute_atom_id_from_payload(old_body).unwrap();
+            let mut store = ProductionMemoryX::open(&root).unwrap();
+            store
+                .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+                .unwrap();
+            let request = production_update_request(
+                &format!("{order:08x}-e89b-42d3-a456-426614174130"),
+                TIME,
+                old_id,
+            );
+            store.update_atom(&request).unwrap();
+            drop(store);
+            let bytes = update_generation_component(&root, 2, order);
+            reseal_update_component(&root, 2, order, bytes, [order as u8; 32]);
+            let sealed = production_tree_snapshot(&root);
+            assert!(ProductionMemoryX::open(&root).is_err(), "order {order}");
+            assert_eq!(production_tree_snapshot(&root), sealed, "order {order}");
+            assert!(ProductionMemoryX::open(&root).is_err(), "order {order}");
+            assert_eq!(production_tree_snapshot(&root), sealed, "order {order}");
+        }
+    }
+
+    #[test]
+    fn production_update_atom_reopen_rejects_noncanonical_spv1_and_history_components() {
+        const TIME: u64 = 1_720_000_000_000_001_400;
+        for order in [50u16, 60] {
+            let temp = tempdir().unwrap();
+            let root = temp.path().join(format!("production-update-exact-{order}"));
+            activate_empty_production_base(&root);
+            let old_body = minimal_production_atom();
+            let old_type = AtomBodyHeader::from_bytes(old_body)
+                .unwrap()
+                .atom_type()
+                .unwrap();
+            let old_id = compute_atom_id_from_payload(old_body).unwrap();
+            let mut store = ProductionMemoryX::open(&root).unwrap();
+            store
+                .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+                .unwrap();
+            let request = production_update_request(
+                &format!("{order:08x}-e89b-42d3-a456-426614174140"),
+                TIME,
+                old_id,
+            );
+            let receipt = store.update_atom(&request).unwrap();
+            drop(store);
+            let exact = update_generation_component(&root, 2, order);
+            let (mutated, semantic_hash) = if order == 50 {
+                let mut mutated = vec![b'X'];
+                mutated.extend_from_slice(&exact);
+                (
+                    mutated.clone(),
+                    production_update_semantic(PRODUCTION_UPDATE_SPV1_SEMANTIC_ID, &mutated),
+                )
+            } else {
+                let mut mutated = exact.clone();
+                mutated.push(b'\n');
+                mutated.extend_from_slice(&exact);
+                (mutated, receipt.history_semantic_hash)
+            };
+            reseal_update_component(&root, 2, order, mutated, semantic_hash);
+            let sealed = production_tree_snapshot(&root);
+            assert!(ProductionMemoryX::open(&root).is_err());
+            assert_eq!(production_tree_snapshot(&root), sealed);
+            assert!(ProductionMemoryX::open(&root).is_err());
+            assert_eq!(production_tree_snapshot(&root), sealed);
+        }
+    }
+
+    #[test]
+    fn production_update_atom_reopen_recomputes_history_event_and_semantic_identity() {
+        const TIME: u64 = 1_720_000_000_000_001_450;
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("production-update-history-semantic");
+        activate_empty_production_base(&root);
+        let old_body = minimal_production_atom();
+        let old_type = AtomBodyHeader::from_bytes(old_body)
+            .unwrap()
+            .atom_type()
+            .unwrap();
+        let old_id = compute_atom_id_from_payload(old_body).unwrap();
+        let mut store = ProductionMemoryX::open(&root).unwrap();
+        store
+            .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+            .unwrap();
+        let request =
+            production_update_request("723e4567-e89b-42d3-a456-426614174145", TIME, old_id);
+        let receipt = store.update_atom(&request).unwrap();
+        drop(store);
+
+        let history_bytes = update_generation_component(&root, 2, 60);
+        let history = UpdateHistoryEventV1::decode(&history_bytes, "test update history").unwrap();
+        let mut history_body = history.body();
+        history_body.transaction_id = "f23e4567-e89b-42d3-a456-426614174160".to_owned();
+        let substituted = UpdateHistoryEventV1::from_body(history_body)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        reseal_update_component(&root, 2, 60, substituted, receipt.history_semantic_hash);
+
+        let sealed = production_tree_snapshot(&root);
+        assert!(ProductionMemoryX::open(&root).is_err());
+        assert_eq!(production_tree_snapshot(&root), sealed);
+        assert!(ProductionMemoryX::open(&root).is_err());
+        assert_eq!(production_tree_snapshot(&root), sealed);
+    }
+
+    #[test]
+    fn production_update_atom_reopen_joins_delt_and_grm1_to_exact_lineage() {
+        const TIME: u64 = 1_720_000_000_000_001_500;
+        for graph_case in ["reverse-delt", "mismatched-grm1"] {
+            let temp = tempdir().unwrap();
+            let root = temp.path().join(format!("production-update-{graph_case}"));
+            activate_empty_production_base(&root);
+            let old_body = minimal_production_atom();
+            let old_type = AtomBodyHeader::from_bytes(old_body)
+                .unwrap()
+                .atom_type()
+                .unwrap();
+            let old_id = compute_atom_id_from_payload(old_body).unwrap();
+            let mut store = ProductionMemoryX::open(&root).unwrap();
+            store
+                .direct_ingest(TX1, TIME - 1, old_body, old_type, &[], &[])
+                .unwrap();
+            let request = production_update_request(
+                if graph_case == "reverse-delt" {
+                    "523e4567-e89b-42d3-a456-426614174150"
+                } else {
+                    "623e4567-e89b-42d3-a456-426614174151"
+                },
+                TIME,
+                old_id,
+            );
+            let receipt = store.update_atom(&request).unwrap();
+            let old_node = store
+                .state
+                .atoms
+                .iter()
+                .find(|atom| atom.atom_id == old_id)
+                .unwrap()
+                .node_num;
+            drop(store);
+            if graph_case == "reverse-delt" {
+                let (bytes, semantic_hash) =
+                    production_update_delta_bytes(1, 0, old_node, receipt.successor_node).unwrap();
+                reseal_update_component(&root, 2, 80, bytes, semantic_hash);
+                fs::remove_file(root.join("index/graph/deltas/d_00000001.edges")).unwrap();
+            } else {
+                let graph_leaf = production_update_graph_leaf(receipt.successor_node, old_node);
+                let (bytes, semantic_hash) = production_update_graph_manifest(
+                    1,
+                    0,
+                    receipt.successor_node + 2,
+                    &[graph_leaf],
+                )
+                .unwrap();
+                reseal_update_component(&root, 2, 90, bytes, semantic_hash);
+            }
+            let sealed = production_tree_snapshot(&root);
+            assert!(ProductionMemoryX::open(&root).is_err());
+            assert_eq!(production_tree_snapshot(&root), sealed);
+            assert!(ProductionMemoryX::open(&root).is_err());
+            assert_eq!(production_tree_snapshot(&root), sealed);
+        }
+    }
+
+    #[test]
+    fn production_update_atom_mx80_exact_goldens_and_strict_records() {
+        let vectors = production_update_vectors();
+        let positive = &vectors["positive_vectors"][0];
+        for (name, expected) in [
+            ("successor_body", "successor_body_hash"),
+            ("claim_projection", "claim_projection_hash"),
+            ("api_evidence_projection", "api_evidence_projection_hash"),
+            (
+                "successor_source_attachment_projection",
+                "successor_source_attachment_hash",
+            ),
+        ] {
+            assert_eq!(
+                hex_lower(&production_sha256(
+                    vectors["hash_preimages"][name]["bytes_utf8"]
+                        .as_str()
+                        .unwrap()
+                        .as_bytes(),
+                )),
+                positive[expected].as_str().unwrap()
+            );
+        }
+        let old = parse_hash_hex(positive["old_atom_id"].as_str().unwrap(), "old").unwrap();
+        let successor =
+            parse_hash_hex(positive["successor_atom_id"].as_str().unwrap(), "successor").unwrap();
+        assert_eq!(
+            hex_lower(&production_update_relation_id(successor, old)),
+            positive["supersedes_relation_id"].as_str().unwrap()
+        );
+        let graph_leaf = production_update_graph_leaf(43, 42);
+        let (delta, delta_semantic) = production_update_delta_bytes(1, 7, 43, 42).unwrap();
+        assert_eq!(
+            hex_lower(&delta),
+            positive["graph_delta_hex"].as_str().unwrap()
+        );
+        assert_eq!(
+            hex_lower(&delta_semantic),
+            positive["delt_component_semantic_hash"].as_str().unwrap()
+        );
+        let (grm1, grm1_semantic) =
+            production_update_graph_manifest(1, 7, 44, &[graph_leaf]).unwrap();
+        assert_eq!(hex_lower(&grm1), positive["grm1_hex"].as_str().unwrap());
+        assert_eq!(
+            hex_lower(&grm1_semantic),
+            positive["grm1_component_semantic_hash"].as_str().unwrap()
+        );
+
+        let intent_hash =
+            parse_hash_hex(positive["intent_hash"].as_str().unwrap(), "intent").unwrap();
+        let envelope = ProductionUpdateEnvelopeV1::create(
+            positive["transaction_id"].as_str().unwrap(),
+            positive["semantic_time_unix_ns"].as_u64().unwrap(),
+            [1; 32],
+            intent_hash,
+        )
+        .unwrap();
+        let history = production_update_history(
+            &envelope,
+            1,
+            successor,
+            old,
+            production_update_relation_id(successor, old),
+            parse_hash_hex(
+                positive["successor_provenance_hash"].as_str().unwrap(),
+                "successor provenance",
+            )
+            .unwrap(),
+            parse_hash_hex(
+                positive["old_provenance_hash"].as_str().unwrap(),
+                "old provenance",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            history.record_bytes,
+            base64::engine::general_purpose::STANDARD
+                .decode(positive["history_event_base64"].as_str().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            hex_lower(&history.event_id),
+            positive["history_event_id"].as_str().unwrap()
+        );
+        assert_eq!(
+            hex_lower(&history.semantic_hash),
+            positive["history_semantic_hash"].as_str().unwrap()
+        );
+
+        let mut descriptors = Vec::new();
+        for vector in vectors["component_descriptor_corpus"].as_array().unwrap() {
+            let content = base64::engine::general_purpose::STANDARD
+                .decode(vector["content_base64"].as_str().unwrap())
+                .unwrap();
+            let descriptor = production_update_descriptor(
+                vector["registry_order"].as_u64().unwrap() as u16,
+                vector["registry_key"].as_str().unwrap(),
+                vector["mode"].as_str().unwrap(),
+                vector["target_path"].as_str().unwrap().to_owned(),
+                vector["content_codec_id"].as_str().unwrap(),
+                &content,
+                parse_hash_hex(vector["semantic_hash"].as_str().unwrap(), "semantic").unwrap(),
+            )
+            .unwrap();
+            let expected = base64::engine::general_purpose::STANDARD
+                .decode(vector["descriptor_json_base64"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(descriptor.canonical_bytes().unwrap(), expected);
+            let mut appended = expected.clone();
+            appended.push(b'\n');
+            assert!(UpdateComponentDescriptorV1::decode(&appended, "update descriptor").is_err());
+            descriptors.push(descriptor);
+        }
+        assert_eq!(
+            hex_lower(&production_update_component_root(&descriptors).unwrap()),
+            vectors["component_root"]["blake3"].as_str().unwrap()
+        );
+        assert_eq!(
+            hex_lower(&production_sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
     #[test]
     fn production_batch_edgefree_mixed_commit_retry_reopen_and_history_once() {
         const BATCH_TX: &str = "423e4567-e89b-42d3-a456-426614174003";
@@ -15302,6 +19266,9 @@ mod tests {
             created_at_ns: parent_header.created_at_unix_ns,
             trust_level: 5000,
             source_id: 0,
+            provenance_hash: production_hash_bytes(&production_zero_provenance_leaf(
+                &parent_receipt.atom_id,
+            )),
             history_event_id: parent_receipt.history_event_id.unwrap(),
             history_leaf: parent_history.clone(),
         };
@@ -15319,9 +19286,12 @@ mod tests {
             atom: Some(parent_atom.clone()),
             atoms: vec![parent_atom],
             history_leaves: vec![parent_history],
+            graph_leaves: Vec::new(),
+            superseded_by: BTreeMap::new(),
             committed_receipts: BTreeMap::new(),
             committed_transactions: BTreeMap::new(),
             batch_transactions: BTreeMap::new(),
+            update_transactions: BTreeMap::new(),
             owner_lifetime_transactions: BTreeMap::new(),
         };
         let plan = production_plan_batch(temp.path(), &parent_state, &intent, &envelope).unwrap();
