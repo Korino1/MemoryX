@@ -1089,11 +1089,7 @@ impl MapsTo {
 
     /// Check if mapping is valid (basic structural check)
     pub fn is_valid(&self) -> bool {
-        // Confidence must be in valid range
-        if self.confidence <= 0.0 || self.confidence > 1.0 {
-            return false;
-        }
-        true
+        self.confidence > 0.0 && self.confidence <= 1.0
     }
 
     /// Check if mapping is valid at specific timestamp (SKF-1.1 validity)

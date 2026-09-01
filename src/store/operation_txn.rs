@@ -5098,17 +5098,17 @@ fn reject_link_or_reparse(path: &Path) -> io::Result<()> {
 }
 
 fn is_link_or_reparse(_path: &Path, metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        metadata.file_type().is_symlink()
+            || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
-    false
+    {
+        metadata.file_type().is_symlink()
+    }
 }
 
 fn open_verified_regular(root: &Path, path: &Path) -> io::Result<(File, StableFileIdentity)> {
@@ -6036,10 +6036,10 @@ fn mark_verified_file_for_removal_guarded(
     #[cfg(unix)]
     {
         let _ = (path, failpoint);
-        return Err(io::Error::new(
+        Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "private N5-A existing-object cleanup is disabled on Unix because unlinkat is namespace-bound rather than object-bound",
-        ));
+        ))
     }
     #[cfg(windows)]
     {
@@ -6418,10 +6418,10 @@ fn remove_verified_directory_tree_guarded(
             ));
         }
         let _ = (guard, kind, binding, failpoint);
-        return Err(io::Error::new(
+        Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "private N5-A directory cleanup is disabled on Unix because renameat/unlinkat cannot bind the final object identity",
-        ));
+        ))
     }
     #[cfg(windows)]
     {
@@ -6797,10 +6797,10 @@ fn atomic_rename_guarded(
             ));
         }
         let _ = failpoint;
-        return Err(io::Error::new(
+        Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "private N5-A existing-object publication is disabled on Unix because renameat is namespace-bound rather than object-bound",
-        ));
+        ))
     }
     #[cfg(windows)]
     {

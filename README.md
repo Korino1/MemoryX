@@ -175,9 +175,10 @@ remain roadmap work.
 Version 2.0.9 makes the generation-publication path portable: Windows retains
 its write-through directory move, while non-Windows systems publish a prepared
 generation with an atomic same-directory rename followed by parent-directory
-sync. This fixes the Linux build and preserves the existing on-disk format and
-generation semantics. It is not a claim that the wider N5 power-loss gate is
-complete.
+sync. It also makes GRM1 graph-manifest serialization field-based and
+deterministic instead of copying in-memory alignment padding. These fixes
+preserve the existing 96-byte on-disk format and generation semantics. They are
+not a claim that the wider N5 power-loss gate is complete.
 
 One physical base may have only one process holding the write lease at a time.
 Do not point two independent writers at the same directory. A running
@@ -619,9 +620,11 @@ $exe = ".\target\release\memoryx.exe"
 В версии 2.0.9 публикация подготовленного поколения стала переносимой. В
 Windows сохранено перемещение каталога с принудительной записью, а в других
 системах используется атомарное переименование внутри одного родительского
-каталога с последующей синхронизацией этого каталога. Исправление устраняет
-ошибку сборки в Linux, не меняет формат базы и семантику поколений и не означает
-завершение общего этапа N5 по устойчивости к физическому отключению питания.
+каталога с последующей синхронизацией этого каталога. Также манифест графа GRM1
+теперь записывается по полям детерминированно, без копирования байтов
+выравнивания из памяти. Исправления сохраняют прежний 96-байтовый формат базы и
+семантику поколений и не означают завершение общего этапа N5 по устойчивости к
+физическому отключению питания.
 
 В одной физической базе одновременно может быть только один процесс,
 удерживающий право записи. Не направляйте два независимых процесса записи в

@@ -809,13 +809,26 @@ impl GraphManifest {
         if bytes.len() < Self::SIZE {
             return None;
         }
-        unsafe {
-            let manifest = ptr::read_unaligned(bytes.as_ptr() as *const GraphManifest);
-            if !manifest.validate_magic() || manifest.delta_count as usize > MAX_INLINE_DELTAS {
-                return None;
-            }
-            Some(manifest)
+        let mut delta_ids = [0; MAX_INLINE_DELTAS];
+        for (index, delta_id) in delta_ids.iter_mut().enumerate() {
+            let start = 40 + index * 4;
+            *delta_id = u32::from_le_bytes(bytes[start..start + 4].try_into().ok()?);
         }
+        let manifest = Self {
+            magic: u32::from_le_bytes(bytes[0..4].try_into().ok()?),
+            ver: u16::from_le_bytes(bytes[4..6].try_into().ok()?),
+            flags: u16::from_le_bytes(bytes[6..8].try_into().ok()?),
+            base_gen: u32::from_le_bytes(bytes[8..12].try_into().ok()?),
+            node_count: u64::from_le_bytes(bytes[16..24].try_into().ok()?),
+            edge_type_mask: u64::from_le_bytes(bytes[24..32].try_into().ok()?),
+            delta_count: u32::from_le_bytes(bytes[32..36].try_into().ok()?),
+            reserved1: u32::from_le_bytes(bytes[36..40].try_into().ok()?),
+            delta_ids,
+        };
+        if !manifest.validate_magic() || manifest.delta_count as usize > MAX_INLINE_DELTAS {
+            return None;
+        }
+        Some(manifest)
     }
 
     /// Write GraphManifest to bytes
@@ -823,12 +836,19 @@ impl GraphManifest {
         if bytes.len() < Self::SIZE {
             return false;
         }
-        unsafe {
-            ptr::copy_nonoverlapping(
-                self as *const GraphManifest as *const u8,
-                bytes.as_mut_ptr(),
-                Self::SIZE,
-            );
+        bytes[..Self::SIZE].fill(0);
+        bytes[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        bytes[4..6].copy_from_slice(&self.ver.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.flags.to_le_bytes());
+        bytes[8..12].copy_from_slice(&self.base_gen.to_le_bytes());
+        // Bytes 12..16 are the historical repr(C) alignment padding.
+        bytes[16..24].copy_from_slice(&self.node_count.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.edge_type_mask.to_le_bytes());
+        bytes[32..36].copy_from_slice(&self.delta_count.to_le_bytes());
+        bytes[36..40].copy_from_slice(&self.reserved1.to_le_bytes());
+        for (index, delta_id) in self.delta_ids.iter().enumerate() {
+            let start = 40 + index * 4;
+            bytes[start..start + 4].copy_from_slice(&delta_id.to_le_bytes());
         }
         true
     }
@@ -2416,6 +2436,28 @@ impl Clone for GraphStore {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn graph_manifest_serialization_is_canonical_and_accepts_legacy_padding() {
+        let mut manifest = GraphManifest::new(44);
+        manifest.base_gen = 7;
+        manifest.mark_edge_type(EdgeType::SUPERSEDES);
+        assert!(manifest.add_delta(1));
+
+        let mut first = [0xa5; GraphManifest::SIZE];
+        let mut second = [0x5a; GraphManifest::SIZE];
+        assert!(manifest.write_to_bytes(&mut first));
+        assert!(manifest.write_to_bytes(&mut second));
+        assert_eq!(first, second);
+        assert_eq!(&first[12..16], &[0; 4]);
+
+        let mut legacy = first;
+        legacy[12..16].copy_from_slice(&[0x8b, 0x02, 0x00, 0x00]);
+        let restored = GraphManifest::from_bytes(&legacy).unwrap();
+        let mut canonical = [0xff; GraphManifest::SIZE];
+        assert!(restored.write_to_bytes(&mut canonical));
+        assert_eq!(canonical, first);
+    }
 
     #[test]
     fn test_edge_attr_create() {
