@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "memoryx"
-version = "2.0.7"
+version = "2.0.8"
 dependencies = [
  "axum",
  "base64",
