@@ -165,11 +165,12 @@ surface exposed by `memoryx::store`:
   result are stable across exact retry and reopen.
 
 These production-v2 operations are currently **Rust library APIs only**. The
-existing CLI and MCP tools named `batch_ingest` and `update_atom` continue to
-use their established database paths; this README does not claim that they are
-adapters for the new `ProductionMemoryX` transaction API. Composite updates,
-additional transports, real power-loss coverage, and the wider N5 multi-file
-operation-atomicity gate remain roadmap work.
+existing MCP tools named `batch_ingest` and `update_atom` continue to use their
+established database paths. The CLI has no native subcommands with those names;
+its ingestion paths and generic `client` bridge also do not adapt the new
+`ProductionMemoryX` transaction API. Composite updates, additional transports,
+real power-loss coverage, and the wider N5 multi-file operation-atomicity gate
+remain roadmap work.
 
 One physical base may have only one process holding the write lease at a time.
 Do not point two independent writers at the same directory. A running
@@ -601,9 +602,10 @@ $exe = ".\target\release\memoryx.exe"
   повтору и повторному открытию базы.
 
 Сейчас эти операции доступны **только через библиотеку Rust**. Существующие
-одноимённые команды MCP и командной строки продолжают использовать свои
-прежние пути работы с базой и ещё не являются переходниками к новому
-транзакционному слою `ProductionMemoryX`. Составные изменения, дополнительные
+одноимённые инструменты MCP продолжают использовать прежние пути работы с
+базой. В командной строке отдельных подкоманд с такими именами нет; пути
+загрузки и универсальный мост `client` также ещё не используют новый
+транзакционный слой `ProductionMemoryX`. Составные изменения, дополнительные
 способы подключения, проверка реального отключения питания и общий этап N5 по
 атомарности многофайловых операций остаются в плане развития.
 
