@@ -4,6 +4,8 @@
 /.memoryx/
 /.codegraph/
 /.cabal/
+# Internal development orchestration is intentionally local-only.
+/ORCHESTRATION_SYSTEM/
 /build/
 /data/
 /memoryx_data/
